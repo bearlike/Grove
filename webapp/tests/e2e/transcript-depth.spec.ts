@@ -19,7 +19,7 @@ for (const theme of ["light", "dark"]) {
       const top = element.querySelector('[data-testid="scroll-edge-top"]')!;
       const bottom = element.querySelector('[data-testid="scroll-edge-bottom"]')!;
       const footer = element.querySelector(".aui-thread-viewport-footer")!;
-      const composer = element.querySelector(".aui-composer-root")!;
+      const composer = element.querySelector('[data-slot="composer-bar"]')!;
       const loader = element.querySelector('[data-testid="working-loader"]')!;
       const box = (element: Element) => element.getBoundingClientRect().toJSON();
       return {

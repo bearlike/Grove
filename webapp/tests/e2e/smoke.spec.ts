@@ -59,6 +59,30 @@ test.describe("route smoke", () => {
   }
 });
 
+test("workspace mounted resources resolve", async ({ page }) => {
+  const resources = new Map<string, number>();
+  const expectedResources = new Set([
+    "/api/grove/workspaces/:id/activity",
+    "/api/grove/mailboxes/contacts",
+    "/api/grove/watches",
+    "/api/grove/workspaces/:id/fleet",
+    "/api/grove/workspaces/:id/history",
+    "/api/grove/workspaces/:id/fleet/stream",
+  ]);
+
+  page.on("response", (response) => {
+    const pathname = new URL(response.url()).pathname;
+    const resource = pathname.replace(WORKSPACE_ID, ":id");
+    if (expectedResources.has(resource)) resources.set(resource, response.status());
+  });
+
+  await page.goto(`/w/${WORKSPACE_ID}`);
+  await expect(page.getByTestId("workspace-page")).toBeVisible({ timeout: 60_000 });
+  await expect
+    .poll(() => [...resources].sort(), { timeout: 10_000 })
+    .toEqual([...expectedResources].map((resource) => [resource, 200]).sort());
+});
+
 test("login renders for an unauthenticated visitor", async ({ browser }) => {
   // Its own context: storageState would authenticate us straight past /login.
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });

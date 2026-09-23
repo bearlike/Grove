@@ -168,26 +168,26 @@ def agent_state_color(state: AgentActivityState, *, dark: bool = True) -> str:
 # filled block (U+2581-2588), read left-to-right as a growing progress bar —
 # a shape neither STATUS_GLYPH nor AGENT_STATE_GLYPH uses (those are circles/
 # shapes: ● ○ ◐ ◑ ◌ ‖ ⊘ ⚠ ✗ ·), so the phase segment can never be mistaken for
-# either at a glance. `done` breaks from the bar to `✓` — it leaves the
+# either at a glance. `handoff` breaks from the bar to `✓` — it leaves the
 # in-progress ramp the same way its hex leaves the lime ramp for muted gray
 # (contracts.phase_palette), so glyph and color agree about "this one is
 # different in kind, not just further along".
 PHASE_GLYPH: dict[TaskPhase, str] = {
-    "scoping": "▁",  # 1/8 — oriented, barely started
-    "planning": "▂",  # 2/8
-    "implementing": "▄",  # 4/8 — producing
-    "verifying": "▆",  # 6/8
-    "delivering": "█",  # 8/8 — full bar, converging
-    "done": "✓",  # leaves the bar — converged, not "more full"
+    "scope": "▁",  # 1/8 — oriented, barely started
+    "plan": "▂",  # 2/8
+    "build": "▄",  # 4/8 — producing
+    "verify": "▆",  # 6/8
+    "deliver": "█",  # 8/8 — full bar, converging
+    "handoff": "✓",  # leaves the bar — work transferred, not "more full"
 }
 
 PHASE_LABEL: dict[TaskPhase, str] = {
-    "scoping": "scoping",
-    "planning": "planning",
-    "implementing": "implementing",
-    "verifying": "verifying",
-    "delivering": "delivering",
-    "done": "done",
+    "scope": "Scope",
+    "plan": "Plan",
+    "build": "Build",
+    "verify": "Verify",
+    "deliver": "Deliver",
+    "handoff": "Handoff",
 }
 
 

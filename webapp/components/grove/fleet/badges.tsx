@@ -32,8 +32,16 @@ import {
   statusGlyph,
   statusLabel,
   statusTone,
+  subagentRunAccent,
+  subagentRunGlyph,
+  subagentRunLabel,
+  subagentRunTone,
+  watchGlyph,
+  watchLabel,
+  watchTone,
+  type SubagentRun,
 } from "./tokens";
-import type { AgentState, Runtime, TaskPhase, TodoProgress, WorkspaceStatus } from "./types";
+import type { AgentState, Runtime, TaskPhase, TodoProgress, WatchState, WorkspaceStatus } from "./types";
 
 /** One compact density for the whole fleet badge family; upstream owns its shape. */
 function Badge({ className, ...props }: React.ComponentProps<typeof NativeBadge>): React.ReactNode {
@@ -92,6 +100,33 @@ export function AgentStateBadge({ state }: { state: AgentState }): React.ReactNo
     >
       <Icon aria-hidden />
       {term ? <Explain term={term}>{label}</Explain> : label}
+    </Badge>
+  );
+}
+
+/** A subagent's run — its own quiet vocabulary, never the agent axis's attention. */
+export function SubagentRunBadge({ run }: { run: SubagentRun }): React.ReactNode {
+  const Icon = subagentRunGlyph(run);
+  return (
+    <Badge
+      variant={subagentRunTone(run)}
+      className={subagentRunAccent(run)}
+      data-testid="subagent-run-badge"
+      data-run={run}
+    >
+      <Icon aria-hidden />
+      {subagentRunLabel(run)}
+    </Badge>
+  );
+}
+
+/** A registered watch's lifecycle — the word always rides beside the glyph. */
+export function WatchStateBadge({ state }: { state: WatchState }): React.ReactNode {
+  const Icon = watchGlyph(state);
+  return (
+    <Badge variant={watchTone(state)} data-testid="watch-state" data-state={state}>
+      <Icon aria-hidden />
+      {watchLabel(state)}
     </Badge>
   );
 }
@@ -165,7 +200,7 @@ export function PhaseBadge({
         <Badge
           variant="outline"
           className={cn(
-            phase.blocked ? "text-warning" : phase.phase === "done" ? "text-success" : undefined,
+            phase.blocked ? "text-warning" : phase.phase === "handoff" ? "text-success" : undefined,
           )}
           tabIndex={0}
           data-testid="phase-badge"

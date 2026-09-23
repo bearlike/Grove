@@ -19,6 +19,8 @@ session catalog needs and no code anywhere in Grove reads today.
 
 from __future__ import annotations
 
+import contextlib
+import ctypes
 import os
 import shlex
 import signal
@@ -89,6 +91,42 @@ def spawn_detached(
         raise ProcessError(f"could not spawn headless agent {argv!r}: {exc}") from exc
     logger.info("spawned headless agent pid={} in {}: {}", proc.pid, cwd, " ".join(argv))
     return proc.pid
+
+
+def die_with_parent() -> None:
+    """``preexec_fn`` asking the kernel to signal this child when Grove dies.
+
+    The inverse of ``spawn_detached``'s contract, and the distinction is the
+    whole point. An AGENT must outlive the daemon — that is why
+    ``KillMode=process`` exists and why a reinstall does not end a session. An
+    OBSERVER must not: a ``tmux -C attach-session`` reader is meaningless once
+    the process that would consume its frames is gone, and tmux's server is
+    single-threaded, so one control client that nobody reads from stops the
+    server servicing its accept loop. Every later connection is then accepted
+    and dropped, which tmux's client reports as the actively misleading
+    ``server exited unexpectedly`` — measured on this host as a wedge that
+    outlived the daemon by 22 hours and failed every workspace create.
+
+    ``start_new_session=True`` is what makes this necessary rather than
+    automatic: it detaches the child into its own session so no terminal or
+    process-group signal reaches it, and systemd's ``KillMode=process`` signals
+    only the daemon's main PID, so an observer is reparented to ``systemd
+    --user`` and simply stays. ``PR_SET_PDEATHSIG`` is the one mechanism that
+    still fires, because it is keyed on the parent DYING rather than on any
+    signal being delivered.
+
+    Best-effort and Linux-only by construction: the ``prctl`` is absent on
+    macOS, and an observer that merely fails to self-reap is the status quo, so
+    a failure here must never take the spawn down with it.
+    """
+    if sys.platform != "linux":  # pragma: no cover - PR_SET_PDEATHSIG is Linux-only
+        return
+    # Never fail a spawn over a reaping hint: an observer that does not
+    # self-reap is the status quo this fixes, not a new failure.
+    with contextlib.suppress(Exception):
+        # 1 is PR_SET_PDEATHSIG; hard-coded because ctypes exposes no prctl
+        # constants and the value is ABI-stable in <linux/prctl.h>.
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM, 0, 0, 0)
 
 
 @dataclass(slots=True, frozen=True)

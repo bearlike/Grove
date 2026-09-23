@@ -28,7 +28,7 @@ const longTicketNote =
   "A deliberately long fictional ticket report names the verification evidence, explains why the follow-up remains necessary, and must wrap inside the row instead of running beyond the work panel.";
 
 const phase = (overrides: Partial<PhaseView> = {}): PhaseView => ({
-  phase: "implementing",
+  phase: "build",
   note: "Working through the fictional workspace card layout.",
   blocked: false,
   updated_at: "2026-09-07T12:00:00.000Z",
@@ -273,7 +273,7 @@ test.describe("Info cards keep their facts legible in the work panel", () => {
         );
 
         await expect(page.getByTestId("task-phase-summary")).toContainText(
-          "Implementing",
+          "Build",
         );
         const labels = await page
           .getByTestId("phase-meter")
@@ -300,7 +300,7 @@ test.describe("Info cards keep their facts legible in the work panel", () => {
         tickets: [
           {
             ticket: "gitea:42",
-            phase: "verifying",
+            phase: "verify",
             note: longTicketNote,
             blocked: false,
             index: 3,

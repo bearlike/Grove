@@ -20,6 +20,7 @@ from typing import Literal, Protocol
 from loguru import logger
 
 from grove.core.container_runtime import ContainerState
+from grove.core.process import die_with_parent
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +140,7 @@ class AsyncioRuntimeEventTransport:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             start_new_session=True,
+            preexec_fn=die_with_parent,
             limit=self._MAX_FRAME_BYTES,
         )
         return _SubprocessEventReader(process)

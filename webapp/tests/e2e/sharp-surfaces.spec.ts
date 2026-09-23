@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { dp } from "./density";
-import { captureSharpSurface, openSharpSurface } from "./sharp-surface-probe";
+import { barInset, captureSharpSurface, openSharpSurface } from "./sharp-surface-probe";
 
 /**
  * Tab labels sit one ramp step ABOVE the metadata floor — `text-sm` at the
@@ -232,21 +232,29 @@ test.describe("sharp surfaces", () => {
     expect(radii.inner).toBe("2.3px");
   });
 
-  test("keeps every composer control at the control role, and the bar 20% past it", async ({ page }) => {
+  test("keeps controls at their role and the composer bar at the vendor's radius", async ({ page }) => {
     await openSharpSurface(page, "info", 1058, "light");
     const send = page.locator(".aui-composer-send");
-    await expect(send).toHaveCSS("border-top-left-radius", "3.45px");
-    // One shape for the whole toolbar: attach and expand used to be circles.
-    await expect(page.locator('[data-slot="composer-attach"]')).toHaveCSS("border-top-left-radius", "3.45px");
-    await expect(page.locator('[data-slot="composer-bar"]')).toHaveCSS("border-top-left-radius", "6.9px");
+    // assistant-ui's own shape: send and attach are circles, not rounded squares.
+    const round = async (selector: string) =>
+      page.locator(selector).first().evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        return Number.parseFloat(getComputedStyle(el).borderTopLeftRadius) >= Math.min(box.width, box.height) / 2;
+      });
+    expect(await round(".aui-composer-send")).toBe(true);
+    expect(await round('[data-slot="composer-attach"]')).toBe(true);
+    await expect(page.locator('[data-slot="composer-bar"]')).toHaveCSS("border-top-left-radius", "24px");
     const button = await send.boundingBox();
     const shell = await page.locator('[data-slot="composer-bar"]').boundingBox();
     expect(button).not.toBeNull();
     expect(shell).not.toBeNull();
     expect(button!.width).toBeCloseTo(28, 0);
     expect(button!.height).toBeCloseTo(28, 0);
-    expect(shell!.x + shell!.width - button!.x - button!.width).toBeCloseTo(12, 0);
-    expect(shell!.y + shell!.height - button!.y - button!.height).toBeCloseTo(12, 0);
+    // Send sits IN the bar's corner: its own padding plus its border, the
+      // same on both edges — the vendored geometry, not a Grove constant.
+      const inset = await barInset(page);
+      expect(shell!.x + shell!.width - button!.x - button!.width).toBeCloseTo(inset, 0);
+    expect(shell!.y + shell!.height - button!.y - button!.height).toBeCloseTo(inset, 0);
   });
 
   /**

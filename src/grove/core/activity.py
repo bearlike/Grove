@@ -368,6 +368,10 @@ class WorkspaceActivity:
         """
         return (
             self.state.status,
+            # The attached tickets: attaching moves nothing else on the row,
+            # and it can happen in another process (`grove tickets attach`),
+            # so without this member no subscriber would ever hear about it.
+            tuple(ref.key for ref in self.state.ticket_refs),
             self.diff_added,
             self.diff_removed,
             self.dirty_files,

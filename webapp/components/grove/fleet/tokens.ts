@@ -1,5 +1,7 @@
 import type { VariantProps } from "class-variance-authority";
 import {
+  AlarmClockOffIcon,
+  BellRingIcon,
   BotIcon,
   BoxIcon,
   CircleCheckBigIcon,
@@ -8,10 +10,14 @@ import {
   CircleDotIcon,
   CirclePauseIcon,
   CirclePlayIcon,
+  CircleSlashIcon,
+  CircleStopIcon,
   CircleXIcon,
   Clock3Icon,
   HammerIcon,
+  HourglassIcon,
   LoaderCircleIcon,
+  MailXIcon,
   MessageCircleQuestionIcon,
   OctagonAlertIcon,
   RadioTowerIcon,
@@ -23,7 +29,7 @@ import {
 
 import type { badgeVariants } from "@/components/ui/badge";
 import type { GlossaryTerm } from "@/components/grove/glossary";
-import type { AgentState, Runtime, TaskPhase, WorkspaceStatus } from "./types";
+import type { AgentState, Runtime, TaskPhase, WatchState, WorkspaceStatus } from "./types";
 
 type BadgeVariant = NonNullable<VariantProps<typeof badgeVariants>["variant"]>;
 
@@ -162,12 +168,12 @@ const AGENT_GLOSSARY: Partial<Record<AgentState, GlossaryTerm>> = {
  * surface speaks the same vocabulary; the TUI retains its terminal-safe form.
  */
 const PHASE_PRESENTATION: Record<TaskPhase, { label: string; Icon: LucideIcon }> = {
-  scoping: { label: "Scoping", Icon: CircleDashedIcon },
-  planning: { label: "Planning", Icon: CircleDotIcon },
-  implementing: { label: "Implementing", Icon: CirclePlayIcon },
-  verifying: { label: "Verifying", Icon: CircleCheckBigIcon },
-  delivering: { label: "Delivering", Icon: SendIcon },
-  done: { label: "Done", Icon: CircleCheckIcon },
+  scope: { label: "Scope", Icon: CircleDashedIcon },
+  plan: { label: "Plan", Icon: CircleDotIcon },
+  build: { label: "Build", Icon: CirclePlayIcon },
+  verify: { label: "Verify", Icon: CircleCheckBigIcon },
+  deliver: { label: "Deliver", Icon: SendIcon },
+  handoff: { label: "Handoff", Icon: CircleCheckIcon },
 };
 
 /**
@@ -250,6 +256,66 @@ const AGENT_PILL_ACCENT: Record<AgentState, string> = {
   idle: "bg-content-tertiary",
   unknown: "bg-content-tertiary",
 };
+
+/**
+ * A subagent's run, told as a run: running, finished, or stopped.
+ *
+ * NOT the agent axis above, because a subagent is not something a person drives.
+ * That axis spends `destructive` on "waiting for you", which is true of a root
+ * session asking its human and false of a child, whose closed turn means it
+ * handed its result back to the parent. None of these three wants a human, so
+ * none is loud: shape and word carry the difference (§4.7), and only work in
+ * flight takes the progress accent.
+ */
+export type SubagentRun = "running" | "finished" | "stopped";
+
+const SUBAGENT_RUN_PRESENTATION: Record<
+  SubagentRun,
+  { label: string; Icon: LucideIcon; tone: BadgeVariant; accent?: string }
+> = {
+  running: { label: "Running", Icon: CirclePlayIcon, tone: "outline", accent: ACCENT.progress },
+  finished: { label: "Finished", Icon: CircleCheckIcon, tone: "secondary" },
+  stopped: { label: "Stopped", Icon: CircleStopIcon, tone: "secondary" },
+};
+
+export function subagentRunLabel(run: SubagentRun): string {
+  return SUBAGENT_RUN_PRESENTATION[run].label;
+}
+
+export function subagentRunGlyph(run: SubagentRun): LucideIcon {
+  return SUBAGENT_RUN_PRESENTATION[run].Icon;
+}
+
+export function subagentRunTone(run: SubagentRun): BadgeVariant {
+  return SUBAGENT_RUN_PRESENTATION[run].tone;
+}
+
+export function subagentRunAccent(run: SubagentRun): string | undefined {
+  return SUBAGENT_RUN_PRESENTATION[run].accent;
+}
+
+/**
+ * The rail's state pills: a SOFT tint of the claim's own hue, never a solid fill.
+ *
+ * A rail lists a dozen rows, and a solid destructive badge on each waiting one
+ * turns the column into a wall of red that no single row can rise above. The
+ * tint keeps the hue as the carrier (shape and word still lead, §4.7) while the
+ * fleet card, a surface you stop on, keeps the solid `AGENT_TONE` badge. The
+ * four keys are the rail's only claims: attention, and phase in its three
+ * readings — in progress, handed off, and blocked.
+ */
+const RAIL_PILL_ACCENT = {
+  attention: "border-transparent bg-destructive/15 text-destructive",
+  progress: "border-transparent bg-muted text-content-secondary",
+  done: "border-transparent bg-success/15 text-success",
+  blocked: "border-transparent bg-warning/15 text-warning",
+} as const;
+
+export type RailPillTone = keyof typeof RAIL_PILL_ACCENT;
+
+export function railPillAccent(tone: RailPillTone): string {
+  return RAIL_PILL_ACCENT[tone];
+}
 
 export function statusTone(status: WorkspaceStatus): BadgeVariant {
   return STATUS_TONE[status];
@@ -339,4 +405,36 @@ export function runtimeGlyph(runtime: Runtime): LucideIcon {
 
 export function runtimeGlossaryTerm(runtime: Runtime): GlossaryTerm {
   return RUNTIME_GLOSSARY[runtime];
+}
+
+/**
+ * A watch's lifecycle — word, glyph and tone in one total table.
+ *
+ * Running, fired and expired each get their own word and shape, so hue never
+ * carries the difference alone. `cancelled` and `undeliverable` are shown as
+ * themselves rather than folded into one of those three: a withdrawal was
+ * nobody's failure, and `undeliverable` is the one state that wants a human —
+ * the watch settled and the agent was never told — so it alone is loud.
+ */
+const WATCH_PRESENTATION: Record<WatchState, { label: string; Icon: LucideIcon; tone: BadgeVariant }> = {
+  pending: { label: "Running", Icon: HourglassIcon, tone: "outline" },
+  fired: { label: "Fired", Icon: BellRingIcon, tone: "secondary" },
+  expired: { label: "Expired", Icon: AlarmClockOffIcon, tone: "secondary" },
+  cancelled: { label: "Cancelled", Icon: CircleSlashIcon, tone: "secondary" },
+  undeliverable: { label: "Undeliverable", Icon: MailXIcon, tone: "destructive" },
+};
+
+/** Every watch state in the table's order — the order a summary counts them in. */
+export const WATCH_STATES = Object.keys(WATCH_PRESENTATION) as WatchState[];
+
+export function watchLabel(state: WatchState): string {
+  return WATCH_PRESENTATION[state].label;
+}
+
+export function watchGlyph(state: WatchState): LucideIcon {
+  return WATCH_PRESENTATION[state].Icon;
+}
+
+export function watchTone(state: WatchState): BadgeVariant {
+  return WATCH_PRESENTATION[state].tone;
 }

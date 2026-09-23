@@ -46,7 +46,12 @@ from grove.core.contracts.mailboxes import (
 )
 from grove.core.contracts.phase import PhaseView
 from grove.core.contracts.sessions import TodoListView
-from grove.core.phase import TaskPhase
+from grove.core.contracts.watches import (
+    WatchList,
+    WatchRegistration,
+    WatchView,
+)
+from grove.core.phase import normalize_phase
 from grove.mcp.models import (
     AttachInstructionResult,
     KillWorkspaceResult,
@@ -241,10 +246,12 @@ class GroveTools:
 
     async def get_workspace_phase(self, workspace_id: str) -> PhaseView | None:
         """Get a workspace's reported task-phase: how far through its task the
-        agent says it is (scoping, planning, implementing, verifying,
-        delivering, done), plus an optional one-line note and when it was
-        last updated. Returns null when the agent has not reported a phase
-        yet — a fleet-health signal distinct from "reported scoping"."""
+        agent says it is (scope, plan, build, verify, deliver, handoff), plus
+        an optional one-line note and when it was last updated. ``handoff``
+        means the agent has transferred the finished work to the user in the
+        form they asked for, with nothing left to do. Returns null when the
+        agent has not reported a phase yet — a fleet-health signal distinct
+        from "reported scope"."""
         return await self._client.get_phase(workspace_id)
 
     async def get_workspace_todo(self, workspace_id: str) -> TodoListView:
@@ -262,6 +269,40 @@ class GroveTools:
         building. Zero arguments, read-only.
         """
         return await self._client.list_mailbox_contacts()
+
+    async def register_watch(self, request: WatchRegistration) -> WatchView:
+        """Wait for something slow WITHOUT polling: register a watch and stop.
+
+        Use this instead of sleeping in a loop or re-running a status command.
+        You name what to wait for (``ci`` on a commit, a ``timer``, or a
+        ``command`` that exits when it is done) and who to tell — normally your
+        own workspace. Then END YOUR TURN. When it settles, or when your
+        deadline passes, Grove delivers the outcome to you as a message and you
+        continue from there.
+
+        Every watch you register has a deadline, and you are messaged when it passes even if
+        the condition was never met ("deadline reached, condition NOT met"), so
+        halting is always safe — a watch can never stall your session. Set
+        ``deadline`` to the longest you are willing to wait (up to one day);
+        omit it and an open-ended watch gives up after 15 minutes, while a
+        timer defaults to its own time. ``every`` is seconds between checks
+        (minimum 15).
+        """
+        return await self._client.register_watch(request)
+
+    async def list_watches(self) -> WatchList:
+        """Every watch on this host — still pending, and recently settled.
+
+        Read-only. ``state`` says what happened: ``pending`` is still waiting,
+        ``fired`` settled and the callback was handed to a transport,
+        ``expired`` hit its deadline, ``undeliverable`` settled but the
+        recipient was no longer live to be told.
+        """
+        return await self._client.list_watches()
+
+    async def cancel_watch(self, watch_id: str) -> WatchView:
+        """Withdraw a watch you no longer need. Already-settled ones are returned as-is."""
+        return await self._client.cancel_watch(watch_id)
 
     async def send_mailbox_message(self, request: MailboxSendRequest) -> MailboxReceipt:
         """Send one message to another Grove agent, like an email.
@@ -477,8 +518,10 @@ class GroveTools:
         raises asking you to qualify with a full URL or ``owner/repo#id``
         instead of guessing. Idempotent: attaching the same ticket again, or
         re-attaching to correct a wrong issue/PR kind, is a no-op / in-place
-        fix, never a duplicate. Returns the workspace's updated state,
-        including ``ticket_refs`` (also visible via ``grove_get_workspace``).
+        fix, never a duplicate. While the workspace runs, Grove then mails its
+        agent whenever a person changes the ticket; no watch is needed.
+        Returns the workspace's updated state, including ``ticket_refs``
+        (also visible via ``grove_get_workspace``).
         """
         return await self._client.attach_ticket_by_ref(workspace_id, ref)
 
@@ -494,15 +537,17 @@ class GroveTools:
     async def set_workspace_phase(
         self,
         workspace_id: str,
-        phase: TaskPhase,
+        phase: str,
         note: str | None = None,
         *,
         blocked: bool = False,
         ticket: str | None = None,
     ) -> PhaseView:
         """Set or correct a workspace's task-phase claim from outside the
-        agent — one of ``scoping``, ``planning``, ``implementing``,
-        ``verifying``, ``delivering``, ``done``. The agent working inside the
+        agent — one of ``scope``, ``plan``, ``build``, ``verify``,
+        ``deliver``, ``handoff``. ``handoff`` means the finished work has been
+        transferred to the user in the form they asked for, with nothing left
+        for the agent to do. The agent working inside the
         workspace normally reports its own phase by writing the file named
         in its ``GROVE_PHASE_FILE`` environment variable (the one channel
         that reaches it in every runtime, including a container, and keyed
@@ -514,7 +559,7 @@ class GroveTools:
         ``blocked`` means you cannot finish this yourself; say why in
         ``note``."""
         return await self._client.set_phase(
-            workspace_id, phase, note, blocked=blocked, ticket=ticket
+            workspace_id, normalize_phase(phase), note, blocked=blocked, ticket=ticket
         )
 
     async def pause_workspace(self, workspace_id: str, force: bool = False) -> WorkspaceStateView:

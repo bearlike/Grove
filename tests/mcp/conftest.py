@@ -47,7 +47,7 @@ def make_state(ws_id: str = "ws-1", **overrides: Any) -> WorkspaceStateView:
     return WorkspaceStateView.model_validate(data)
 
 
-def make_snapshot(*, phase: str | None = "implementing") -> DashboardSnapshotView:
+def make_snapshot(*, phase: str | None = "build") -> DashboardSnapshotView:
     """One activity snapshot carrying the two axes only this read reports:
     the workspace's task ``phase`` and its session's blended agent state."""
     activity: dict[str, Any] = {

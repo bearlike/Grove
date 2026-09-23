@@ -315,19 +315,19 @@ describe("presentation rules", () => {
     ).toBeLessThan(0);
   });
 
-  it("orders the furthest live phase first, then done, then no claim", () => {
+  it("orders the furthest live phase first, then handoff, then no claim", () => {
     expect(
       compareTicketRefs(
         ref({ id: "1" }),
-        { ...FIXTURE_PHASE.tickets[0]!, phase: "delivering", index: 4 },
+        { ...FIXTURE_PHASE.tickets[0]!, phase: "deliver", index: 4 },
         ref({ id: "2" }),
-        { ...FIXTURE_PHASE.tickets[0]!, phase: "implementing", index: 2 },
+        { ...FIXTURE_PHASE.tickets[0]!, phase: "build", index: 2 },
       ),
     ).toBeLessThan(0);
     expect(
       compareTicketRefs(
         ref({ id: "2" }),
-        { ...FIXTURE_PHASE.tickets[0]!, phase: "done", index: 5 },
+        { ...FIXTURE_PHASE.tickets[0]!, phase: "handoff", index: 5 },
         ref({ id: "3" }),
         null,
       ),

@@ -12,13 +12,13 @@ const token = (selector: string, name: string): string => {
 };
 
 describe("decorative border tokens", () => {
-  it("makes decorative edge output an exact 60:40 source-to-surface mix", () => {
+  it("makes decorative edge output an exact 30:70 source-to-surface mix", () => {
     for (const selector of [":root", ".dark"]) {
       expect(token(selector, "--border")).toBe(
-        "color-mix(in srgb, var(--border-source) 60%, transparent)",
+        "color-mix(in srgb, var(--border-source) 30%, transparent)",
       );
       expect(token(selector, "--surface-edge")).toBe(
-        "color-mix(in srgb, var(--surface-edge-source) 60%, transparent)",
+        "color-mix(in srgb, var(--surface-edge-source) 30%, transparent)",
       );
       expect(token(selector, "--sidebar-border")).toBe("var(--border)");
     }
@@ -38,9 +38,9 @@ describe("decorative border tokens", () => {
     expect(token(".dark", "--attachment-card-end")).toBe("var(--surface-edge-source)");
   });
 
-  it("restores original border tokens inside interactive controls", () => {
-    expect(token(":root", "--edge-control")).toBe("oklch(0.80 0.009 286)");
-    expect(token(".dark", "--edge-control")).toBe("oklch(0.40 0.009 286)");
+  it("gives every interactive control the one resting control tier", () => {
+    expect(token(":root", "--edge-control")).toBe("oklch(0.88 0.009 286)");
+    expect(token(".dark", "--edge-control")).toBe("oklch(0.28 0.009 286)");
     expect(token(":root", "--input")).toBe("oklch(0.594 0.008 286)");
     expect(token(".dark", "--input")).toBe("oklch(0.56 0.008 286)");
     expect(token(":root", "--ring")).toBe("oklch(0.594 0.008 286)");
@@ -48,10 +48,10 @@ describe("decorative border tokens", () => {
 
     const controls = css.slice(
       css.indexOf(':is(button, input, select, textarea, summary,'),
-      css.indexOf("/* Native outline buttons add"),
+      css.indexOf("/* Header bands carry icon controls"),
     );
-    expect(controls).toContain("--border: var(--border-source);");
-    expect(controls).toContain("--surface-edge: var(--surface-edge-source);");
+    expect(controls).toContain("--border: var(--edge-control);");
+    expect(controls).toContain("--surface-edge: var(--edge-control);");
     expect(controls).not.toContain("border-color:");
     for (const selector of [
       "button",

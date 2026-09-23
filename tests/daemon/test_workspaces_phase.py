@@ -60,39 +60,39 @@ def test_post_phase_sets_the_workspace_claim(daemon: TestClient, tmp_repo: Path)
 
     resp = daemon.post(
         f"/workspaces/{ws_id}/phase",
-        json={"phase": "planning", "note": "reading the ticket"},
+        json={"phase": "plan", "note": "reading the ticket"},
     )
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["phase"] == "planning"
+    assert body["phase"] == "plan"
     assert body["note"] == "reading the ticket"
 
     again = daemon.get(f"/workspaces/{ws_id}/phase")
     assert again.status_code == 200
-    assert again.json()["phase"] == "planning"
+    assert again.json()["phase"] == "plan"
 
 
 def test_post_phase_with_ticket_sets_only_that_tickets_claim(
     daemon: TestClient, tmp_repo: Path
 ) -> None:
     ws_id = _create_ws(daemon, tmp_repo)
-    seed = daemon.post(f"/workspaces/{ws_id}/phase", json={"phase": "implementing"})
+    seed = daemon.post(f"/workspaces/{ws_id}/phase", json={"phase": "build"})
     assert seed.status_code == 200
     attach = daemon.post(f"/workspaces/{ws_id}/tickets", json={"provider": "gitea", "id": "7"})
     assert attach.status_code == 200
 
     resp = daemon.post(
         f"/workspaces/{ws_id}/phase",
-        json={"phase": "verifying", "note": "running gates", "ticket": "gitea:7"},
+        json={"phase": "verify", "note": "running gates", "ticket": "gitea:7"},
     )
     assert resp.status_code == 200
 
     # The response and a fresh GET both describe the WORKSPACE's own claim,
     # which a ticket-scoped write must leave alone.
-    assert resp.json()["phase"] == "implementing"
+    assert resp.json()["phase"] == "build"
     still = daemon.get(f"/workspaces/{ws_id}/phase")
-    assert still.json()["phase"] == "implementing"
+    assert still.json()["phase"] == "build"
 
     # `PhaseView` carries only the workspace's own claim, so read the ticket's
     # claim back through the same manager seam the issueops publisher uses.
@@ -102,7 +102,7 @@ def test_post_phase_with_ticket_sets_only_that_tickets_claim(
     assert report is not None
     ticket_claim = report.for_ticket("gitea:7")
     assert ticket_claim is not None
-    assert ticket_claim.phase == "verifying"
+    assert ticket_claim.phase == "verify"
     assert ticket_claim.note == "running gates"
 
 
@@ -113,7 +113,7 @@ def test_post_phase_with_an_unattached_ticket_is_refused(
 
     resp = daemon.post(
         f"/workspaces/{ws_id}/phase",
-        json={"phase": "planning", "ticket": "gitea:404"},
+        json={"phase": "plan", "ticket": "gitea:404"},
     )
 
     assert resp.status_code == 404

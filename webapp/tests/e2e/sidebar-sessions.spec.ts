@@ -34,6 +34,7 @@ interface RowGeometry {
   readonly row: Rect;
   readonly header: Rect | null;
   readonly agent: Rect | null;
+  readonly tile: Rect | null;
   readonly title: Rect | null;
   readonly metadata: Rect | null;
   readonly context: Rect | null;
@@ -144,6 +145,7 @@ async function useFleet(
   rows: readonly RowSpec[],
   phase?: DashboardSnapshotView["projects"][number]["workspaces"][number]["phase"],
 ): Promise<void> {
+  await page.addInitScript(() => localStorage.setItem("grove.onboarding.seen", "true"));
   await page.route("**/api/grove/activity", (route) =>
     route.fulfill({ json: snapshotFor(rows, phase) }),
   );
@@ -173,6 +175,7 @@ async function geometry(page: Page, id: string): Promise<RowGeometry> {
       row: { x: 0, y: 0, width: rowBox.width, height: rowBox.height },
       header: at(header),
       agent: at(row.querySelector('[data-testid="agent-mark"]')),
+      tile: at(row.querySelector('[data-testid="rail-agent-tile"]')),
       title: at(header?.querySelector('[data-testid="looping-text"]') ?? null),
       metadata: at(metadata),
       context: at(context),
@@ -269,16 +272,18 @@ test.describe("the native sidebar row keeps identity, context and figures distin
 
     // The row remains compact at normal desktop density without pretending that
     // text zoom and coarse pointers have the same physical budget.
-    expect(first.row.height).toBeGreaterThan(50);
-    expect(first.row.height).toBeLessThanOrEqual(80);
+    expect(first.row.height).toBeGreaterThan(60);
+    expect(first.row.height).toBeLessThanOrEqual(100);
 
-    // The agent and title share the compact header's center line. Context starts
-    // below it; branch and phase/attention live there, not in a title-mark slot.
-    expect(first.title!.x).toBeGreaterThanOrEqual(first.agent!.x + first.agent!.width);
+    // The agent's tile is a leading column: the title, context and ledger all
+    // start on one edge to its right, and the mark is centred in the tile.
+    expect(first.tile).not.toBeNull();
+    expect(first.title!.x).toBeGreaterThanOrEqual(first.tile!.x + first.tile!.width);
+    expect(first.context!.x).toBeCloseTo(first.header!.x, 0);
+    expect(first.ledgerLine!.x).toBeCloseTo(first.header!.x, 0);
+    expect(first.tile!.y).toBeLessThanOrEqual(first.header!.y + 1);
     expect(
-      Math.abs(
-        first.title!.y + first.title!.height / 2 - (first.agent!.y + first.agent!.height / 2),
-      ),
+      Math.abs(first.agent!.x + first.agent!.width / 2 - (first.tile!.x + first.tile!.width / 2)),
     ).toBeLessThanOrEqual(1);
     expect(first.metadata!.y).toBeGreaterThanOrEqual(first.header!.y + first.header!.height);
     expect(first.context!.y).toBeGreaterThan(first.title!.y);
@@ -295,11 +300,14 @@ test.describe("the native sidebar row keeps identity, context and figures distin
     expect(first.added).not.toBeNull();
     expect(first.removed).not.toBeNull();
 
-    // The header agent is `size-5`; context marks are the quieter `size-3`.
+    // The agent is `size-5` in a `size-10` tile; the branch glyph is `size-3.5`
+    // beside body text, and a pill's glyph is the badge's own `size-3`.
     expect(first.agent!.width).toBeCloseTo(dp(20), 0);
     expect(first.agent!.height).toBeCloseTo(dp(20), 0);
+    expect(first.tile!.width).toBeCloseTo(dp(40), 0);
     expect(first.contextIcons).toHaveLength(2);
-    for (const width of first.contextIcons) expect(width).toBeCloseTo(dp(12), 0);
+    expect(first.contextIcons[0]).toBeCloseTo(dp(14), 0);
+    expect(first.contextIcons[1]).toBeCloseTo(dp(12), 0);
 
     // A measured-zero workspace still has its created age but no fictional
     // change figures.
@@ -372,7 +380,7 @@ test.describe("the native sidebar row keeps identity, context and figures distin
     );
     expect(squeezed.branch!.width).toBeGreaterThan(dp(16));
     await expect(
-      page.locator('[data-testid="rail-branch"] [data-looping="true"]'),
+      page.locator(`[data-workspace-id="${ROWS[0].id}"] [data-testid="rail-branch"] [data-looping="true"]`),
     ).toBeAttached();
 
     // This is deliberately the over-constrained row. Repeating it beside
@@ -777,10 +785,11 @@ test.describe("the row keeps its states, menu and destination", () => {
     await page.waitForTimeout(300);
 
     // The icon rail is a distinct compact state, not an expanded rail with an
-    // invisible list. Its exact expanded width stays owned by RAIL_WIDTH.
+    // invisible list. Its exact expanded width stays owned by RAIL_WIDTH; the
+    // shared 23.8rem rail is 7.93× the 3rem icon rail at either root density.
     const collapsedWidth = (await aside.boundingBox())!.width;
     expect(collapsedWidth).toBeLessThan(expandedWidth);
-    expect(expandedWidth / collapsedWidth).toBeGreaterThan(9);
+    expect(expandedWidth / collapsedWidth).toBeGreaterThan(7.5);
     const hidden = await page.evaluate(() => {
       const list = document.querySelector<HTMLElement>('aside [data-testid="fleet-row"]');
       const group = list?.closest<HTMLElement>("[inert]");
@@ -802,7 +811,7 @@ test.describe("the row keeps its states, menu and destination", () => {
     await expect(sheetRow).toBeVisible();
     const box = (await sheetRow.boundingBox())!;
     expect(box.height).toBeGreaterThan(60);
-    expect(box.height).toBeLessThanOrEqual(80);
+    expect(box.height).toBeLessThanOrEqual(100);
     expect(box.width).toBeLessThanOrEqual(420);
   });
 });

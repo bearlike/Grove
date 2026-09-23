@@ -8,12 +8,12 @@ import {
 import type { AgentState, TaskPhase } from "@/components/grove/fleet/types";
 
 const PHASES: readonly TaskPhase[] = [
-  "scoping",
-  "planning",
-  "implementing",
-  "verifying",
-  "delivering",
-  "done",
+  "scope",
+  "plan",
+  "build",
+  "verify",
+  "deliver",
+  "handoff",
 ];
 const ATTENTION_STATES: readonly AgentState[] = ["waiting", "blocked", "error"];
 

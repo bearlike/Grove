@@ -10,7 +10,7 @@ had just given it.
 Two layers, mirroring ``test_show_todo_section.py``: the renderer is unit-tested
 against a hand-built ``PhaseReport``, then a CliRunner run confirms a workspace
 whose agent never reported degrades to the honest "(none reported)" note rather
-than a blank that would read as "scoping".
+than a blank that would read as "scope".
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ def test_emit_renders_the_position_but_not_the_note(
     read-deeply surface that prints it (the same split the TUI row card makes
     against the peek rail)."""
     report = PhaseReport(
-        phase="implementing",
+        phase="build",
         note="wiring the CLI verb",
         updated_at=datetime.now(UTC),
     )
@@ -92,7 +92,7 @@ def test_emit_renders_the_position_but_not_the_note(
     inspection.emit()
     out = capsys.readouterr().out
 
-    assert "implementing" in out
+    assert "build" in out
     assert "(3/6)" in out
     assert "wiring the CLI verb" not in out
 
@@ -104,7 +104,7 @@ def test_emit_renders_the_blocked_flag_beside_the_position(
     exactly like `grove phase`'s own render — the flag rides beside the
     phase, never replacing it."""
     report = PhaseReport(
-        phase="implementing",
+        phase="build",
         note="wiring the CLI verb",
         updated_at=datetime.now(UTC),
         blocked=True,
@@ -113,14 +113,14 @@ def test_emit_renders_the_blocked_flag_beside_the_position(
     inspection.emit()
     out = capsys.readouterr().out
 
-    assert "implementing" in out
+    assert "build" in out
     assert "(blocked)" in out
 
 
 def test_emit_with_no_phase_says_none_reported_not_blank(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """ "Has not reported" and "is scoping" are different facts (``PhaseFile.read``
+    """ "Has not reported" and "is scope" are different facts (``PhaseFile.read``
     draws the same line); a blank value would collapse them into the second."""
     inspection = WorkspaceInspection(peek=_peek(tmp_path), primary=None, turns=(), phase=None)
     inspection.emit()
@@ -134,12 +134,12 @@ def test_emit_phase_line_sits_in_the_identity_block(
 ) -> None:
     """Grouped with the lifecycle ``status`` it is an axis of, and ahead of the
     ``agent``/``todo`` sections — one fact about the workspace, not a section."""
-    report = PhaseReport(phase="verifying", note=None, updated_at=datetime.now(UTC))
+    report = PhaseReport(phase="verify", note=None, updated_at=datetime.now(UTC))
     inspection = WorkspaceInspection(peek=_peek(tmp_path), primary=None, turns=(), phase=report)
     inspection.emit()
     out = capsys.readouterr().out
 
-    assert "verifying" in out
+    assert "verify" in out
     assert "(4/6)" in out
     lines = out.splitlines()
     status_at = next(i for i, line in enumerate(lines) if line.startswith("  status:"))
@@ -181,10 +181,10 @@ def test_show_reports_a_phase_the_cli_just_set(runner: CliRunner, project: Path)
         if "created " in line
     )
 
-    written = runner.invoke(app, ["phase", ws_id[:8], "delivering"])
+    written = runner.invoke(app, ["phase", ws_id[:8], "deliver"])
     assert written.exit_code == 0, written.output
 
     result = runner.invoke(app, ["show", ws_id[:8]])
     assert result.exit_code == 0, result.output
-    assert "delivering" in result.output
+    assert "deliver" in result.output
     assert "(none reported)" not in result.output

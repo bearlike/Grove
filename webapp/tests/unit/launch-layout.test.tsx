@@ -171,16 +171,11 @@ describe("the main toolbar", () => {
     expect(expand).toBeLessThan(send);
   });
 
-  it("holds the send button's 28px square, and leaves the inset to the body", () => {
-    // The measured geometry is a PAIR — a 28px button and the 12px of padding
-    // around it — and the two halves have different owners on purpose. The
-    // button's size is a landing decision and lives here; the 11px padding
-    // plus the bar's 1px border is `ComposerBody`'s, because both composers
-    // measure that inset and a second copy here is the one that goes stale.
-    expect(surface).toContain('className="size-[28px]"');
-    expect(surface).not.toContain("padding: 11");
-    const body = read("components/grove/composer.tsx");
-    expect(body).toContain("padding: 11");
+  it("sizes nothing itself — the vendored bar and the theme own the geometry", () => {
+    // One size for every icon control on a toolbar is a theme rule keyed by
+    // slot, so neither composer restates a send size or a bar inset here.
+    expect(surface).not.toContain("size-[28px]");
+    expect(surface).not.toMatch(/padding:\s*11/);
   });
 });
 
@@ -192,9 +187,9 @@ describe("the configuration shelf", () => {
     // Writing and configuring are different acts. Inside the bar the pills
     // competed with the brief for the same paper and pushed Send around as
     // they wrapped; a sibling shelf under it lets the bar be one thing.
-    const body = at(surface, "<ComposerBody");
+    const bar = at(surface, "</ComposerBar>");
     const shelf = at(surface, "composer-shelf");
-    expect(body).toBeLessThan(shelf);
+    expect(bar).toBeLessThan(shelf);
   });
 
   it("insets the shelf from the body's edges rather than spanning them", () => {

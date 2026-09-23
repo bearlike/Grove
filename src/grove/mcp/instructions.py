@@ -51,7 +51,7 @@ The per-ticket ``tickets`` object and ``blocked`` earn their space in a string
 that is spent on every connection because omitting them is actively wrong, not
 merely incomplete: an agent that never learns the keys are pre-seeded will
 invent its own, and one that never learns ``blocked`` exists reports a false
-``done`` or freezes on a phase it cannot actually reach. Everything else about
+``handoff`` or freezes on a phase it cannot actually reach. Everything else about
 the shape — why the key is ``"<provider>:<id>"``, why ``blocked`` sits beside a
 phase instead of joining the six — belongs to :mod:`grove.core.phase` and is
 not re-derived here.
@@ -90,7 +90,15 @@ the repo paths every other tool wants. Then grove_list_workspaces for the fleet,
 grove_get_workspace for one, and grove_peek_workspace for a bounded live
 snapshot. Lifecycle is grove_create_workspace, grove_pause_workspace,
 grove_resume_workspace, grove_respawn_workspace and grove_kill_workspace. Steer
-a running agent with grove_send_workspace_message. Destructive tools take their
+a running agent with grove_send_workspace_message. To wait on slow work — CI on
+a commit, a timer, a command that exits when it is done — call
+grove_register_watch and then END YOUR TURN rather than polling or sleeping:
+Grove delivers the outcome to the recipient as ordinary mail when it settles. Every
+watch has a deadline (default 15 minutes; set a longer one if you expect to wait
+longer) and its expiry is delivered too, saying the condition was not met, so a
+watch can never stall a session. Attached tickets need no watch from you: while
+a workspace runs, Grove mails it when a person changes one of its tickets.
+grove_list_watches and grove_cancel_watch are the other two. Destructive tools take their
 inputs explicitly and never guess. For complete on-demand operating help, call
 grove_get_skill with no name to list this server's installed skills, then with a
 name to read one; resource-aware clients can read grove://skills/{name} too.
@@ -117,7 +125,7 @@ WRITE THE FILE. It is the only channel that works everywhere.
 
     path     the absolute path in the GROVE_PHASE_FILE environment variable
              (unset? .grove/phase.json at the top of your worktree)
-    content  {"phase": "implementing", "note": "wiring the parser"}
+    content  {"phase": "build", "note": "wiring the parser"}
 
 The note is optional, one line, under 200 characters. Write no timestamp. Grove
 takes the time from the file itself.
@@ -125,21 +133,22 @@ takes the time from the file itself.
 REPORT AT A TRANSITION, never on a schedule. Write the file when what you are
 doing changes, which is a handful of times across a whole task.
 
-    scoping       reading the ticket and the code, working out what the job is
-    planning      you understand the problem and are choosing an approach
-    implementing  you are editing files
-    verifying     running tests, linters or the build, reviewing your own diff
-    delivering    committing, pushing, opening or updating the pull request
-    done          handed off, nothing left for you to do
+    scope    reading the ticket and the code, working out what the job is
+    plan     you understand the problem and are choosing an approach
+    build    you are editing files
+    verify   running tests, linters or the build, reviewing your own diff
+    deliver  committing, pushing, opening or updating the pull request
+    handoff  transferred the finished work to the user in the form they asked for,
+             with nothing left for you to do on the task
 
-Moving backwards is a correct report, not a failure. If verifying shows the
-design was wrong, say planning again.
+Moving backwards is a correct report, not a failure. If verify shows the
+design was wrong, say plan again.
 
 Attached to more than one ticket? The file grows a "tickets" object, keyed
-"<provider>:<id>", one entry already seeded per ticket at "scoping" — edit the
+"<provider>:<id>", one entry already seeded per ticket at "scope" — edit the
 entries in place, never invent a key:
 
-    {"phase": "implementing", "tickets": {"gitea:498": {"phase": "verifying"}}}
+    {"phase": "build", "tickets": {"gitea:498": {"phase": "verify"}}}
 
 Each ticket's phase is its own claim, independent of the top-level one and of
 every other ticket's. Add "blocked": true beside any phase — top-level or a

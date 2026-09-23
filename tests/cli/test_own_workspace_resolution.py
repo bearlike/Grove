@@ -3,10 +3,10 @@
 ``grove phase`` / ``grove edit`` and every other cwd-inferring verb used to ask
 "which workspace is this directory", which in a shared worktree is a different
 question from "which workspace is asking". Measured 2026-09-17: a session whose
-own id was ``1d58b613…`` ran ``grove phase scoping`` from the main checkout and
+own id was ``1d58b613…`` ran ``grove phase scope`` from the main checkout and
 published the claim onto ``845d3e8f…`` — a different task, with issue #785
-attached, already merged — walking that ticket's phase backwards from ``done``
-to ``scoping`` and reporting success.
+attached, already merged — walking that ticket's phase backwards from
+``handoff`` to ``scope`` and reporting success.
 
 ``GROVE_PHASE_FILE`` already names the caller's own workspace unambiguously, so
 preferring it makes the CLI and the file agree by construction.

@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Final
 from loguru import logger
 
 from grove.core import paths
+from grove.core.phase import normalize_phase
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Iterable, Sequence
@@ -123,7 +124,7 @@ claim and ``''`` for the workspace's own.
 **EVERY key column is NOT NULL with an empty-string default, and each one is
 load-bearing: SQLite treats NULLs in a UNIQUE/PRIMARY KEY as DISTINCT, so one
 nullable key column defeats the dedupe entirely.** ``note`` is the column that
-proved it — ``grove phase implementing`` with no note is the ordinary case, and
+proved it — ``grove phase build`` with no note is the ordinary case, and
 measured before the fix, **500 identical note-less ticks wrote 500 rows**
 (~86,400 per day per workspace at the tick's cadence). The absent-vs-empty
 distinction the rest of this tree defends is deliberately given up HERE and only
@@ -136,7 +137,7 @@ phase file on every transition and the tick reads it ~1 Hz, so a key carrying
 ``recorded_at`` would append a row per second forever; keying on the claim's
 content makes ``INSERT OR IGNORE`` the dedupe and leaves ``recorded_at`` as the
 first time this claim was seen. The cost is that a phase revisited after a
-detour (``verifying`` → ``planning`` → ``verifying``) keeps its FIRST timestamp
+detour (``verify`` → ``plan`` → ``verify``) keeps its FIRST timestamp
 and records no second row, which is the right trade for a store that must not
 grow without bound on an idle fleet.
 """
@@ -581,7 +582,7 @@ class WorkspaceHistoryStore:
                     recorded_at=_at(row[0]) or datetime.fromtimestamp(0, tz=UTC),
                     # Empty back to None on the way out, so the storage artifact
                     # that the dedupe needs never reaches a consumer.
-                    phase=row[1] or None,
+                    phase=normalize_phase(row[1]) if row[1] else None,
                     blocked=bool(row[2]),
                     note=row[3] or None,
                     ticket_key=row[4] or None,

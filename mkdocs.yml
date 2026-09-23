@@ -115,6 +115,7 @@ theme:
     "Containerized Agents": lucide:container
     "Branch Provenance": lucide:shield-check
     "Agent Activity & Sessions": lucide:activity
+    "Watches & Callbacks": lucide:alarm-clock
     "Telemetry & Tracing": lucide:waypoints
     "Push Notifications": lucide:bell
     "Status Semantics": lucide:circle-dot
@@ -233,6 +234,7 @@ nav:
           - Branch Provenance: features-branch-provenance.md
           - Ticket Providers: features-ticket-providers.md
           - Agent Activity & Sessions: features-activity.md
+          - Watches & Callbacks: features-watches.md
           - Telemetry & Tracing: features-telemetry.md
           - Push Notifications: features-notifications.md
           - Status Semantics: features-status.md

@@ -17,6 +17,7 @@ import type {
   BranchInfo,
   CommitSummaryView,
   HealthView,
+  MailboxDirectory,
   ModelOptionView,
   ProvisionProgressView,
   SessionControlsView,
@@ -26,6 +27,7 @@ import type {
   TicketProviderView,
   TicketRef,
   TodoListView,
+  WatchList,
   WhoamiView,
   WorkspaceActivityView,
   WorkspaceDiffView,
@@ -177,6 +179,23 @@ export function useWorkspaceTodo(id: string | null): UseQueryResult<TodoListView
     },
     enabled: id !== null,
     refetchInterval: backstopInterval(connected, POLL_MS.todo),
+  });
+}
+
+/**
+ * Every watch whose callback lands in this workspace — the card beside Queue.
+ *
+ * `useWorkspaceTodo`'s sibling in shape and cost: a small fetch-on-demand read
+ * scoped to one workspace. Unlike the queue it has NO edge to invalidate on,
+ * because no `/events` frame carries watch state — so the interval is ungated
+ * and is the whole refresh. It only runs while a workspace page is open.
+ */
+export function useWorkspaceWatches(id: string | null): UseQueryResult<WatchList> {
+  return useQuery({
+    queryKey: groveKeys.watches(id ?? ""),
+    queryFn: () => groveClient.getWorkspaceWatches(id!),
+    enabled: id !== null,
+    refetchInterval: POLL_MS.watches,
   });
 }
 
@@ -340,6 +359,19 @@ export function useSessionControls(id: string | null): UseQueryResult<SessionCon
     queryKey: groveKeys.controls(id ?? ""),
     queryFn: () => groveClient.getControls(id!),
     enabled: id !== null,
+  });
+}
+
+/**
+ * The host's mailbox directory — who an `@` mention can name.
+ *
+ * Fetched on demand and never on the stream, like `controls`: no `/events`
+ * frame carries it, and the composer only needs it when a reader types `@`.
+ */
+export function useMailboxContacts(): UseQueryResult<MailboxDirectory> {
+  return useQuery({
+    queryKey: groveKeys.mailboxContacts,
+    queryFn: () => groveClient.getMailboxContacts(),
   });
 }
 

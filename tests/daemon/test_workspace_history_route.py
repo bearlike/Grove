@@ -132,19 +132,19 @@ def test_history_serializes_recorded_facts_in_store_order(
     history_store.record_progress(
         workspace_id,
         _report(
-            "planning",
+            "plan",
             note="mapping the route",
-            tickets=(TicketClaim(ticket="gitea:687", phase="planning"),),
+            tickets=(TicketClaim(ticket="gitea:687", phase="plan"),),
         ),
         now=planned,
     )
     history_store.record_progress(
         workspace_id,
         _report(
-            "verifying",
+            "verify",
             blocked=True,
             note="running checks",
-            tickets=(TicketClaim(ticket="gitea:688", phase="implementing"),),
+            tickets=(TicketClaim(ticket="gitea:688", phase="build"),),
         ),
         now=verified,
     )
@@ -180,10 +180,10 @@ def test_history_serializes_recorded_facts_in_store_order(
     assert titles.index("Renamed title") < titles.index("Initial title")
     assert set(titles) == {"Renamed title", "Initial title", "history route test"}
     assert [entry["phase"] for entry in body["progress"]] == [
-        "verifying",
-        "implementing",
-        "planning",
-        "planning",
+        "verify",
+        "build",
+        "plan",
+        "plan",
     ]
     assert [entry["recorded_at"] for entry in body["progress"]] == [
         "2026-09-13T12:00:03Z",
@@ -225,7 +225,7 @@ def test_history_preserves_absent_progress_note_and_ticket_key_as_null(
     daemon: TestClient, tmp_repo: Path, history_store: WorkspaceHistoryStore
 ) -> None:
     workspace_id = _create_workspace(daemon, tmp_repo)
-    history_store.record_progress(workspace_id, _report("implementing"), now=_AT)
+    history_store.record_progress(workspace_id, _report("build"), now=_AT)
 
     response = daemon.get(f"/workspaces/{workspace_id}/history")
 
@@ -233,7 +233,7 @@ def test_history_preserves_absent_progress_note_and_ticket_key_as_null(
     assert response.json()["progress"] == [
         {
             "recorded_at": "2026-09-13T12:00:00Z",
-            "phase": "implementing",
+            "phase": "build",
             "blocked": False,
             "note": None,
             "ticket_key": None,
@@ -251,9 +251,7 @@ def test_history_survives_the_workspace_being_killed(
     question the store exists to answer returned 404.
     """
     workspace_id = _create_workspace(daemon, tmp_repo)
-    history_store.record_progress(
-        workspace_id, _report("implementing", note="wiring the durable store")
-    )
+    history_store.record_progress(workspace_id, _report("build", note="wiring the durable store"))
 
     daemon.post(
         f"/workspaces/{workspace_id}/kill", json={"delete_branch": False}

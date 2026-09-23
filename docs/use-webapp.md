@@ -104,6 +104,7 @@ The transcript ([`thread.tsx`](repo:webapp/components/grove/workspace/thread.tsx
 - The composer stays enabled while the agent works. ++enter++ sends, ++shift+enter++ makes a new line, **Interrupt** stops it mid turn.
 - A live question is a card in the thread's footer ([`pending-question.tsx`](repo:webapp/components/grove/workspace/pending-question.tsx)). A single choice sends on tap, anything else shows **Submit**.
 - A message sent mid turn joins a collapsed queue with a count in its header.
+- A **Watches** card beside the queue lists what the workspace is waiting on: CI, timers, commands, and a standing watch for each attached ticket. Each row says whether it is running, fired, expired, cancelled or undeliverable. See [Watches](features-watches.md).
 - Paste a screenshot, annotate it, and the agent is handed the path. See [Attachments and annotation](features-attachments.md).
 
 ## The Session Catalog

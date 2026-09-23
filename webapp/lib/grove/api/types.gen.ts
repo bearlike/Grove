@@ -196,6 +196,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/watches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_watches_get"];
+        put?: never;
+        /** Register */
+        post: operations["register_watches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/watches/{watch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel */
+        delete: operations["cancel_watches__watch_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/usage/summary": {
         parameters: {
             query?: never;
@@ -1811,7 +1846,7 @@ export interface paths {
          * @description The workspace's current task-phase claim.
          *
          *     ``null`` (200, never 404) means the agent has not reported one yet —
-         *     a real, distinct answer from "phase=scoping", not an error: a fleet
+         *     a real, distinct answer from "phase=scope", not an error: a fleet
          *     watcher needs to tell "hasn't reported" from "is at step zero". Runs
          *     in the executor: ``WorkspaceManager.phase`` reads the phase file.
          */
@@ -2378,6 +2413,8 @@ export interface components {
             native?: components["schemas"]["NativeFactsView"] | null;
             /** Last Event At */
             last_event_at: string | null;
+            /** Started At */
+            started_at?: string | null;
             /** Needs Attention */
             needs_attention: boolean;
             /** Error Detail */
@@ -2707,6 +2744,54 @@ export interface components {
          * @enum {string}
          */
         ChallengeState: "pending" | "approved" | "denied" | "consumed" | "expired";
+        /**
+         * CiPredicate
+         * @description Wake me when the checks on this commit have all concluded.
+         *
+         *     Keyed on an immutable ``head_sha`` and never on a branch name, because a
+         *     force-push or a rebase makes a DIFFERENT commit with the same branch name —
+         *     a watch that followed the name would answer about work nobody asked about.
+         */
+        CiPredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "ci";
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "linear" | "github" | "gitea";
+            /** Owner */
+            owner: string;
+            /** Repo */
+            repo: string;
+            /** Head Sha */
+            head_sha: string;
+        };
+        /**
+         * CommandPredicate
+         * @description Wake me when this command exits with one of these statuses.
+         *
+         *     The escape hatch for everything Grove does not model. ``argv`` is a list and
+         *     is never a shell string: a predicate assembled from a string would make the
+         *     registration itself a shell injection, and the value-becomes-syntax class is
+         *     one this tree has already paid for at several other boundaries.
+         */
+        CommandPredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "command";
+            /** Argv */
+            argv: string[];
+            /** Terminal Exit Codes */
+            terminal_exit_codes?: number[];
+            /** Workspace Id */
+            workspace_id: string;
+        };
         /**
          * CommitSummaryView
          * @description Wire mirror of ``grove.core.workspace.CommitSummary``.
@@ -3815,7 +3900,7 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "scoping" | "planning" | "implementing" | "verifying" | "delivering" | "done";
+            phase: "scope" | "plan" | "build" | "verify" | "deliver" | "handoff";
             /** Note */
             note?: string | null;
             /**
@@ -4655,7 +4740,7 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "scoping" | "planning" | "implementing" | "verifying" | "delivering" | "done";
+            phase: "scope" | "plan" | "build" | "verify" | "deliver" | "handoff";
             /** Note */
             note?: string | null;
             /**
@@ -4890,7 +4975,7 @@ export interface components {
              * Phase
              * @enum {string}
              */
-            phase: "scoping" | "planning" | "implementing" | "verifying" | "delivering" | "done";
+            phase: "scope" | "plan" | "build" | "verify" | "deliver" | "handoff";
             /** Note */
             note?: string | null;
             /**
@@ -4900,6 +4985,43 @@ export interface components {
             blocked: boolean;
             /** Index */
             index: number;
+        };
+        /**
+         * TicketPredicate
+         * @description Tell this workspace whenever a person changes this attached issue or pull request.
+         *
+         *     The one STANDING predicate: it never settles on a change. Each change is
+         *     mailed, and the watch keeps going with the new ``baseline``. It also has no
+         *     deadline, because a deadline exists to wake an agent that stopped to wait,
+         *     and nobody stops for this. Its lifetime is the workspace's: Grove registers
+         *     it when a ticket is attached to a running workspace, and cancels it on
+         *     detach, pause or kill. Agents never register it by hand.
+         *
+         *     ``baseline`` is ``None`` until the first check has read the ticket, so the
+         *     state at attach time is recorded silently rather than reported as a change.
+         */
+        TicketPredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "ticket";
+            /** Workspace Id */
+            workspace_id: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "linear" | "github" | "gitea";
+            /** Ticket Id */
+            ticket_id: string;
+            /**
+             * Ticket Kind
+             * @default issue
+             * @enum {string}
+             */
+            ticket_kind: "issue" | "pull_request";
+            baseline?: components["schemas"]["TicketSnapshot"] | null;
         };
         /**
          * TicketProviderView
@@ -4992,6 +5114,55 @@ export interface components {
              * @enum {string}
              */
             kind: "issue" | "pull_request";
+        };
+        /**
+         * TicketSnapshot
+         * @description The fields of a ticket a PERSON changes, as last seen. The baseline a check compares against.
+         *
+         *     Deliberately absent: everything Grove itself writes to a tracker. Assignees
+         *     are excluded because Grove assigns its own account. The last-updated time
+         *     is excluded because every sticky-comment edit can move it. The body is held
+         *     as a digest taken AFTER Grove's badge footer is cut out. Leaving these out
+         *     is what keeps Grove's own writes from producing a notification, so no loop
+         *     is possible.
+         *
+         *     ``None`` on ``body_digest`` or ``comment_count`` means the tracker does not
+         *     report that field. It never means empty.
+         */
+        TicketSnapshot: {
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status?: string | null;
+            /**
+             * Draft
+             * @default false
+             */
+            draft: boolean;
+            /** Body Digest */
+            body_digest?: string | null;
+            /** Comment Count */
+            comment_count?: number | null;
+        };
+        /**
+         * TimerPredicate
+         * @description Wake me at a wall-clock instant. The durable replacement for ``sleep``.
+         *
+         *     It evaluates no external state at all, which is what makes it the cheapest
+         *     thing in the system: the scheduler's own deadline IS the answer, so a timer
+         *     costs one heap entry and never runs a probe.
+         */
+        TimerPredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "timer";
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
         };
         /**
          * TodoItemView
@@ -5967,6 +6138,102 @@ export interface components {
             ctx?: Record<string, never>;
         };
         /**
+         * WatchList
+         * @description Every watch this host currently holds, newest registration first.
+         */
+        WatchList: {
+            /** Watches */
+            watches?: components["schemas"]["WatchView"][];
+        };
+        /**
+         * WatchOutcome
+         * @description What a watcher concluded, in the words the recipient will read.
+         *
+         *     ``summary`` is a whole self-contained sentence rather than a status code,
+         *     because of where it lands: an idle session receiving this starts a FRESH
+         *     turn with no memory of registering anything, so "your watch fired" tells it
+         *     nothing it can act on. ``ok`` says whether the thing being waited for
+         *     succeeded — distinct from whether the watch itself worked.
+         */
+        WatchOutcome: {
+            /** Ok */
+            ok: boolean;
+            /** Summary */
+            summary: string;
+            /** Url */
+            url?: string | null;
+        };
+        /**
+         * WatchRegistration
+         * @description One request to be woken. The caller names both the subject and itself.
+         *
+         *     ``recipient`` is where the callback goes, and it is the caller's own address
+         *     in every ordinary use — an agent registering a watch on its own work. Like a
+         *     mailbox ``sender`` it is DECLARED rather than proven, which is what lets an
+         *     orchestrator register a watch on behalf of a worker it supervises.
+         */
+        WatchRegistration: {
+            recipient: components["schemas"]["MailboxAddress"];
+            /** Predicate */
+            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"];
+            /**
+             * Every
+             * Format: duration
+             * @default PT30S
+             */
+            every: string;
+            /** Deadline */
+            deadline?: string | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /**
+         * WatchView
+         * @description One registered watch as any client sees it.
+         */
+        WatchView: {
+            /** Id */
+            id: string;
+            recipient: components["schemas"]["MailboxAddress"];
+            /** Predicate */
+            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "fired" | "expired" | "cancelled" | "undeliverable";
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Every
+             * Format: duration
+             * @default PT30S
+             */
+            every: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Next Due */
+            next_due?: string | null;
+            /** Settled At */
+            settled_at?: string | null;
+            outcome?: components["schemas"]["WatchOutcome"] | null;
+            /** Receipt */
+            receipt?: ("delivered" | "rejected" | "unknown") | null;
+            /** Receipt Detail */
+            receipt_detail?: string | null;
+        };
+        /**
          * WhoamiView
          * @description Authenticated daemon identity + uptime.
          *
@@ -6011,6 +6278,8 @@ export interface components {
              * @default false
              */
             update_available: boolean;
+            /** Restart Required */
+            restart_required?: boolean;
             /** Langfuse Host */
             langfuse_host?: string | null;
             /** Langfuse Project Id */
@@ -6866,6 +7135,101 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    listing_watches_get: {
+        parameters: {
+            query?: {
+                workspace?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_watches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WatchRegistration"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_watches__watch_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                watch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchView"];
                 };
             };
             /** @description Validation Error */

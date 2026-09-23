@@ -10,7 +10,7 @@ import {
 
 import { useAnnotationUi } from "@/components/grove/annotation";
 import { AttachmentFile } from "@/components/grove/attachment-file";
-import { ComposerAttachments } from "@/components/grove/composer";
+import { ComposerAttachments } from "@/components/elements/composer";
 import { filePartSize } from "@/lib/grove/adapters";
 
 /**
@@ -26,7 +26,7 @@ import { filePartSize } from "@/lib/grove/adapters";
  *
  * The iteration and the scope stay `ComposerPrimitive` / `MessagePrimitive` /
  * `AttachmentPrimitive`, because they are the runtime's — and the runtime is
- * precisely what the landing surface deliberately does not mount. The shared
+ * precisely what the landing surface deliberately does not mount. The vendored
  * `ComposerAttachments` supplies the list's own spacing, so neither surface
  * hand-rolls a row of tiles.
  */

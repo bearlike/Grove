@@ -19,6 +19,7 @@ import httpx
 import pytest
 
 from grove.core.auth import SessionStore
+from grove.core.native_worker import _BOOT_PROMPT, _PEER_PREAMBLE
 
 pytestmark = [
     pytest.mark.integration,
@@ -103,8 +104,12 @@ def native_sandbox(tmp_path: Path, tmp_repo: Path) -> Iterator[tuple[dict[str, s
         "  continue\n"
         " if frame.get('type') != 'user': continue\n"
         " text=frame['message']['content']\n"
-        " if 'Initialize this Grove-owned native session' in text: continue\n"
-        " if 'Grove mailbox-enabled agent' in text: data['initial']+=1\n"
+        # Both markers are INJECTED from the worker's own constants rather than
+        # retyped: this fake distinguishes the boot turn from the initial task
+        # by their text, so a reworded prompt would otherwise desynchronise it
+        # silently and every assertion here would time out naming no cause.
+        f" if {_BOOT_PROMPT[:40]!r} in text: continue\n"
+        f" if {_PEER_PREAMBLE[:40]!r} in text: data['initial']+=1\n"
         " else: data['followups'].append(text)\n"
         " save()\n"
         " reply={'type':'user','uuid':frame.get('uuid'),'message':frame['message']}\n"

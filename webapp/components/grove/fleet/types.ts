@@ -1,4 +1,4 @@
-import type { DashboardSnapshotView, WorkspaceStateView } from "@/lib/grove/api";
+import type { DashboardSnapshotView, WatchView, WorkspaceStateView } from "@/lib/grove/api";
 
 /**
  * The fleet's vocabulary, derived from the wire types rather than restated.
@@ -20,6 +20,9 @@ export type AgentState = WorkspaceActivity["sessions"][number]["activity"]["stat
 export type TaskPhase = Phase["phase"];
 
 export type Runtime = WorkspaceStateView["runtime"];
+
+/** A registered watch's lifecycle, as the daemon reports it. */
+export type WatchState = WatchView["state"];
 
 /** One workspace lifted out of its project, so the fleet can be searched flat. */
 export interface FleetRow {

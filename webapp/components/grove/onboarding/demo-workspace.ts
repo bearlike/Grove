@@ -8,6 +8,7 @@ import type {
   SessionTurnView,
   TicketRef,
   TodoListView,
+  WatchList,
   WorkspaceActivityView,
   WorkspaceDiffView,
   WorkspaceHistoryView,
@@ -113,15 +114,15 @@ export const DEMO_STATE: WorkspaceStateView = {
 };
 
 export const DEMO_PHASE: PhaseView = {
-  phase: "verifying",
+  phase: "verify",
   note: "running the API suite against the stubbed unreadable root",
   blocked: false,
   updated_at: T1,
   index: 3,
   total: 6,
   tickets: [
-    { ticket: "gitea:412", phase: "verifying", note: "fix written, suite running", blocked: false, index: 3 },
-    { ticket: "gitea:418", phase: "delivering", note: "draft PR open", blocked: false, index: 4 },
+    { ticket: "gitea:412", phase: "verify", note: "fix written, suite running", blocked: false, index: 3 },
+    { ticket: "gitea:418", phase: "deliver", note: "draft PR open", blocked: false, index: 4 },
   ],
 };
 
@@ -250,14 +251,46 @@ export const DEMO_QUEUE: WorkspaceQueueView = {
   ],
 };
 
+/** One CI watch still running and one timer that already fired — the two
+ * states a reader meets first. The address is the demo's own id, which the
+ * daemon's pattern would refuse; nothing here is ever sent to it. */
+export const DEMO_WATCHES: WatchList = {
+  watches: [
+    {
+      id: "wch_00000000000000000000000000000001",
+      recipient: { workspace_id: DEMO_WORKSPACE_ID, agent: "" },
+      predicate: { kind: "ci", provider: "github", owner: "acme", repo: "sample-healthd", head_sha: "9f2c1ad" },
+      state: "pending",
+      note: "Checks on the /healthz change",
+      every: "PT30S",
+      created_at: T1,
+      expires_at: "2026-09-14T10:26:27.000Z",
+      next_due: T1,
+    },
+    {
+      id: "wch_00000000000000000000000000000002",
+      recipient: { workspace_id: DEMO_WORKSPACE_ID, agent: "" },
+      predicate: { kind: "timer", at: T0 },
+      state: "fired",
+      note: "",
+      every: "PT30S",
+      created_at: T0,
+      expires_at: T1,
+      settled_at: T0,
+      outcome: { ok: true, summary: `The timer you set for ${T0} has elapsed.`, url: null },
+      receipt: "delivered",
+    },
+  ],
+};
+
 export const DEMO_HISTORY: WorkspaceHistoryView = {
   name: { workspace_id: DEMO_WORKSPACE_ID, title: DEMO_STATE.title, description: DEMO_STATE.description ?? null, repo_root: DEMO_REPO_ROOT, first_seen: T0, last_seen: T1, deleted_at: null },
   names: [{ title: DEMO_STATE.title, description: DEMO_STATE.description ?? null, recorded_at: T0 }],
   progress: [
-    { recorded_at: T0, phase: "scoping", blocked: false, note: "reading the router and the config loader", ticket_key: null },
-    { recorded_at: "2026-09-14T08:20:00.000Z", phase: "implementing", blocked: false, note: "adding GET /healthz", ticket_key: "gitea:412" },
-    { recorded_at: "2026-09-14T09:05:00.000Z", phase: "delivering", blocked: false, note: "draft PR open", ticket_key: "gitea:418" },
-    { recorded_at: T1, phase: "verifying", blocked: false, note: "running the API suite", ticket_key: "gitea:412" },
+    { recorded_at: T0, phase: "scope", blocked: false, note: "reading the router and the config loader", ticket_key: null },
+    { recorded_at: "2026-09-14T08:20:00.000Z", phase: "build", blocked: false, note: "adding GET /healthz", ticket_key: "gitea:412" },
+    { recorded_at: "2026-09-14T09:05:00.000Z", phase: "deliver", blocked: false, note: "draft PR open", ticket_key: "gitea:418" },
+    { recorded_at: T1, phase: "verify", blocked: false, note: "running the API suite", ticket_key: "gitea:412" },
   ],
   tickets: [
     { ticket_key: "gitea:412", provider: "gitea", ticket_id: "412", kind: "issue", first_seen: T0, last_seen: T1 },

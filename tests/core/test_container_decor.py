@@ -284,11 +284,21 @@ def test_resources_reads_a_capped_cgroup_v2_and_needs_two_samples_for_cpu(tmp_pa
 
     # Two seconds of wall clock against three seconds of consumed CPU on a
     # 1.5-vCPU cap is exactly 100%.
+    #
+    # The elapsed window is measured by the script against the CURRENT clock,
+    # so this asserts on a RANGE rather than the exact figure: on a loaded
+    # runner the seconds between backdating and reading push the denominator
+    # out and 100% becomes 66%, which is the script working correctly and the
+    # assertion measuring the host. Observed on CI; the arithmetic under test
+    # is "did it use the cap as the denominator at all", which a range pins
+    # without pinning the machine's scheduling.
     _backdate_sample(tmp_path, seconds=2)
     (cgroup / "cpu.stat").write_text("usage_usec 4000000\nuser_usec 0\n", encoding="utf-8")
     code, second = _run(script, env=env)
     assert code == 0
-    assert second.strip() == "cpu 100% mem 1.1G/8.0G"
+    assert second.strip().endswith("mem 1.1G/8.0G")
+    percent = int(second.strip().split("%", 1)[0].removeprefix("cpu ").strip())
+    assert 50 <= percent <= 100, second
 
 
 def test_resources_reads_a_cgroup_v1_tree(tmp_path: Path) -> None:

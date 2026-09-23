@@ -419,7 +419,7 @@ class Complete:
         That argument is a workspace ref *or* — with no second argument — the
         phase itself, inferring the workspace from the cwd. Completing only
         workspace ids would hide the shape the verb is used in most, since an
-        agent reporting its own progress types ``grove phase implementing``.
+        agent reporting its own progress types ``grove phase build``.
         Phases lead, because that is the common form.
         """
         from grove.core.phase import PHASE_ORDER  # noqa: PLC0415

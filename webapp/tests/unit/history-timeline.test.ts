@@ -21,14 +21,14 @@ const recorded: WorkspaceHistoryView = {
   ],
   progress: [
     {
-      phase: "done",
+      phase: "handoff",
       blocked: false,
       note: "Published the release",
       ticket_key: null,
       recorded_at: "2026-09-14T16:42:00Z",
     },
     {
-      phase: "verifying",
+      phase: "verify",
       blocked: true,
       note: "Waiting for preview access",
       ticket_key: "gitea:128",

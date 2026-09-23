@@ -30,12 +30,12 @@ import { rollupCoverage, rollupFormula, type TicketRollup } from "./selectors";
  * because the wire's `index` is a position within exactly this sequence.
  */
 const PHASES = [
-  "scoping",
-  "planning",
-  "implementing",
-  "verifying",
-  "delivering",
-  "done",
+  "scope",
+  "plan",
+  "build",
+  "verify",
+  "deliver",
+  "handoff",
 ] as const;
 
 /**
@@ -49,12 +49,12 @@ const PHASE_LABELS: Record<
   (typeof PHASES)[number],
   { full: string; short: string }
 > = {
-  scoping: { full: "Scoping", short: "Scope" },
-  planning: { full: "Planning", short: "Plan" },
-  implementing: { full: "Implementing", short: "Build" },
-  verifying: { full: "Verifying", short: "Verify" },
-  delivering: { full: "Delivering", short: "Deliver" },
-  done: { full: "Done", short: "Done" },
+  scope: { full: "Scope", short: "Scope" },
+  plan: { full: "Plan", short: "Plan" },
+  build: { full: "Build", short: "Build" },
+  verify: { full: "Verify", short: "Verify" },
+  deliver: { full: "Deliver", short: "Deliver" },
+  handoff: { full: "Handoff", short: "Handoff" },
 };
 
 /**
@@ -67,11 +67,11 @@ const PHASE_LABELS: Record<
  * and it takes `--warning` with the octagon beside it, never the attention red
  * the agent axis owns (§7).
  *
- * `done` is the one state that claims the whole sequence, so it colours the
+ * `handoff` is the one state that claims the whole sequence, so it colours the
  * whole sequence: there is no current step left to single out.
  */
 function stepTone(state: StepState, phase: PhaseView): string {
-  if (phase.phase === "done") return "text-success";
+  if (phase.phase === "handoff") return "text-success";
   if (state === "ahead") return "text-content-tertiary";
   if (state === "current" && phase.blocked) return "text-warning";
   return "text-primary";
@@ -365,7 +365,7 @@ function PhaseElapsed({ iso }: { iso: string }): React.ReactNode {
  *
  * **NULL IS NOT A VALUE, AND THAT IS THE WHOLE BUG THIS GUARD EXISTS FOR.** The
  * phase arrives from a query, so the first render is `null` and the second is
- * the phase the agent has been reporting for an hour — and `null → "verifying"`
+ * the phase the agent has been reporting for an hour — and `null → "verify"`
  * is indistinguishable from a real transition to a comparison that only asks
  * "did this differ". Measured on the built page: every load of a working
  * workspace flashed its current node, announcing a change that had not
@@ -437,9 +437,9 @@ export function ChecklistMeter({ todo }: { todo?: TodoProgressView | null }) {
  * the label is the whole point of the component.
  *
  * **IT IS AVERAGE PHASE PROGRESS, NOT COMPLETION, AND THE TWO ARE BOTH TRUE.**
- * Two tickets at `delivering` (index 4 of six) average 80% while `0 / 2 done` is
+ * Two tickets at `deliver` (index 4 of six) average 80% while `0 / 2 done` is
  * equally correct: one measures position along the work, the other counts work
- * finished. Labelling this bar "done" — or replacing 80% with 0% to agree with
+ * finished. Labelling this bar "handoff" — or replacing 80% with 0% to agree with
  * the count — discards every claim the agents actually made, which is the
  * larger dishonesty. The count sits directly under the bar so neither number
  * can be read without the other.

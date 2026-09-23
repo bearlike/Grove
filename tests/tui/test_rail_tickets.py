@@ -62,15 +62,15 @@ def test_a_per_ticket_phase_renders_for_the_ticket_that_claimed_it() -> None:
         TicketRef(provider="gitea", id="2", kind="pull_request"),
     ]
     claims = {
-        "gitea:1": TicketClaim(ticket="gitea:1", phase="delivering"),
-        "gitea:2": TicketClaim(ticket="gitea:2", phase="implementing", blocked=True),
+        "gitea:1": TicketClaim(ticket="gitea:1", phase="deliver"),
+        "gitea:2": TicketClaim(ticket="gitea:2", phase="build", blocked=True),
     }
 
     lines = _render_tickets_panel(refs, dark=True, claims=claims).plain.splitlines()
 
-    assert "implementing" in lines[0]
+    assert "build" in lines[0]
     assert "‼" in lines[0]  # blocked is a trailing mark, never a seventh phase
-    assert "delivering" in lines[1]
+    assert "deliver" in lines[1]
     assert "‼" not in lines[1]
 
 
@@ -91,7 +91,7 @@ def test_tickets_follow_the_shared_pr_state_and_id_ordering() -> None:
 
 def test_a_ticket_note_renders_on_its_claimed_row() -> None:
     ref = TicketRef(provider="gitea", id="1")
-    claim = TicketClaim(ticket="gitea:1", phase="verifying", note="Waiting for approval")
+    claim = TicketClaim(ticket="gitea:1", phase="verify", note="Waiting for approval")
 
     rendered = _render_tickets_panel([ref], dark=True, claims={ref.key: claim})
 
@@ -100,17 +100,16 @@ def test_a_ticket_note_renders_on_its_claimed_row() -> None:
 
 def test_a_claim_without_a_note_keeps_its_pre_note_bytes() -> None:
     ref = TicketRef(provider="gitea", id="1")
-    claim = TicketClaim(ticket="gitea:1", phase="verifying")
+    claim = TicketClaim(ticket="gitea:1", phase="verify")
 
     assert (
-        _render_tickets_panel([ref], dark=True, claims={ref.key: claim}).plain
-        == "GTEA#1  ▆ verifying"
+        _render_tickets_panel([ref], dark=True, claims={ref.key: claim}).plain == "GTEA#1  ▆ verify"
     )
 
 
 def test_a_ticket_note_is_trimmed_to_its_row_budget() -> None:
     ref = TicketRef(provider="gitea", id="1")
-    claim = TicketClaim(ticket="gitea:1", phase="verifying", note="n" * 200)
+    claim = TicketClaim(ticket="gitea:1", phase="verify", note="n" * 200)
 
     rendered = _render_tickets_panel([ref], dark=True, claims={ref.key: claim})
 
@@ -119,14 +118,14 @@ def test_a_ticket_note_is_trimmed_to_its_row_budget() -> None:
 
 
 def test_a_ticket_with_no_claim_renders_no_phase_at_all() -> None:
-    """Absence of a report is not step zero — inventing `scoping` would claim
+    """Absence of a report is not step zero — inventing `scope` would claim
     progress on work nobody said anything about."""
     refs = [TicketRef(provider="gitea", id="1"), TicketRef(provider="gitea", id="2")]
-    claims = {"gitea:1": TicketClaim(ticket="gitea:1", phase="verifying")}
+    claims = {"gitea:1": TicketClaim(ticket="gitea:1", phase="verify")}
 
     lines = _render_tickets_panel(refs, dark=True, claims=claims).plain.splitlines()
 
-    assert "verifying" in lines[0]
+    assert "verify" in lines[0]
     # `ticket_pill` abbreviates the provider; the point is that the line
     # carries the ref and nothing else.
     assert lines[1].strip() == "GTEA#2"

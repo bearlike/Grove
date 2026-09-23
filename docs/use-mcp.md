@@ -41,6 +41,8 @@ A ✓ marks a tool that survives `--read-only`.
 | `grove_remap_workspace_session` | Re-point a workspace at another session after `/clear` rotated the id. | |
 | `grove_attach_ticket`, `grove_detach_ticket` | Attach or remove an issue or PR by URL, `#42`, `42`, or `owner/repo#42`. See [ticket providers](features-ticket-providers.md). | |
 | `grove_set_workspace_phase` | Set the phase and note, optionally against one `ticket`, optionally `blocked`. | |
+| `grove_list_watches` | Every [watch](features-watches.md) on this host, pending and recently settled. | ✓ |
+| `grove_register_watch`, `grove_cancel_watch` | Wait on CI, a timer or a command without polling, then end the turn. Ticket watches are registered for you. | |
 
 ## Agents writing to each other
 

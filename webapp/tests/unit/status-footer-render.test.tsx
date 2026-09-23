@@ -582,6 +582,31 @@ describe("degraded and update states", () => {
     expect(upd).toContain("0.1.0");
     expect(upd).toContain("github.com/bearlike/Grove/releases");
   });
+
+  it("asks for a daemon restart only when the daemon says its code moved", () => {
+    const band = (restart: boolean | undefined) =>
+      render(
+        <StatusFooter
+          context={context}
+          counts={EMPTY_COUNTS}
+          accounts={[]}
+          connected
+          progress={EMPTY_PROGRESS}
+          attention={0}
+          system={systemFacts({ ...whoami, restart_required: restart })}
+        />,
+      );
+
+    const stale = band(true);
+    expect(stale).toContain('data-testid="footer-restart-required"');
+    expect(stale).toContain("systemctl --user restart grove-daemon");
+    // Both "no" answers must stay silent, including an older daemon that sends
+    // no field at all.
+    expect(band(false)).not.toContain("footer-restart-required");
+    expect(band(undefined)).not.toContain("footer-restart-required");
+    // The ordinary band is untouched by the new state.
+    expect(live).not.toContain("footer-restart-required");
+  });
 });
 
 describe("the expanded account list names its providers by mark", () => {

@@ -94,7 +94,7 @@ def _ticket_state(ref: TicketRef) -> str:
         "reopened": "open",
         "merged": "merged",
         "closed": "closed",
-        "done": "closed",
+        "handoff": "closed",
         "completed": "closed",
         "draft": "draft",
     }.get((ref.status or "").strip().lower(), "unknown")

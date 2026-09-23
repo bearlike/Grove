@@ -534,7 +534,7 @@ def test_context_span_carries_the_live_facts_tier_one_cannot_express(
         state,
         _session(),
         branch="feat/otel-enricher",
-        phase=PhaseReport(phase="implementing", note="wiring the forwarder", updated_at=T0),
+        phase=PhaseReport(phase="build", note="wiring the forwarder", updated_at=T0),
         todo=TodoProgress(total=4, completed=1, in_progress=1, pending=2),
     )
 
@@ -550,7 +550,7 @@ def test_context_span_carries_the_live_facts_tier_one_cannot_express(
     # The LIVE branch, not the create-time snapshot on the record.
     assert attrs["grove.branch"] == "feat/otel-enricher"
     assert state.branch == "grove/fix-auth"
-    assert attrs["grove.phase"] == "implementing"
+    assert attrs["grove.phase"] == "build"
     assert attrs["grove.phase.note"] == "wiring the forwarder"
     assert attrs["grove.ticket.ids"] == "456"
     assert attrs["grove.ticket.urls"] == "https://git.example.com/o/r/issues/456"
@@ -614,7 +614,7 @@ def test_n_context_revisions_share_one_trace_id(
     forwarder = _forwarder(registry, sink)
     state = _state(worktree)
 
-    for phase in ("scoping", "planning", "implementing", "verifying", "delivering"):
+    for phase in ("scope", "plan", "build", "verify", "deliver"):
         row = _row(state, _session(), phase=PhaseReport(phase=phase, updated_at=T0))
         for job in forwarder.evaluate(_delta(row)):
             forwarder.forward(job)
@@ -658,7 +658,7 @@ def test_a_moved_phase_re_exports_the_context_span_once(
     exporter, sink = exported
     forwarder = _forwarder(registry, sink)
     state = _state(worktree)
-    for phase in ("planning", "planning", "implementing", "implementing"):
+    for phase in ("plan", "plan", "build", "build"):
         row = _row(state, _session(), phase=PhaseReport(phase=phase, updated_at=T0))
         for job in forwarder.evaluate(_delta(row)):
             forwarder.forward(job)
@@ -668,7 +668,7 @@ def test_a_moved_phase_re_exports_the_context_span_once(
         for span in exporter.get_finished_spans()
         if span.attributes is not None
     ]
-    assert phases == ["planning", "implementing"]
+    assert phases == ["plan", "build"]
 
 
 def test_a_phase_rewrite_with_an_unchanged_phase_emits_no_new_span(
@@ -682,8 +682,8 @@ def test_a_phase_rewrite_with_an_unchanged_phase_emits_no_new_span(
     exporter, sink = exported
     forwarder = _forwarder(registry, sink)
     state = _state(worktree)
-    first = PhaseReport(phase="implementing", note="wiring", updated_at=T0)
-    restated = PhaseReport(phase="implementing", note="wiring", updated_at=T0.replace(minute=5))
+    first = PhaseReport(phase="build", note="wiring", updated_at=T0)
+    restated = PhaseReport(phase="build", note="wiring", updated_at=T0.replace(minute=5))
 
     for job in forwarder.evaluate(_delta(_row(state, _session(), phase=first))):
         forwarder.forward(job)
@@ -802,7 +802,7 @@ def test_the_primary_sessions_context_span_is_unaffected_by_sibling_sub_agents(
         _session(),
         sessions=(_session(), _subagent_session(SUBAGENT_ID_1)),
         branch="feat/otel-enricher",
-        phase=PhaseReport(phase="implementing", note="wiring the forwarder", updated_at=T0),
+        phase=PhaseReport(phase="build", note="wiring the forwarder", updated_at=T0),
         todo=TodoProgress(total=4, completed=1, in_progress=1, pending=2),
     )
 
@@ -813,7 +813,7 @@ def test_the_primary_sessions_context_span_is_unaffected_by_sibling_sub_agents(
     assert attrs is not None
     assert attrs["langfuse.session.id"] == SESSION_ID
     assert attrs["grove.branch"] == "feat/otel-enricher"
-    assert attrs["grove.phase"] == "implementing"
+    assert attrs["grove.phase"] == "build"
     assert attrs["grove.ticket.ids"] == "456"
     assert attrs["grove.todo.total"] == 4
 
@@ -999,7 +999,7 @@ def test_the_context_span_attributes_survive_a_json_round_trip(
     row = _row(
         _state(worktree),
         _session(),
-        phase=PhaseReport(phase="verifying", updated_at=T0),
+        phase=PhaseReport(phase="verify", updated_at=T0),
         todo=TodoProgress(total=2, completed=2, in_progress=0, pending=0),
     )
     for job in forwarder.evaluate(_delta(row)):

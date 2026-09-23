@@ -56,10 +56,12 @@ test("Activity and footer use current primary context rather than child or lifet
     await page.getByTestId("work-panel-tab-info").click();
     const activity = page.getByTestId("info-tab");
     const footer = page.getByTestId("status-footer");
-    const percent = used === 128_450 ? "64.23%" : used === 12_345 ? "6.17%" : "0%";
-    await expect(activity).toContainText(percent);
-    await expect(activity).toContainText(used.toLocaleString("en-US"));
-    await expect(footer).toContainText(percent);
+    const activityPercent = used === 128_450 ? "64.23%" : used === 12_345 ? "6.17%" : "0%";
+    const footerPercent = used === 128_450 ? "64%" : used === 12_345 ? "6%" : "0%";
+    const contextDetail = used === 128_450 ? "128.45K" : used === 12_345 ? "12.35K" : "0";
+    await expect(activity).toContainText(activityPercent);
+    await expect(activity).toContainText(contextDetail);
+    await expect(footer).toContainText(footerPercent);
     await expect(footer).not.toContainText("900K");
     await expect(footer).not.toContainText("29.42M");
     await expect(footer.getByTestId("footer-context-window")).toHaveCSS("font-weight", "400");
@@ -69,7 +71,9 @@ test("Activity and footer use current primary context rather than child or lifet
   await page.getByTestId("footer-summary-trigger").click();
   const details = page.getByTestId("footer-summary-details");
   await expect(details).toBeVisible();
-  await expect(details).toContainText("Claude max 20x");
+  const account = details.getByTestId("footer-summary-account");
+  await expect(account).toContainText("Claude");
+  await expect(account).toContainText("max 20x");
   await expect(details).not.toContainText("reader@example.com");
   await expect(details.getByTestId("footer-summary-context-window")).toContainText("0 / 200,000 tokens");
   await page.keyboard.press("Escape");

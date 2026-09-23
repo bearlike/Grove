@@ -268,7 +268,7 @@ function eventPresentation(event: HistoryEvent): {
         detail: event.entry.note,
         meta: event.entry.ticket_key,
         Glyph: event.entry.blocked ? PHASE_BLOCKED_ICON : known ? phaseGlyph(phase) : HistoryIcon,
-        tone: event.entry.blocked ? "blocked" : phase === "done" ? "done" : undefined,
+        tone: event.entry.blocked ? "blocked" : phase === "handoff" ? "done" : undefined,
       };
     }
     case "name":
@@ -328,5 +328,5 @@ function ticketKind(kind: string): string {
 }
 
 function isKnownPhase(phase: string | null): phase is TaskPhase {
-  return phase === "scoping" || phase === "planning" || phase === "implementing" || phase === "verifying" || phase === "delivering" || phase === "done";
+  return phase === "scope" || phase === "plan" || phase === "build" || phase === "verify" || phase === "deliver" || phase === "handoff";
 }

@@ -25,7 +25,7 @@ const claim = (
 
 const view = (tickets: PhaseView["tickets"]): PhaseView =>
   ({
-    phase: "implementing",
+    phase: "build",
     note: null,
     blocked: false,
     updated_at: "2026-08-11T00:00:00Z",
@@ -45,7 +45,7 @@ describe("ticketRollup", () => {
     // The overstatement this exists to prevent: five untouched tickets and one
     // finished one must not read 100%.
     const refs = [ref("1"), ref("2"), ref("3"), ref("4"), ref("5"), ref("6")];
-    const r = ticketRollup(refs, view([claim("gitea:1", "done", 5)]));
+    const r = ticketRollup(refs, view([claim("gitea:1", "handoff", 5)]));
     expect(r?.fraction).toBeCloseTo(1 / 6);
     expect(r?.done).toBe(1);
     expect(r?.unreported).toBe(5);
@@ -62,37 +62,37 @@ describe("ticketRollup", () => {
       done: 0,
       blocked: 0,
       phases: {
-        scoping: 0,
-        planning: 0,
-        implementing: 0,
-        verifying: 0,
-        delivering: 0,
-        done: 0,
+        scope: 0,
+        plan: 0,
+        build: 0,
+        verify: 0,
+        deliver: 0,
+        handoff: 0,
       },
       fraction: 0,
     });
   });
 
-  it("puts done at exactly 1 and scoping at exactly 0 — the ramp's real endpoints", () => {
+  it("puts handoff at exactly 1 and scope at exactly 0 — the ramp's real endpoints", () => {
     // `index / total` instead of `index / (total - 1)` would make a finished
     // ticket read 83%, which is the off-by-one a reader would report as a bug.
-    expect(ticketRollup([ref("1")], view([claim("gitea:1", "done", 5)]))?.fraction).toBe(1);
-    expect(ticketRollup([ref("1")], view([claim("gitea:1", "scoping", 0)]))?.fraction).toBe(0);
+    expect(ticketRollup([ref("1")], view([claim("gitea:1", "handoff", 5)]))?.fraction).toBe(1);
+    expect(ticketRollup([ref("1")], view([claim("gitea:1", "scope", 0)]))?.fraction).toBe(0);
   });
 
   it("keeps a blocked ticket's earned progress instead of zeroing it", () => {
     // Blocked is orthogonal to the phase — that is the axis's premise. A ticket
-    // blocked at `verifying` really has had four phases of work done on it.
-    const r = ticketRollup([ref("1")], view([claim("gitea:1", "verifying", 3, true)]));
+    // blocked at `verify` really has had four phases of work done on it.
+    const r = ticketRollup([ref("1")], view([claim("gitea:1", "verify", 3, true)]));
     expect(r?.fraction).toBeCloseTo(0.6);
     expect(r?.blocked).toBe(1);
     expect(r?.done).toBe(0);
   });
 
-  it("counts a ticket that is both done and blocked as done", () => {
+  it("counts a ticket at handoff and blocked as handed off", () => {
     // The agent finished it and flagged something alongside. Hiding the
     // completion would be the stranger claim of the two.
-    const r = ticketRollup([ref("1")], view([claim("gitea:1", "done", 5, true)]));
+    const r = ticketRollup([ref("1")], view([claim("gitea:1", "handoff", 5, true)]));
     expect(r?.done).toBe(1);
     expect(r?.blocked).toBe(1);
     expect(r?.fraction).toBe(1);
@@ -103,10 +103,10 @@ describe("ticketRollup", () => {
     const r = ticketRollup(
       refs,
       view([
-        claim("gitea:1", "done", 5),
-        claim("gitea:2", "verifying", 3),
-        claim("gitea:3", "scoping", 0),
-        claim("gitea:4", "planning", 1, true),
+        claim("gitea:1", "handoff", 5),
+        claim("gitea:2", "verify", 3),
+        claim("gitea:3", "scope", 0),
+        claim("gitea:4", "plan", 1, true),
       ]),
     );
     // (1 + 0.6 + 0 + 0.2) / 4
@@ -118,12 +118,12 @@ describe("ticketRollup", () => {
       done: 1,
       blocked: 1,
       phases: {
-        scoping: 1,
-        planning: 1,
-        implementing: 0,
-        verifying: 1,
-        delivering: 0,
-        done: 1,
+        scope: 1,
+        plan: 1,
+        build: 0,
+        verify: 1,
+        deliver: 0,
+        handoff: 1,
       },
     });
   });
@@ -131,7 +131,7 @@ describe("ticketRollup", () => {
   it("ignores a claim naming a ticket this workspace does not hold", () => {
     // The join is by key, and a detached ticket's entry is deliberately left
     // standing in the phase file. It must not inflate a batch it left.
-    const r = ticketRollup([ref("1")], view([claim("gitea:1", "scoping", 0), claim("gitea:99", "done", 5)]));
+    const r = ticketRollup([ref("1")], view([claim("gitea:1", "scope", 0), claim("gitea:99", "handoff", 5)]));
     expect(r?.total).toBe(1);
     expect(r?.reported).toBe(1);
     expect(r?.fraction).toBe(0);
@@ -152,7 +152,7 @@ describe("the rollup's explanation", () => {
     // this aggregate exists to make scannable.
     const rollup = ticketRollup(
       [ref("1"), ref("2")],
-      view([claim("gitea:1", "delivering", 4), claim("gitea:2", "delivering", 4)]),
+      view([claim("gitea:1", "deliver", 4), claim("gitea:2", "deliver", 4)]),
     );
 
     expect(rollup?.fraction).toBeCloseTo(0.8);
@@ -160,17 +160,17 @@ describe("the rollup's explanation", () => {
   });
 
   it("names a missing claim without excluding its ref from the average", () => {
-    const rollup = ticketRollup([ref("1"), ref("2")], view([claim("gitea:1", "delivering", 4)]));
+    const rollup = ticketRollup([ref("1"), ref("2")], view([claim("gitea:1", "deliver", 4)]));
 
     expect(rollup?.fraction).toBeCloseTo(0.4);
     expect(rollup && rollupCoverage(rollup)).toBe("0 / 2 done · 1 claim not reported");
   });
 
   it("writes singular and plural coverage honestly, including the blocked suffix", () => {
-    const oneReported = ticketRollup([ref("1")], view([claim("gitea:1", "done", 5)]));
+    const oneReported = ticketRollup([ref("1")], view([claim("gitea:1", "handoff", 5)]));
     const blocked = ticketRollup(
       [ref("1"), ref("2")],
-      view([claim("gitea:1", "verifying", 3, true), claim("gitea:2", "scoping", 0, true)]),
+      view([claim("gitea:1", "verify", 3, true), claim("gitea:2", "scope", 0, true)]),
     );
 
     expect(oneReported && rollupCoverage(oneReported)).toBe("1 / 1 done · 1 claim reported");
@@ -178,7 +178,7 @@ describe("the rollup's explanation", () => {
   });
 
   it("makes the calculation and its unreported-zero rule available on hover", () => {
-    const rollup = ticketRollup([ref("1"), ref("2")], view([claim("gitea:1", "delivering", 4)]));
+    const rollup = ticketRollup([ref("1"), ref("2")], view([claim("gitea:1", "deliver", 4)]));
 
     expect(rollup && rollupFormula(rollup)).toContain("index / (total − 1)");
     expect(rollup && rollupFormula(rollup)).toContain("a ref with no claim counts as 0");

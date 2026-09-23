@@ -45,22 +45,22 @@ describe("PhaseMeter", () => {
     expect(html.match(/bg-border/g)).toHaveLength(5);
   });
 
-  it("keeps abbreviated and full labels behind their task-container thresholds", () => {
+  it("keeps compact and expanded labels behind their task-container thresholds", () => {
     const html = phase();
-    const short = html.match(/<span class="([^"]*?)">Deliver<\/span>/)?.[1];
-    const full = html.match(/<span class="([^"]*?)">Delivering<\/span>/)?.[1];
+    const labels = [...html.matchAll(/<span class="([^"]*?)">Deliver<\/span>/g)].map((match) => match[1]);
+    const [compact, expanded] = labels;
 
-    expect(short).toContain("text-[10px]");
-    expect(short).toContain("@min-[420px]/task:hidden");
-    expect(full).toContain("hidden");
-    expect(full).toContain("@min-[420px]/task:block");
-    expect(full).toContain("font-bold");
+    expect(compact).toContain("text-[10px]");
+    expect(compact).toContain("@min-[420px]/task:hidden");
+    expect(expanded).toContain("hidden");
+    expect(expanded).toContain("@min-[420px]/task:block");
+    expect(expanded).toContain("font-bold");
   });
 
   it("preserves the phase while removing a blank report region", () => {
     const html = phase({ note: "   " });
 
-    expect(slot(html, "phase-meter")).toContain('data-phase="delivering"');
+    expect(slot(html, "phase-meter")).toContain('data-phase="deliver"');
     expect(html).toContain("Deliver");
     expect(html).not.toContain('data-testid="phase-note"');
   });
@@ -141,12 +141,12 @@ describe("TicketProgressMeter", () => {
     done: 1,
     blocked: 1,
     phases: {
-      scoping: 0,
-      planning: 1,
-      implementing: 0,
-      verifying: 1,
-      delivering: 0,
-      done: 1,
+      scope: 0,
+      plan: 1,
+      build: 0,
+      verify: 1,
+      deliver: 0,
+      handoff: 1,
     },
     fraction: 0.45,
   } as const;

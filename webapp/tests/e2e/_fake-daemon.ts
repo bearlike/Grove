@@ -10,9 +10,14 @@ import {
   FIXTURE_AGENTS,
   FIXTURE_BRANCHES,
   FIXTURE_CONTROLS,
+  FIXTURE_HISTORY,
+  FIXTURE_MAILBOX_DIRECTORY,
   FIXTURE_MODELS,
   FIXTURE_PEEK,
   FIXTURE_PHASE,
+  FIXTURE_SUBAGENT_FLEET,
+  FIXTURE_WATCHES,
+  FIXTURE_WORKSPACE_ACTIVITY,
   FIXTURE_PROVISION,
   FIXTURE_SESSIONS,
   FIXTURE_TODO,
@@ -158,6 +163,27 @@ export function startFakeDaemon(port: number): Promise<Server> {
     const diagramHash = () =>
       createHash("sha256").update(diagramXml).digest("hex");
     let diagramRevision = diagramHash();
+
+    app.get("/workspaces/:id/activity", (_req, res) =>
+      res.json(FIXTURE_WORKSPACE_ACTIVITY),
+    );
+    app.get("/mailboxes/contacts", (_req, res) =>
+      res.json(FIXTURE_MAILBOX_DIRECTORY),
+    );
+    app.get("/watches", (_req, res) => res.json(FIXTURE_WATCHES));
+    app.get("/workspaces/:id/fleet", (_req, res) =>
+      res.json(FIXTURE_SUBAGENT_FLEET),
+    );
+    app.get("/workspaces/:id/history", (_req, res) => res.json(FIXTURE_HISTORY));
+    app.get("/workspaces/:id/fleet/stream", (_req, res) => {
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+      });
+      // A comment flushes the headers without fabricating a fleet event.
+      res.write(": connected\n\n");
+    });
 
     app.get("/workspaces/:id/peek", (req, res) => {
       if (req.params.id !== DIAGRAM_WORKSPACE) {

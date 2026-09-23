@@ -172,7 +172,7 @@
         }
       ],
       "phase": {
-        "phase": "delivering",
+        "phase": "deliver",
         "note": "Nav PR is up, waiting on review"
       },
       "transcript": {
@@ -277,7 +277,7 @@
         }
       ],
       "phase": {
-        "phase": "verifying",
+        "phase": "verify",
         "note": "Snapshot test is green, double-checking a couple of edge cases"
       },
       "transcript": {
@@ -397,7 +397,7 @@
         }
       ],
       "phase": {
-        "phase": "implementing",
+        "phase": "build",
         "note": "Checking the sticky footer against the safe-area inset"
       },
       "transcript": {
@@ -517,7 +517,7 @@
         }
       ],
       "phase": {
-        "phase": "done",
+        "phase": "handoff",
         "note": "Benchmark results written up and shared with the team"
       },
       "transcript": {
@@ -629,7 +629,7 @@
         }
       ],
       "phase": {
-        "phase": "scoping",
+        "phase": "scope",
         "note": "Reproducing the flakiest test locally before touching anything"
       }
     },
@@ -652,7 +652,7 @@
         }
       ],
       "phase": {
-        "phase": "planning",
+        "phase": "plan",
         "note": "Deciding whether the rewrite needs a second pass on the landing page IA"
       },
       "transcript": {
@@ -776,17 +776,17 @@
         }
       ],
       "phase": {
-        "phase": "implementing",
+        "phase": "build",
         "note": "Wiring the token-bucket limiter into the middleware stack",
         "tickets": [
           {
             "ticket": "github:521",
-            "phase": "implementing",
+            "phase": "build",
             "note": "Limiter is in; wiring it into the middleware stack"
           },
           {
             "ticket": "gitea:229",
-            "phase": "scoping",
+            "phase": "scope",
             "note": "Waiting on the limit to settle before documenting it"
           }
         ]
@@ -895,7 +895,7 @@
         }
       ],
       "phase": {
-        "phase": "verifying",
+        "phase": "verify",
         "note": "Comparing the rendered swatches against the CSS tokens"
       },
       "diagram": "palette.drawio",
@@ -982,7 +982,7 @@
         }
       ],
       "phase": {
-        "phase": "verifying",
+        "phase": "verify",
         "note": "Reading the rendered first page back for clipped labels"
       },
       "diagram": "grove-stack.drawio",
@@ -1096,32 +1096,32 @@
         }
       ],
       "phase": {
-        "phase": "verifying",
+        "phase": "verify",
         "note": "Re-running the auth suite before wrap-up",
         "tickets": [
           {
             "ticket": "linear:ENG-201",
-            "phase": "delivering",
+            "phase": "deliver",
             "note": "PR is up, waiting on review"
           },
           {
             "ticket": "linear:ENG-205",
-            "phase": "delivering",
+            "phase": "deliver",
             "note": "Flag landed in the same PR, default off"
           },
           {
             "ticket": "linear:ENG-212",
-            "phase": "verifying",
+            "phase": "verify",
             "note": "Docs rewritten; mkdocs --strict is clean"
           },
           {
             "ticket": "gitea:241",
-            "phase": "scoping",
+            "phase": "scope",
             "note": "Blocked on a decision: pin the fallback, or delete it"
           },
           {
             "ticket": "github:478",
-            "phase": "verifying",
+            "phase": "verify",
             "note": "CI is running against the PR"
           }
         ]

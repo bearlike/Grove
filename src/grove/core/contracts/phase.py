@@ -19,9 +19,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from grove.core.phase import NOTE_CAP, PHASE_ORDER, TaskPhase
+from grove.core.phase import NOTE_CAP, PHASE_ORDER, TaskPhase, normalize_phase
 
 if TYPE_CHECKING:
     from grove.core.phase import PhaseReport
@@ -130,3 +130,8 @@ class SetPhaseRequest(BaseModel):
     ``None`` for the workspace's own claim — mirrors ``PhaseFile.write``'s own
     ``ticket`` parameter, which this request forwards to verbatim rather than
     reinterpreting."""
+
+    @field_validator("phase", mode="before")
+    @classmethod
+    def _normalize_phase(cls, value: object) -> object:
+        return normalize_phase(value) if isinstance(value, str) else value

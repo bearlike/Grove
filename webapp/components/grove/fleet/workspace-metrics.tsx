@@ -2,7 +2,7 @@
 
 import { ClockIcon, FilePenLineIcon } from "lucide-react";
 
-import { absoluteTime, ageToken, useNow } from "@/components/grove/relative-time";
+import { absoluteTime, relativeTime, useNow } from "@/components/grove/relative-time";
 import { abbreviate } from "@/components/grove/usage/format";
 import { cn } from "@/lib/utils";
 import type { WorkspaceActivity } from "./types";
@@ -13,6 +13,8 @@ const METRIC_TONE = {
   removed: "text-destructive",
   pending: "text-warning",
   neutral: "text-content-secondary",
+  /** The rail's file count: a size beside its glyph, not an alarm (see `SessionMetadata`). */
+  count: "text-content-primary",
 } as const;
 
 /**
@@ -43,6 +45,11 @@ function Figure({
 /**
  * Keep quantities intact when enlarged text exceeds the compact ledger width.
  * Context is supplied by the row; creation age is not its activity sort time.
+ *
+ * The dirty count is NEUTRAL here and amber on the fleet card. The rail lists
+ * every workspace at once, and nearly every live one has uncommitted files, so
+ * amber on each row was a column of warnings saying nothing about any one row;
+ * the diff figures beside it keep their hues because they have a direction.
  */
 export function SessionMetadata({
   workspace,
@@ -54,16 +61,16 @@ export function SessionMetadata({
   const { dirty_files: dirty, diff_added: added, diff_removed: removed } = workspace;
   const noChanges = dirty === 0 && added === 0 && removed === 0;
   return (
-    <div className="flex min-w-0 flex-col gap-1" data-testid="rail-metadata">
+    <div className="flex min-w-0 flex-col gap-1.5" data-testid="rail-metadata">
       {context}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1" data-testid="rail-ledger">
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1" data-testid="rail-ledger">
           {!noChanges ? (
             <>
             <MetricCell
               Icon={FilePenLineIcon}
               value={dirty}
-              tone="pending"
+              tone="count"
               detail={countLabel(dirty, "uncommitted files in the worktree")}
               testid="rail-dirty"
             />
@@ -131,7 +138,7 @@ function MetricCell({
 }): React.ReactNode {
   return (
     <span className="flex shrink-0 items-center gap-1 whitespace-nowrap" aria-label={detail} data-testid={testid}>
-      {Icon ? <Icon aria-hidden className="size-3 shrink-0" /> : null}
+      {Icon ? <Icon aria-hidden className="size-3.5 shrink-0 text-content-tertiary" /> : null}
       <span className={cn("tabular-nums", figureTone(value, tone))}>
         {figureText(value, prefix)}
       </span>
@@ -161,11 +168,11 @@ function CreatedAge({ iso }: { iso: string }): React.ReactNode {
   const exact = absoluteTime(iso);
   const label = `Created ${exact}`;
   return (
-    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap" aria-label={label} data-testid="rail-created">
-      <ClockIcon aria-hidden className="size-3 shrink-0" />
+    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-content-tertiary" aria-label={label} data-testid="rail-created">
+      <ClockIcon aria-hidden className="size-3.5 shrink-0" />
       <span className="sr-only">Created: </span>
-      <span className={cn("tabular-nums", now === null && "max-w-12 truncate")}>
-        {now === null ? exact : ageToken(iso, now)}
+      <span className={cn("tabular-nums", now === null && "max-w-16 truncate")}>
+        {now === null ? exact : relativeTime(iso, now)}
       </span>
     </span>
   );

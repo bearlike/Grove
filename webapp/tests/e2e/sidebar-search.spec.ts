@@ -86,6 +86,7 @@ function snapshot(): DashboardSnapshotView {
 
 /** Prevent the fake stream from replacing the scenario's deliberately searchable rows. */
 async function useSnapshot(page: Page): Promise<void> {
+  await page.addInitScript(() => localStorage.setItem("grove.onboarding.seen", "true"));
   await page.route("**/api/grove/activity", (route) => route.fulfill({ json: snapshot() }));
   await page.route("**/api/grove/events", (route) =>
     route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }),

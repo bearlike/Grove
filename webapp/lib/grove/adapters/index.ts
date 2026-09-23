@@ -99,6 +99,9 @@ export {
   deriveTitle,
 } from "./launch";
 
+export { COMPOSER_COMMANDS, mentionsFromContacts } from "./composer";
+export type { ComposerCommand, ComposerMention } from "./composer";
+
 export { mergeTurns, turnCursor } from "./turns";
 export type { MergeDirection } from "./turns";
 export type { HeldWindow, TurnMerge, TurnWindow } from "./turns";
@@ -213,3 +216,5 @@ export type {
   SessionSummary,
   SystemFacts,
 } from "./footer";
+
+export { orderWatches, watchSubject } from "./watches";

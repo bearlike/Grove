@@ -290,7 +290,7 @@ export function fleetProgress(snapshot: DashboardSnapshotView | undefined): Flee
       const steps = (row.phase?.total ?? 0) - 1;
       for (const claim of row.phase?.tickets ?? []) {
         reported += 1;
-        // `index / (total - 1)`, so `done` is exactly 1 and `scoping` exactly
+        // `index / (total - 1)`, so `handoff` is exactly 1 and `scope` exactly
         // 0 — the same arithmetic `ticketRollup` applies per workspace. A
         // one-phase vocabulary has no denominator and counts as complete.
         sum += steps > 0 ? Math.min(1, Math.max(0, claim.index / steps)) : 1;
@@ -693,6 +693,8 @@ export interface SystemFacts {
   readonly startedAt: string | null;
   readonly updateAvailable: boolean;
   readonly latestVersion: string | null;
+  /** The daemon's code on disk has moved past what it booted with. */
+  readonly restartRequired: boolean;
 }
 
 export function systemFacts(identity: WhoamiView | undefined): SystemFacts | null {
@@ -702,5 +704,7 @@ export function systemFacts(identity: WhoamiView | undefined): SystemFacts | nul
     startedAt: identity.started_at ?? null,
     updateAvailable: Boolean(identity.update_available && identity.latest_version),
     latestVersion: identity.latest_version ?? null,
+    // An older daemon omits the field, and "cannot tell" must not prompt.
+    restartRequired: identity.restart_required === true,
   };
 }

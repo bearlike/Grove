@@ -80,7 +80,7 @@ title: Grove
     </div>
     <div class="swiper-slide">
       <figure>
-        <img loading="lazy" src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done">
+        <img loading="lazy" src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scope to Handoff">
         <figcaption>Issue ops. The phase, checklist and pull request stay current on the ticket that started the work.</figcaption>
       </figure>
     </div>

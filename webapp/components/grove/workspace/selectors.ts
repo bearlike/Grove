@@ -772,12 +772,12 @@ export type TicketRollup = {
 };
 
 const TASK_PHASES: readonly TaskPhase[] = [
-  "scoping",
-  "planning",
-  "implementing",
-  "verifying",
-  "delivering",
-  "done",
+  "scope",
+  "plan",
+  "build",
+  "verify",
+  "deliver",
+  "handoff",
 ];
 
 function emptyPhaseCounts(): Record<TaskPhase, number> {
@@ -806,8 +806,8 @@ export function ticketRollup(
     reported += 1;
     phases[claim.phase] += 1;
     if (claim.blocked) blocked += 1;
-    if (claim.phase === "done") done += 1;
-    // `index / (total - 1)` so `done` is exactly 1 and `scoping` exactly 0 —
+    if (claim.phase === "handoff") done += 1;
+    // `index / (total - 1)` so `handoff` is exactly 1 and `scope` exactly 0 —
     // the ramp's endpoints, not an off-by-one that makes a finished ticket
     // read 83%. Guarded because a one-phase vocabulary would divide by zero.
     progress += claim.total > 1 ? claim.index / (claim.total - 1) : 1;
@@ -829,7 +829,7 @@ export function ticketRollup(
  *
  * **THE COMPLETION COUNT AND THE PHASE AVERAGE ARE BOTH TRUE AT ONCE, and this
  * line is what stops a reader collapsing them.** Two tickets both at
- * `delivering` — index 4 of six phases — average 80% phase progress while
+ * `deliver` — index 4 of six phases — average 80% phase progress while
  * `0 / 2 done` is equally correct, because one is a position along the work and
  * the other is a count of finished work. Replacing the 80% with 0% would be a
  * different, worse number: it would throw away every measurement the agents
@@ -883,8 +883,8 @@ export function ticketSortKey(
   return [
     ticket.kind === "pull_request" ? 0 : 1,
     stateRank[state],
-    phase === null ? 2 : phase.phase === "done" ? 1 : 0,
-    phase === null || phase.phase === "done" ? 0 : -phase.index,
+    phase === null ? 2 : phase.phase === "handoff" ? 1 : 0,
+    phase === null || phase.phase === "handoff" ? 0 : -phase.index,
   ];
 }
 
@@ -1130,16 +1130,17 @@ export function ticketGlyph(kind: TicketKind, state: TicketState): LucideIcon {
  * which is the exact defect this table exists to remove.
  */
 const PHASE_MEANING: Record<TaskPhase, string> = {
-  scoping:
+  scope:
     "The agent is reading the ticket, the code and the tests, working out what the job actually is.",
-  planning:
+  plan:
     "The agent understands the problem and is choosing an approach or writing it down.",
-  implementing: "The agent is editing files.",
-  verifying:
+  build: "The agent is editing files.",
+  verify:
     "The agent is running tests, linters or the build, and reading its own diff back.",
-  delivering:
+  deliver:
     "The agent is committing, pushing, opening or updating the pull request, writing the handoff.",
-  done: "Handed off — nothing is left for the agent to do here.",
+  handoff:
+    "The agent has transferred the finished work to the user in the form they asked for — nothing is left for the agent to do here.",
 };
 
 /**
@@ -1192,7 +1193,7 @@ export type PhaseTooltip = {
  *
  * THE TWO AXES ARE KEPT APART BY ATTRIBUTION, not by wording. Every sentence
  * names its claimant: "The agent …" for the phase half, "<Tracker> says …" for
- * the tracker half. That is what makes `closed` beside `scoping` read as two
+ * the tracker half. That is what makes `closed` beside `scope` read as two
  * true statements — the issue was closed, and the agent is still working out the
  * job — rather than as a contradiction the reader has to resolve. Merging them
  * into one sentence is precisely the conflation this tooltip exists to undo.

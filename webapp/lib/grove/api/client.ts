@@ -6,6 +6,7 @@ import type {
   CreateWorkspaceRequest,
   DashboardSnapshotView,
   HealthView,
+  MailboxDirectory,
   ModelOptionView,
   ProvisionProgressView,
   QuestionAnswerItem,
@@ -33,6 +34,7 @@ import type {
   WorkspacePaneView,
   WorkspacePeekView,
   WorkspaceQueueView,
+  WatchList,
   WorkspaceStateView,
   GalleryDocumentView,
   GalleryItemView,
@@ -148,6 +150,10 @@ export class GroveClient {
   /** The harness's own steer queue — bounded, fetch-on-demand; the ~1 Hz tick carries only its depth. */
   async getQueue(id: string): Promise<WorkspaceQueueView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/queue`);
+  }
+  /** Every watch whose callback lands in this workspace, settled ones included. */
+  async getWorkspaceWatches(id: string): Promise<WatchList> {
+    return this.get(`/watches${this.suffix(new URLSearchParams({ workspace: id }))}`);
   }
   async getSubagentFleet(id: string, sessionId: string): Promise<SubagentFleetData> {
     const query = new URLSearchParams({ session_id: sessionId });
@@ -388,6 +394,10 @@ export class GroveClient {
 
   async getActivity(): Promise<DashboardSnapshotView> {
     return this.get("/activity");
+  }
+  /** Every agent this host can deliver mail to right now, live or not. */
+  async getMailboxContacts(): Promise<MailboxDirectory> {
+    return this.get("/mailboxes/contacts");
   }
   async getControls(id: string): Promise<SessionControlsView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/controls`);

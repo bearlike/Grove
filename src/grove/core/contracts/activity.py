@@ -189,6 +189,11 @@ class AgentActivityView(BaseModel):
     # session and on an older daemon, so a client renders nothing rather than 0.
     native: NativeFactsView | None = None
     last_event_at: datetime | None
+    # When the session was born (its first record), beside ``last_event_at``.
+    # A subagent row states both, so a reader can tell a long run from a late
+    # one. Defaults so a pre-existing client deserializes unchanged; ``None`` is
+    # "this adapter did not measure it", never the epoch.
+    started_at: datetime | None = None
     needs_attention: bool
     error_detail: str | None
     # Reserved for the future external-LLM interpreter; always None today.
@@ -230,6 +235,7 @@ class AgentActivityView(BaseModel):
             context_unavailable_reason=a.context_unavailable_reason,
             native=NativeFactsView.from_facts(a.native) if a.native is not None else None,
             last_event_at=a.last_event_at,
+            started_at=a.started_at,
             needs_attention=a.needs_attention,
             error_detail=a.error_detail,
             interpreted_status=a.interpreted_status,

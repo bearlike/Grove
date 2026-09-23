@@ -144,7 +144,7 @@ def test_the_brief_points_and_does_not_restate() -> None:
     # obligation exists, never how to discharge it.
     assert len(AgentBrief.TEXT.split()) < 220
     lowered = AgentBrief.TEXT.lower()
-    assert "implementing" not in lowered  # the phase vocabulary
+    assert "build" not in lowered  # the phase vocabulary
     assert "grove_phase_file" not in lowered  # the file contract
 
 

@@ -629,3 +629,45 @@ def test_linear_has_no_commit_or_branch_destination() -> None:
     )
     assert p.commit_url("abc123") is None
     assert p.branch_url("main") is None
+
+
+@pytest.mark.parametrize(
+    ("provider", "path", "kind"),
+    [
+        ("gitea", "/api/v1/repos/o/r/pulls/9", "pull_request"),
+        ("gitea", "/api/v1/repos/o/r/issues/9", "issue"),
+        ("github", "/repos/o/r/pulls/9", "pull_request"),
+        ("github", "/repos/o/r/issues/9", "issue"),
+    ],
+)
+def test_read_state_is_one_get_carrying_body_and_comment_count(
+    provider: str, path: str, kind: str
+) -> None:
+    """The ticket watcher checks every attached ticket each minute on this ONE read."""
+    payload = {
+        "number": 9,
+        "title": "t",
+        "state": "closed",
+        "merged": True,
+        "body": "b",
+        "comments": 3,
+    }
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json=payload)
+
+    cfg: Any = (GiteaTicketConfig if provider == "gitea" else GitHubTicketConfig)(
+        enabled=True, owner="o", repo="r", token_env="T"
+    )
+    cls: Any = GiteaProvider if provider == "gitea" else GitHubProvider
+    state = cls(cfg, env={"T": "tok"}, transport=httpx.MockTransport(handler)).read_state("9", kind)
+
+    assert seen == [path]
+    assert (state.ref.kind, state.ref.status, state.body, state.comment_count) == (
+        kind,
+        "merged",
+        "b",
+        3,
+    )

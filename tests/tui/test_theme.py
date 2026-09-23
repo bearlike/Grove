@@ -175,7 +175,7 @@ def test_phase_done_leaves_the_ramp_for_muted_gray() -> None:
     muted-gray atom IDLE/OFFLINE use, because a converged task is settled
     rather than intense (contracts.phase_palette's own rationale)."""
     for dark in (True, False):
-        done_hex = phase_color("done", dark=dark)
+        done_hex = phase_color("handoff", dark=dark)
         offline_hex = status_color(WorkspaceStatus.OFFLINE, dark=dark)
         assert done_hex == offline_hex, f"done should reuse the muted-gray atom (dark={dark})"
 

@@ -312,11 +312,13 @@ describe("session navigation composes the shared card material", () => {
     expect(fleetTree).not.toContain('h-17 w-full');
   });
 
-  it("keeps the title in the material band and independent states in the body", () => {
+  it("leads with the agent tile and keeps independent states off the title line", () => {
     const row = code("components/grove/fleet/fleet-tree.tsx").split("function WorkspaceRow")[1];
     const header = row.match(/<header\b[\s\S]*?<\/header>/)?.[0];
     expect(header).toBeDefined();
-    expect(header).toContain("surface-header");
+    expect(row.indexOf('data-testid="rail-agent-tile"')).toBeGreaterThan(-1);
+    expect(row.indexOf('data-testid="rail-agent-tile"')).toBeLessThan(row.indexOf("<header"));
+    expect(header).not.toContain("<AgentMark");
     expect(header).toContain("<LoopingText");
     expect(header).toContain("text-base");
     expect(header).not.toContain('data-testid="fleet-row-attention-mark"');
@@ -324,10 +326,10 @@ describe("session navigation composes the shared card material", () => {
     expect(row).toContain('data-testid="rail-context"');
   });
 
-  it("uses the same card header and body for the loading skeleton", () => {
+  it("uses the same tile-and-lines anatomy for the loading skeleton", () => {
     const skeleton = fleetTree.split("function FleetSkeleton")[1];
     expect(skeleton).toContain("<CardShell");
-    expect(skeleton).toContain("surface-header");
+    expect(skeleton).toContain('<Skeleton className="size-10 shrink-0" />');
     expect(skeleton).not.toContain("h-17");
   });
 

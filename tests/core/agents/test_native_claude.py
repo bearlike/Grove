@@ -582,27 +582,51 @@ for raw in sys.stdin:
 
 @pytest.mark.asyncio
 async def test_new_root_input_discards_an_older_context_response(tmp_path: Path) -> None:
-    """A delayed reading predating the next turn can never win the sidecar."""
+    """A response released after a newer root input can never publish stale context."""
     child = r"""
-import json, sys, time
+import json, sys
+from threading import Event, Thread
+
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+release_first = Event()
+first_sent = Event()
+
+def answer_first(frame):
+    release_first.wait()
+    print(json.dumps({"type": "control_response", "response": {
+        "subtype": "success", "request_id": frame["request_id"], "response": {
+            "totalTokens": 100, "maxTokens": 900
+        }}}), flush=True)
+    first_sent.set()
+
 query = 0
 for raw in sys.stdin:
     frame = json.loads(raw)
     if frame.get("type") == "user" and "uuid" in frame:
         print(json.dumps({"type": "user", "uuid": frame["uuid"]}), flush=True)
+        release_first.set()
+        first_sent.wait()
     if frame.get("type") != "control_request":
         continue
     query += 1
-    total = 100 if query == 1 else 200
-    time.sleep(0.15)
+    if query == 1:
+        Thread(target=answer_first, args=(frame,), daemon=True).start()
+        continue
     print(json.dumps({"type": "control_response", "response": {
         "subtype": "success", "request_id": frame["request_id"], "response": {
-            "totalTokens": total, "maxTokens": 900
+            "totalTokens": 200, "maxTokens": 900
         }}}), flush=True)
 """
     spool = tmp_path / "spool"
-    asks = AskRecorder(spool)
+    context_published = asyncio.Event()
+
+    class ObservingAskRecorder(AskRecorder):
+        def facts(self, **stated: object) -> None:
+            super().facts(**stated)
+            if stated.get("context_used") == 200:
+                context_published.set()
+
+    asks = ObservingAskRecorder(spool)
     asks.bind("s")
     querying = asyncio.Event()
 
@@ -619,7 +643,7 @@ for raw in sys.stdin:
         await owner.start("")
         await asyncio.wait_for(querying.wait(), 1)
         await owner.send("11223344-1122-3344-5566-112233445566", "next turn")
-        await asyncio.sleep(0.5)
+        await asyncio.wait_for(context_published.wait(), 1)
     finally:
         await owner.close()
 

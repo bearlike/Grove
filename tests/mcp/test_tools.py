@@ -211,7 +211,7 @@ async def test_fleet_status_reports_the_two_axes_no_other_read_carries(
     snapshot = await tools.get_fleet_status()
     row = snapshot.projects[0].workspaces[0]
     assert row.phase is not None
-    assert row.phase.phase == "implementing"
+    assert row.phase.phase == "build"
     assert row.sessions[0].activity.state.value == "working"
     assert row.sessions[0].activity.needs_attention is False
     assert fake_client.calls == [("get_activity", {})]
@@ -490,14 +490,14 @@ async def test_detach_ticket_passes_ref_straight_through(fake_client: FakeGroveC
 async def test_set_workspace_phase_defaults_blocked_false_and_ticket_none() -> None:
     fake_client = _PhaseRecordingClient()
     tools = GroveTools(fake_client)
-    result = await tools.set_workspace_phase("ws-1", "implementing")
-    assert result.phase == "implementing"
+    result = await tools.set_workspace_phase("ws-1", "build")
+    assert result.phase == "build"
     assert fake_client.calls == [
         (
             "set_phase",
             {
                 "ws_id": "ws-1",
-                "phase": "implementing",
+                "phase": "build",
                 "note": None,
                 "blocked": False,
                 "ticket": None,
@@ -511,7 +511,7 @@ async def test_set_workspace_phase_threads_blocked_and_ticket() -> None:
     tools = GroveTools(fake_client)
     await tools.set_workspace_phase(
         "ws-1",
-        "implementing",
+        "build",
         "waiting on design review",
         blocked=True,
         ticket="gitea:498",
@@ -521,7 +521,7 @@ async def test_set_workspace_phase_threads_blocked_and_ticket() -> None:
             "set_phase",
             {
                 "ws_id": "ws-1",
-                "phase": "implementing",
+                "phase": "build",
                 "note": "waiting on design review",
                 "blocked": True,
                 "ticket": "gitea:498",

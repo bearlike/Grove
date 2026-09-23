@@ -1,11 +1,10 @@
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { useAnnotationUi } from "@/components/grove/annotation";
 import { AttachmentFile } from "@/components/grove/attachment-file";
-import { ComposerAttachments } from "@/components/grove/composer";
-import { ComposerAttachButton } from "@/components/elements/composer";
+import { ComposerAttachButton, ComposerAttachments } from "@/components/elements/composer";
 import {
   ATTACHMENT_ACCEPT,
   fileFromStaged,
@@ -101,6 +100,11 @@ export function LaunchAttachFiles({
   readonly disabled: boolean;
 }): ReactNode {
   const picker = useRef<HTMLInputElement | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+
+  // The server can render the button but not its click handler. Keeping it
+  // disabled until this runs prevents a real click from being silently lost.
+  useEffect(() => setHydrated(true), []);
 
   return (
     <>
@@ -121,7 +125,7 @@ export function LaunchAttachFiles({
       />
       <ComposerAttachButton
         onClick={() => picker.current?.click()}
-        disabled={disabled}
+        disabled={disabled || !hydrated}
         data-testid={LAUNCH_TESTIDS.attach}
       />
     </>

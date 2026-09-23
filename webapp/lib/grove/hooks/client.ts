@@ -37,6 +37,11 @@ export const POLL_MS = {
    * holds the session from turn zero.
    */
   todo: 15_000,
+  /**
+   * UNGATED. An open workspace's watches: no frame on `/events` carries them,
+   * and a watch settles over minutes, so this is the only refresh there is.
+   */
+  watches: 15_000,
   /** UNGATED. A container build's progress; only mounted while one is running. */
   provision: 2_000,
   /** Commits behind an open workspace. The stream invalidates on the edge. */

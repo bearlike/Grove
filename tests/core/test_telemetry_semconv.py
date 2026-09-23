@@ -309,7 +309,7 @@ def _identity(**overrides: object) -> TraceIdentity:
         "agent_version": "2.1.226",
         "orchestrator_version": "0.0.6",
         "ticket_ids": ("42", "43"),
-        "phase": "implementing",
+        "phase": "build",
     }
     fields.update(overrides)
     return TraceIdentity(**fields)  # type: ignore[arg-type]

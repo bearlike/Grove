@@ -7,7 +7,7 @@ comment per thread, rebuilt from live state on every update.
 Almost everything in that body answers for the workspace and so reads the same on
 every thread: the agent state, the branch, the commit, the checklist, the
 cross-links. **The phase does not.** An agent reports a claim per attached ticket
-(``grove.core.phase.TicketClaim``), so the issue can be delivering while the pull
+(``grove.core.phase.TicketClaim``), so the issue can be in deliver while the pull
 request that resolves it is blocked — which is exactly the question a reader of
 *that* thread is asking. So :meth:`TicketStatusPublisher.render` takes a ``focus``
 (one ``TicketRef.key``) and every phase-derived element resolves against it, while
@@ -71,8 +71,9 @@ from grove.core.errors import (
 )
 from grove.core.issueops.footer import footer_needs_update, render_footer, splice_footer
 from grove.core.issueops.marker import SIGNATURE_MARKER, STICKY_MARKER
-from grove.core.phase import PHASE_ORDER, PhaseClaim, PhaseReport
+from grove.core.phase import PHASE_ORDER, PhaseClaim, PhaseReport, TaskPhase
 from grove.core.tickets.provider import TicketProvider
+from grove.core.tickets.reads import TicketReads
 from grove.core.workspace import CommitSummary
 
 if TYPE_CHECKING:
@@ -172,13 +173,13 @@ _STATE_LABEL: dict[AgentActivityState, str] = {
 # Phase labels, the todo sibling of ``_STATE_LABEL`` above — a fixed table over
 # the closed ``TaskPhase`` vocabulary rather than a ``.capitalize()`` call, so a
 # vocabulary change is caught here (a missing key falls back to the raw value).
-_PHASE_LABEL: dict[str, str] = {
-    "scoping": "Scoping",
-    "planning": "Planning",
-    "implementing": "Implementing",
-    "verifying": "Verifying",
-    "delivering": "Delivering",
-    "done": "Done",
+_PHASE_LABEL: dict[TaskPhase, str] = {
+    "scope": "Scope",
+    "plan": "Plan",
+    "build": "Build",
+    "verify": "Verify",
+    "deliver": "Deliver",
+    "handoff": "Handoff",
 }
 
 # How an agent kind announces itself in the summary table. The profile name is
@@ -222,10 +223,10 @@ _ICON_SESSION = "🧾"
 #
 # Contrast is a SOLVED problem here rather than a per-node judgement, because
 # every fill in ``DARK_PHASE_HEX`` is light: measured against this ink the worst
-# case in the whole palette is ``delivering`` (#5f9c0f) at **5.6:1**, and the
-# muted ``done`` gray (#96938c) sits at 6.2:1 — both clear WCAG AA for normal
+# case in the whole palette is ``deliver`` (#5f9c0f) at **5.6:1**, and the
+# muted ``handoff`` gray (#96938c) sits at 6.2:1 — both clear WCAG AA for normal
 # text. White is the trap it looks like the answer to: it reaches only 3.4:1 on
-# ``delivering`` and 3.1:1 on the gray, failing AA on exactly the two fills a
+# ``deliver`` and 3.1:1 on the gray, failing AA on exactly the two fills a
 # reader would assume needed it. So: one dark ink, no per-class exception.
 #
 # Every node therefore carries an EXPLICIT fill and an EXPLICIT label color,
@@ -234,27 +235,16 @@ _ICON_SESSION = "🧾"
 # dark — and no single label color can be legible on both.
 _NODE_INK = "#111111"
 
-# What the CURRENT node takes when its own ramp entry is the muted ``done`` gray
+# What the CURRENT node takes when its own ramp entry is the muted ``handoff`` gray
 # — i.e. at the final phase, where "current" and "completed" would otherwise be
 # the same colour and only the ring would say which node the workspace is on.
 #
-# The ramp's deepest LIVE entry (``delivering``, "converging, handing off"), so
+# The ramp's deepest LIVE entry (``deliver``, "converging, handing off"), so
 # the diagram still climbs to its current node and no hex is invented. Measured
 # against :data:`_NODE_INK` at **5.6:1** — the palette's worst case and still
 # clear of WCAG AA; white on it reaches only 3.4:1, which is why the ink does
 # not move with the fill.
-_ACTIVE_FILL_AT_DONE = DARK_PHASE_HEX[PHASE_ORDER[-2]]
-
-_TICKET_TTL = timedelta(seconds=60)
-"""How long one enriched ticket ref is reused before the forge is asked again.
-
-Enrichment is one GET per ref per flush, and a working agent flushes about once
-per ``update_window_seconds`` (5 s) — so an unmemoized read spends a few thousand
-API calls an hour *per workspace* against budgets counted in thousands (GitHub
-allows 5000/hr authenticated), and buys nothing: a title never moves and a
-ticket's state changes on a human timescale. Memoized at the READER, the shape
-``ContainerLiveness`` already uses for ``docker inspect`` on the reconcile path.
-"""
+_ACTIVE_FILL_AT_HANDOFF = DARK_PHASE_HEX[PHASE_ORDER[-2]]
 
 _TASK_WRAP_WIDTH = 88
 """Column the activity excerpt is hard-wrapped to inside its fenced block.
@@ -507,6 +497,7 @@ class TicketStatusPublisher:
         holder_resolver: HolderResolver | None = None,
         transcript_probe: TranscriptProbe | None = None,
         assigner: TicketAssigner | None = None,
+        reads: TicketReads | None = None,
         clock: Callable[[], datetime] | None = None,
         terminal_states: frozenset[AgentActivityState] = frozenset(),
     ) -> None:
@@ -526,11 +517,10 @@ class TicketStatusPublisher:
         self._clock = clock if clock is not None else self._utcnow
         # Per-workspace state, unbounded like the broker's maps (loopback, small N).
         self._state: dict[str, _WsPub] = {}
-        # Enriched ticket refs, TTL-memoized ACROSS workspaces — the key is the
-        # ticket, not the workspace, so two workspaces naming one issue share
-        # the read. Swept on every miss (see :meth:`_enrich`).
-        self._tickets: dict[tuple[TicketProviderName, str, TicketKind], tuple[datetime, TicketRef]]
-        self._tickets = {}
+        # Ticket reads go through the cache shared with the ticket watcher, so
+        # one ticket costs one forge read per minute however many workspaces
+        # and consumers name it. Injected by the daemon so both hold ONE cache.
+        self._reads = reads if reads is not None else TicketReads(clock=self._clock)
         self._lock = Lock()
         self._pool: ThreadPoolExecutor | None = None
         self._timer: threading.Timer | None = None
@@ -545,6 +535,7 @@ class TicketStatusPublisher:
         registry: RepoRegistry | None,
         transcript_probe: TranscriptProbe | None = None,
         assigner: TicketAssigner | None = None,
+        reads: TicketReads | None = None,
     ) -> TicketStatusPublisher | None:
         """Build a publisher from config, or ``None`` when issue-ops is disabled.
 
@@ -611,6 +602,7 @@ class TicketStatusPublisher:
             holder_resolver=holder_resolver,
             transcript_probe=transcript_probe,
             assigner=assigner,
+            reads=reads,
         )
 
     # ─── the finale's two extra reads (both terminal-only, both best-effort) ──
@@ -823,7 +815,7 @@ class TicketStatusPublisher:
         A human asked for the current state (``@grove status``), so we skip the
         coalescing wait rather than let the ask sit for a window. A workspace with
         no cached row yet (no render-relevant delta observed) or already latched
-        ``done`` is a silent no-op — there is nothing fresh to render.
+        ``handoff`` is a silent no-op — there is nothing fresh to render.
         """
         with self._lock:
             rec = self._state.get(workspace_id)
@@ -1061,36 +1053,21 @@ class TicketStatusPublisher:
         thread. A miss (unresolvable provider, no credential, a deleted ticket)
         returns the ref untouched, which still renders and still links.
 
-        A pull request goes to ``get_pull_request``, never ``get_ticket``. That
-        rule was load-bearing while the render carried a status (the issues
-        endpoint reports a merged PR as ``closed``, true and useless); it no
-        longer is, and it stays because it costs the same one GET and is the
-        honest source for the state this ref carries.
+        The read goes through the shared :class:`TicketReads` cache, keyed by
+        ticket rather than by workspace. A flush happens about every 5 s and a
+        forge's budget is counted per hour, so an uncached read would spend
+        thousands of requests an hour per workspace on a title that never moves.
+        A pull request is read from the pulls namespace, where merged is not
+        reported as closed.
         """
-        key = (ref.provider, ref.id, ref.kind)
-        now = self._clock()
-        with self._lock:
-            cached = self._tickets.get(key)
-            if cached is not None and (now - cached[0]) < _TICKET_TTL:
-                return cached[1]
         provider = self._provider_resolver(repo_root, ref.provider)
         if provider is None:
             return ref
         try:
-            fresh = (
-                provider.get_pull_request(ref.id)
-                if ref.kind == "pull_request"
-                else provider.get_ticket(ref.id)
-            )
+            return self._reads.state(provider, ref.id, ref.kind).ref
         except Exception as exc:  # best-effort: enrichment never blocks the update
             logger.debug("issueops ticket read failed for {}: {}", ref.id, exc)
             return ref
-        with self._lock:
-            # Sweep on miss so a long-lived daemon never accumulates one entry
-            # per ticket it has ever seen.
-            self._tickets = {k: v for k, v in self._tickets.items() if (now - v[0]) < _TICKET_TTL}
-            self._tickets[key] = (now, fresh)
-        return fresh
 
     def _publish(self, workspace_id: str, target: _Target, body: str) -> str | None:
         """Edit one target's sticky comment in place, or post it once (found-or-created).
@@ -1481,23 +1458,23 @@ class TicketStatusPublisher:
         **The colour language is derived from ``DARK_PHASE_HEX``, never invented**,
         so a block here reads the same as the badge the TUI and webapp already
         show. Each of the three states takes the palette member that already
-        means it: a completed phase takes ``done``'s muted gray, whose own
+        means it: a completed phase takes ``handoff``'s muted gray, whose own
         definition is "settled; recedes from the fleet view"; the current phase
         takes ITS OWN ramp entry, which is the whole point of a sequential
         palette; a remaining phase takes the ramp's palest anchor, defined as
         "oriented, not yet producing".
 
-        Two fills would collide by construction — at ``scoping`` the current node
-        matches the remaining ones, at ``done`` it matches the completed ones —
+        Two fills would collide by construction — at ``scope`` the current node
+        matches the remaining ones, at ``handoff`` it matches the completed ones —
         and the two collisions are NOT treated alike, deliberately.
 
-        At ``scoping`` the collision stands: the ring separates the current node,
+        At ``scope`` the collision stands: the ring separates the current node,
         and it survives a reader who cannot distinguish the hues at all. At
-        ``done`` it does not, because that is where a workspace ENDS and the last
+        ``handoff`` it does not, because that is where a workspace ENDS and the last
         render is the one a reader meets forever after: a current node in the
         completed gray leaves the finished comment saying nothing about where the
         work actually stopped except through a ring. So the current node takes
-        :data:`_ACTIVE_FILL_AT_DONE` there — still a palette member, still dark
+        :data:`_ACTIVE_FILL_AT_HANDOFF` there — still a palette member, still dark
         ink, and the ring stays on top of it.
 
         **A blocked claim keeps its position and takes the blocked GLYPH on its
@@ -1507,24 +1484,24 @@ class TicketStatusPublisher:
         glyph is :data:`_STATE_GLYPH`'s own ``BLOCKED`` entry rather than a new
         one, so the comment keeps a single vocabulary for a single concept.
         """
-        done_fill = DARK_PHASE_HEX["done"]
+        handoff_fill = DARK_PHASE_HEX["handoff"]
         now_fill = DARK_PHASE_HEX[claim.phase]
-        if now_fill == done_fill:
-            # Keyed on the COLLISION, not on ``phase == "done"``: it is the fill
+        if now_fill == handoff_fill:
+            # Keyed on the COLLISION, not on ``phase == "handoff"``: it is the fill
             # sameness that costs the reader, so a palette that later moves
             # another entry onto the gray is covered by the same line.
-            now_fill = _ACTIVE_FILL_AT_DONE
+            now_fill = _ACTIVE_FILL_AT_HANDOFF
         todo_fill = DARK_PHASE_HEX[PHASE_ORDER[0]]
         lines = [
             "```mermaid",
             "flowchart LR",
-            f"  classDef done fill:{done_fill},stroke:{done_fill},color:{_NODE_INK}",
+            f"  classDef handoff fill:{handoff_fill},stroke:{handoff_fill},color:{_NODE_INK}",
             f"  classDef now fill:{now_fill},stroke:{_NODE_INK},stroke-width:3px,color:{_NODE_INK}",
             f"  classDef todo fill:{todo_fill},stroke:{todo_fill},color:{_NODE_INK}",
         ]
         for index, phase in enumerate(PHASE_ORDER):
             if index < claim.index:
-                node_class = "done"
+                node_class = "handoff"
             elif index == claim.index:
                 node_class = "now"
             else:
@@ -1687,7 +1664,7 @@ class TicketStatusPublisher:
     def _phase_caption(claim: PhaseClaim) -> str:
         """The compact progress render — deliberately the densest line in the comment.
 
-        A human skimming a ticket learns more from "Verifying, 4 of 6" than from a
+        A human skimming a ticket learns more from "Verify, 4 of 6" than from a
         status glyph alone: WORKING is true whether the agent is still reading the
         ticket or already opening the PR, and the phase is the one axis that
         answers "how far in". Dots over a numeric bar because they render
@@ -1703,10 +1680,10 @@ class TicketStatusPublisher:
 
         **``blocked`` renders BESIDE the phase name, never instead of it.** It is
         a flag orthogonal to the position, and the two together are the answer:
-        "Verifying, blocked" says where the work got stuck, which is the whole
+        "Verify, blocked" says where the work got stuck, which is the whole
         reason the flag exists rather than being a seventh phase. Replacing the
-        name would throw away the more actionable half — ``scoping, blocked`` is
-        a ticket nobody can start, ``verifying, blocked`` is work that is nearly
+        name would throw away the more actionable half — ``scope, blocked`` is
+        a ticket nobody can start, ``verify, blocked`` is work that is nearly
         done and wants one decision — and would leave the position counter
         beside it saying something the label contradicts.
         """

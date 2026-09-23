@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from grove.core.phase import PHASE_ORDER, PhaseReport, TicketClaim
+from grove.core.phase import PhaseReport, TicketClaim
 from grove.core.workspace import BranchProvenance, Placement, WorkspaceState, WorkspaceStatus
 from grove.tui.cli import app
 from grove.tui.cli_workspace import _emit_phase
@@ -79,38 +79,35 @@ def test_phase_single_token_sets_cwd_inferred_workspace(
     worktree = _worktree_of(runner, ws_id)
     monkeypatch.chdir(worktree)
 
-    result = runner.invoke(app, ["phase", "planning"])
+    result = runner.invoke(app, ["phase", "plan"])
     assert result.exit_code == 0, result.output
     assert ws_id in result.output
-    assert "phase: planning" in result.output
+    assert "phase: plan" in result.output
 
     # Persisted: a second `grove phase` (show mode) sees it.
     shown = runner.invoke(app, ["phase"])
     assert shown.exit_code == 0, shown.output
-    assert "phase: planning" in shown.output
+    assert "phase: plan" in shown.output
 
 
 def test_phase_explicit_ref_and_note(runner: CliRunner, project: Path) -> None:
     del project
     ws_id = _create(runner)
 
-    result = runner.invoke(app, ["phase", ws_id[:8], "verifying", "--note", "checking the diff"])
+    result = runner.invoke(app, ["phase", ws_id[:8], "verify", "--note", "checking the diff"])
     assert result.exit_code == 0, result.output
-    assert "phase: verifying" in result.output
+    assert "phase: verify" in result.output
     assert "note:  checking the diff" in result.output
 
 
-def test_phase_invalid_value_is_a_clean_click_error(runner: CliRunner, project: Path) -> None:
-    """Click's own Choice validation on the typed `TaskPhase` argument — the
-    vocabulary is derived from PHASE_ORDER, never hand-retyped here."""
+def test_phase_invalid_value_names_the_unknown_phase(runner: CliRunner, project: Path) -> None:
+    """The CLI refuses an unrecognized word without mistaking it for a workspace."""
     del project
     ws_id = _create(runner)
 
     result = runner.invoke(app, ["phase", ws_id[:8], "bogus-phase"])
     assert result.exit_code != 0
-    assert "not one of" in result.output
-    for phase in PHASE_ORDER:
-        assert phase in result.output
+    assert result.output == "unknown task phase: bogus-phase\n"
 
 
 def test_phase_note_without_a_phase_is_rejected(runner: CliRunner, project: Path) -> None:
@@ -146,9 +143,9 @@ def test_phase_blocked_flag_sets_and_renders(runner: CliRunner, project: Path) -
     del project
     ws_id = _create(runner)
 
-    result = runner.invoke(app, ["phase", ws_id[:8], "implementing", "--blocked"])
+    result = runner.invoke(app, ["phase", ws_id[:8], "build", "--blocked"])
     assert result.exit_code == 0, result.output
-    assert "phase: implementing" in result.output
+    assert "phase: build" in result.output
     assert "(blocked)" in result.output
 
     # Persisted: a second `grove phase` (show mode) sees it.
@@ -176,13 +173,13 @@ def test_phase_show_alias_matches_bare_command(
     ws_id = _create(runner)
     worktree = _worktree_of(runner, ws_id)
     monkeypatch.chdir(worktree)
-    runner.invoke(app, ["phase", "delivering"])
+    runner.invoke(app, ["phase", "deliver"])
 
     bare = runner.invoke(app, ["phase"])
     alias = runner.invoke(app, ["phase", "show"])
     assert bare.exit_code == alias.exit_code == 0
-    assert "phase: delivering" in bare.output
-    assert "phase: delivering" in alias.output
+    assert "phase: deliver" in bare.output
+    assert "phase: deliver" in alias.output
 
 
 def test_phase_unknown_workspace_is_a_clean_error(runner: CliRunner, project: Path) -> None:
@@ -223,10 +220,10 @@ def test_emit_phase_none_reported(tmp_path: Path, capsys: pytest.CaptureFixture[
 
 
 def test_emit_phase_with_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    report = PhaseReport(phase="implementing", note="wiring it up", updated_at=datetime.now(UTC))
+    report = PhaseReport(phase="build", note="wiring it up", updated_at=datetime.now(UTC))
     _emit_phase(_state("abc123", tmp_path), report)
     out = capsys.readouterr().out
-    assert "phase: implementing" in out
+    assert "phase: build" in out
     assert "note:  wiring it up" in out
     assert "age:" in out
 
@@ -236,17 +233,17 @@ def test_emit_phase_blocked_appends_a_note_beside_the_phase(
 ) -> None:
     """Blocked is a flag beside the phase, never a replacement for it — the
     reader must still see where it stopped."""
-    report = PhaseReport(phase="verifying", note=None, updated_at=datetime.now(UTC), blocked=True)
+    report = PhaseReport(phase="verify", note=None, updated_at=datetime.now(UTC), blocked=True)
     _emit_phase(_state("abc123", tmp_path), report)
     out = capsys.readouterr().out
-    assert "phase: verifying" in out
+    assert "phase: verify" in out
     assert "(blocked)" in out
 
 
 def test_emit_phase_unblocked_omits_the_note(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    report = PhaseReport(phase="verifying", note=None, updated_at=datetime.now(UTC), blocked=False)
+    report = PhaseReport(phase="verify", note=None, updated_at=datetime.now(UTC), blocked=False)
     _emit_phase(_state("abc123", tmp_path), report)
     out = capsys.readouterr().out
     assert "(blocked)" not in out
@@ -259,26 +256,26 @@ def test_emit_phase_lists_per_ticket_breakdown(
     renders on its own line, reusing `_phase_summary` rather than a second
     hand-rolled format."""
     report = PhaseReport(
-        phase="implementing",
+        phase="build",
         note=None,
         updated_at=datetime.now(UTC),
         tickets=(
-            TicketClaim(ticket="gitea:42", phase="verifying", note="tests green"),
-            TicketClaim(ticket="github:7", phase="scoping", blocked=True),
+            TicketClaim(ticket="gitea:42", phase="verify", note="tests green"),
+            TicketClaim(ticket="github:7", phase="scope", blocked=True),
         ),
     )
     _emit_phase(_state("abc123", tmp_path), report)
     out = capsys.readouterr().out
-    assert "ticket gitea:42: verifying" in out
+    assert "ticket gitea:42: verify" in out
     assert "note:  tests green" in out
-    assert "ticket github:7: scoping" in out
+    assert "ticket github:7: scope" in out
     assert "(blocked)" in out
 
 
 def test_emit_phase_with_no_tickets_prints_no_breakdown(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    report = PhaseReport(phase="implementing", note=None, updated_at=datetime.now(UTC))
+    report = PhaseReport(phase="build", note=None, updated_at=datetime.now(UTC))
     _emit_phase(_state("abc123", tmp_path), report)
     out = capsys.readouterr().out
     assert "ticket " not in out

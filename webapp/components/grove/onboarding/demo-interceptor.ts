@@ -15,6 +15,7 @@ import {
   DEMO_TICKETS,
   DEMO_TODO,
   DEMO_TURNS,
+  DEMO_WATCHES,
   DEMO_WORKSPACE_ID,
   demoDiagram,
   withDemoWorkspace,
@@ -116,6 +117,12 @@ function answerFor(path: string, method: string, realFetch: typeof fetch): Promi
       return Promise.resolve(ticket ? json(ticket) : json({ detail: { error: "not_found", message: id } }, 404));
     }
     if (pathname === "/share-policy") return Promise.resolve(json({ ttl_seconds: null, passcode_set: false }));
+  }
+
+  // Watches are listed host-wide and FILTERED by workspace, so the demo's are
+  // named by a query parameter rather than by a path under `ws`.
+  if (pathname === "/watches" && params.get("workspace") === DEMO_WORKSPACE_ID && method === "GET") {
+    return Promise.resolve(json(DEMO_WATCHES));
   }
 
   if (!pathname.startsWith(ws)) return null;

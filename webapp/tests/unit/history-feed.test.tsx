@@ -16,7 +16,7 @@ const history: WorkspaceHistoryView = {
   ],
   progress: [
     {
-      phase: "done",
+      phase: "handoff",
       blocked: false,
       note: "Published the release and verified the preview.",
       ticket_key: null,
@@ -57,7 +57,7 @@ describe("recorded history feed", () => {
 
     expect(markup).toContain(">2026-09-14</h3>");
     expect(markup).toContain('data-testid="history-event"');
-    expect(markup).toContain("Reported Done");
+    expect(markup).toContain("Reported Handoff");
     expect(markup).toContain("Name recorded");
     expect(markup).toContain("Ticket first recorded");
     expect(markup).toContain("Published the release and verified the preview.");
@@ -120,7 +120,7 @@ describe("recorded history feed", () => {
   it("renders the frozen filter and batching contract before mounting interactive browser state", () => {
     const entries = Array.from({ length: 51 }, (_, index) => ({
       recorded_at: `2026-09-14T${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00Z`,
-      phase: "implementing",
+      phase: "build",
       blocked: false,
       note: `Recorded update ${index}`,
       ticket_key: null,

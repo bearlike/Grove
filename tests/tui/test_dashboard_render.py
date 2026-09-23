@@ -214,7 +214,7 @@ def test_tile_phase_shows_glyph_and_label_no_progress_fraction() -> None:
     """The tile deliberately omits the `N/M` fraction the row card shows —
     tighter width budget, and the glyph/color ramp already carries the
     coarse signal."""
-    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW)
+    report = PhaseReport(phase="verify", note=None, updated_at=_NOW)
     plain = _render_card_body(
         WorkspaceActivityView.from_activity(
             _activity(agent_state=AgentActivityState.IDLE, phase=report)
@@ -222,7 +222,7 @@ def test_tile_phase_shows_glyph_and_label_no_progress_fraction() -> None:
         dark=True,
         now=_NOW,
     ).plain
-    assert f"{phase_glyph('verifying')} {phase_label('verifying')}" in plain
+    assert f"{phase_glyph('verify')} {phase_label('verify')}" in plain
     assert "4/6" not in plain
 
 
@@ -249,7 +249,7 @@ def test_tile_blocked_phase_appends_the_flag_beside_the_phase() -> None:
     """The tile is dense (no `N/M` fraction), but a blocked claim still gets
     its flag — sparingly, appended right after the phase label, never in
     place of it."""
-    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=True)
+    report = PhaseReport(phase="verify", note=None, updated_at=_NOW, blocked=True)
     plain = _render_card_body(
         WorkspaceActivityView.from_activity(
             _activity(agent_state=AgentActivityState.IDLE, phase=report)
@@ -257,11 +257,11 @@ def test_tile_blocked_phase_appends_the_flag_beside_the_phase() -> None:
         dark=True,
         now=_NOW,
     ).plain
-    assert f"{phase_glyph('verifying')} {phase_label('verifying')} {BLOCKED_GLYPH}" in plain
+    assert f"{phase_glyph('verify')} {phase_label('verify')} {BLOCKED_GLYPH}" in plain
 
 
 def test_tile_unblocked_phase_omits_the_flag() -> None:
-    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=False)
+    report = PhaseReport(phase="verify", note=None, updated_at=_NOW, blocked=False)
     plain = _render_card_body(
         WorkspaceActivityView.from_activity(
             _activity(agent_state=AgentActivityState.IDLE, phase=report)
@@ -273,7 +273,7 @@ def test_tile_unblocked_phase_omits_the_flag() -> None:
 
 
 def test_tile_blocked_flag_uses_blocked_color() -> None:
-    report = PhaseReport(phase="verifying", note=None, updated_at=_NOW, blocked=True)
+    report = PhaseReport(phase="verify", note=None, updated_at=_NOW, blocked=True)
     text = _render_card_body(
         WorkspaceActivityView.from_activity(
             _activity(agent_state=AgentActivityState.IDLE, phase=report)

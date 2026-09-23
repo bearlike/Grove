@@ -355,6 +355,51 @@ def _server() -> Server:
     return libtmux.Server()
 
 
+#: What tmux's client prints when its connect() succeeds but the handshake gets
+#: no reply. It is emitted for a server that EXITED and for one that is merely
+#: not answering, and those take opposite remedies.
+_SERVER_GONE = "server exited unexpectedly"
+
+
+def diagnose_server_failure(message: str) -> str:
+    """Tell a tmux server that CRASHED apart from one that is merely wedged.
+
+    tmux prints the same ``server exited unexpectedly`` for both, and the two
+    are opposite problems: a crashed server is replaced by the next command,
+    while a wedged one accepts every connection and answers none, so retrying
+    is futile and no amount of restarting Grove helps. Measured on this host, a
+    server sat in ``do_poll`` holding zero sessions for 22 hours — burning no
+    CPU, still ``LISTEN``ing — and failed every workspace create behind a
+    message that sent the reader looking for a crash that never happened.
+
+    The discriminator is whether anything still holds the socket: a genuinely
+    exited server unlinks it, so a socket that is still being listened on
+    proves the process is alive and not answering. Returns ``message``
+    unchanged when it is not this failure or when the check cannot be made —
+    an honest passthrough, never a guess.
+    """
+    if _SERVER_GONE not in message:
+        return message
+    socket = _server_socket_path()
+    if socket is None or not socket.exists():
+        return message
+    return (
+        f"{message} — but its socket at {socket} still exists, so the tmux "
+        "server is running and not answering (a wedged server, not a crashed "
+        "one). Restarting Grove will not help; end the stuck client or the "
+        "server itself (`tmux kill-server`) and retry."
+    )
+
+
+def _server_socket_path() -> Path | None:
+    """Where tmux's default socket lives for this user, honouring ``TMUX_TMPDIR``."""
+    tmpdir = os.environ.get("TMUX_TMPDIR") or "/tmp"
+    try:
+        return Path(tmpdir) / f"tmux-{os.getuid()}" / "default"
+    except AttributeError:  # pragma: no cover - no getuid on Windows
+        return None
+
+
 def has_session(name: str) -> bool:
     """True iff a tmux session with this exact name exists right now."""
     try:
@@ -403,7 +448,9 @@ def create_session(name: str, cwd: Path, *, history_limit: int = 50_000, size: s
             y=geometry[1] if geometry else None,
         )
     except Exception as exc:
-        raise TmuxError(f"failed to create tmux session {name}: {exc}") from exc
+        raise TmuxError(
+            f"failed to create tmux session {name}: {diagnose_server_failure(str(exc))}"
+        ) from exc
     try:
         session.set_option("history-limit", str(history_limit))
         session.set_option("mouse", "on")

@@ -40,7 +40,7 @@ def ticket_sort_key(
 
     if phase is None:
         progress_rank = (2, 0)
-    elif phase == "done":
+    elif phase == "handoff":
         progress_rank = (1, 0)
     else:
         progress_rank = (0, -PHASE_ORDER.index(phase))

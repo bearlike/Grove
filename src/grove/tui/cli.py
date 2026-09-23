@@ -36,6 +36,7 @@ from grove.tui.cli_quota import register as register_quota_commands
 from grove.tui.cli_sessions import recollect_session, sessions_app
 from grove.tui.cli_shell import register as register_shell_commands
 from grove.tui.cli_usage import usage_app
+from grove.tui.cli_watch import watch_app
 from grove.tui.cli_workspace import register as register_workspace_commands
 from grove.tui.cli_workspace import warn_if_store_disowns_caller
 
@@ -60,6 +61,7 @@ auth_app = typer.Typer(
 app.add_typer(auth_app, name="auth")
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(mailbox_app, name="mailbox")
+app.add_typer(watch_app, name="watch")
 
 # `grove recollect` — the SAME function as `grove sessions recollect`, grafted
 # flat like `ls` and `version`. Not a second implementation: Typer registers the

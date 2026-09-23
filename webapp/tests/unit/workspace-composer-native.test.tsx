@@ -2,20 +2,19 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 /**
- * The workspace reply composer, after the shared shell took over its paper.
+ * The workspace reply composer, on assistant-ui's own `elements/composer`
+ * anatomy driven by `ComposerPrimitive`.
  *
  * WHY A SOURCE CENSUS AND NOT A RENDER. Every component named here reads
  * assistant-ui composer state (`useAui`, `useAuiState`, `ComposerPrimitive`), so
  * none of them mounts without a runtime, a query client and a live workspace —
  * the same reason `displayed-defaults.test.ts` and `message-attachments.test.ts`
- * are censuses. What the shared atoms themselves render is pinned by
- * `shared-composer.test.tsx`, which CAN render them; what is pinned here is the
- * part only this seam can get wrong.
+ * are censuses.
  *
  * The defects it guards against all look correct on screen:
  *
- *  - the shared shell adopted but the runtime plumbing quietly dropped with it
- *    (the dropzone, paste-to-attach, the real textarea ref), which reads as a
+ *  - the vendored anatomy adopted but the runtime plumbing quietly dropped with
+ *    it (the dropzone, paste-to-attach, the real textarea ref), which reads as a
  *    working composer until somebody drops a file on it;
  *  - a staged row removed BY FILENAME, which silently removes the wrong one of
  *    two files a reader legitimately named the same thing;
@@ -28,6 +27,7 @@ const ROW = "components/grove/workspace/composer-attachment.tsx";
 const SURFACE = "components/grove/workspace/composer.tsx";
 const MODEL = "components/grove/workspace/composer-model.tsx";
 
+const VENDORED = "@/components/elements/composer";
 const SHARED = "@/components/grove/composer";
 const FILE_ROW = "@/components/grove/attachment-file";
 
@@ -46,105 +46,89 @@ function code(path: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
-/** The `WorkspaceComposer` body alone, so a thread-level delta cannot answer for it. */
-function workspaceComposer(): string {
-  const text = code(THREAD);
-  const start = text.indexOf("export function WorkspaceComposer(");
-  expect(start, "WorkspaceComposer is not exported from the thread port").toBeGreaterThan(0);
-  const end = text.indexOf("\nconst MessageError", start);
-  expect(end, "the composer section has no end marker").toBeGreaterThan(start);
-  return text.slice(start, end);
-}
-
-describe("the reply composer's paper is the shared one", () => {
-  it("renders the shared body instead of a hand-rolled shell", () => {
-    const text = workspaceComposer();
-    expect(code(THREAD)).toContain(`from "${SHARED}"`);
-    expect(text).toContain("<ComposerBody");
-    // The slot the old hand-rolled box carried. Its absence is the whole point:
-    // the theme layer reaches the bar through the VENDORED slot, and a Grove
-    // box drawing its own surface opted this surface out of it silently.
-    expect(text).not.toContain("aui_composer-shell");
+describe("the reply composer is the vendored anatomy", () => {
+  it("composes the vendored bar, not a Grove shell", () => {
+    const text = code(SURFACE);
+    expect(text).toContain(`from "${VENDORED}"`);
+    for (const part of ["<Composer ", "<ComposerBar", "<ComposerToolbar", "<ComposerActions"]) {
+      expect(text, part).toContain(part);
+    }
   });
 
-  it("stops re-declaring the composer custom properties the theme now owns", () => {
-    // Three `--composer-*` values were restated on the shell because a dialog
-    // portal leaves the thread's inheritance tree. The shared bar carries its
-    // own surface, so restating them here would be this file having an opinion
-    // about a look it no longer owns — and the two copies would drift.
-    const text = workspaceComposer();
+  it("leaves the thread port with no composer of its own", () => {
+    // Every other `Thread` caller is read-only, so a fallback composer there
+    // was code no route could mount.
+    const text = code(THREAD);
+    expect(text).not.toContain("ComposerPrimitive");
     expect(text).not.toContain("--composer-bg");
-    expect(text).not.toContain("--composer-radius");
-    expect(text).not.toContain("--composer-padding");
   });
 
-  it("keeps every runtime capability the shared shell knows nothing about", () => {
-    // The shared body is a div: it does not own the composer scope, the drag
+  it("keeps every runtime capability the vendored div knows nothing about", () => {
+    // `ComposerBar` is a div: it does not own the composer scope, the drag
     // target, or the editor. Adopting it while dropping any of these leaves a
     // composer that looks finished and cannot take a file.
-    const text = workspaceComposer();
+    const text = code(SURFACE);
     expect(text).toContain("<ComposerPrimitive.Root");
-    expect(text).toContain("<ComposerPrimitive.AttachmentDropzone asChild>");
     expect(text).toContain("<ComposerPrimitive.Input");
     expect(text).toContain("addAttachmentOnPaste");
     expect(text).toContain("ref={inputRef}");
     expect(text).toContain('aria-label="Message input"');
+    expect(text).toContain('data-slot="composer-input"');
   });
 
-  it("names the editor with the vendored input slot the theme styles", () => {
-    // `ComposerPrimitive.Input` spreads native textarea props, so the slot is
-    // reachable from the call site — and a class-only hook would leave this one
-    // editor outside the focus and placeholder rules both surfaces share.
-    expect(workspaceComposer()).toContain('data-slot="composer-input"');
-  });
-
-  it("slots the drag target ONTO the shared bar, so the drag tint is the bar's", () => {
-    // The dropzone sets `data-dragging="true"` on whatever element it renders,
-    // so `asChild` onto the shared body is what puts that attribute on the
-    // themed slot. A wrapper div around the bar instead would make the drop
-    // target a different element from the one that can show it, and the shared
-    // `dragActive` prop is NOT the answer: it would be a second copy of state
-    // the primitive already publishes, readable only from inside it.
-    const text = workspaceComposer();
-    expect(text).toMatch(/<ComposerPrimitive\.AttachmentDropzone asChild>\s*<ComposerBody/);
+  it("slots the drag target ONTO the vendored bar, so the drag tint is the bar's", () => {
+    // The dropzone sets `data-dragging` on whatever element it renders; a
+    // wrapper would make the drop target a different box from the one that
+    // reacts, and `dragActive` would be a second copy of the primitive's state.
+    const text = code(SURFACE);
+    expect(text).toMatch(/<ComposerPrimitive\.AttachmentDropzone asChild>\s*<ComposerBar/);
     expect(text).not.toContain("dragActive");
   });
 
-  it("keeps the measured 28px send, its class and its runtime gate", () => {
-    // `tests/e2e/sharp-surfaces.spec.ts` measures `.aui-composer-send` at 28px
-    // with a 12px corner inset, and the inset is the bar's 11px padding plus its
-    // 1px border — so the button's own size is the half that lives here.
-    const text = workspaceComposer();
-    expect(text).toContain("aui-composer-send size-[28px]");
+  it("swaps send for cancel on the runtime's own gate, and keeps dictation", () => {
+    const text = code(SURFACE);
     expect(text).toContain("<ComposerPrimitive.Send asChild>");
-    expect(text).toContain("<ComposerSend");
-    expect(text).toContain("<ComposerAttachButton");
     expect(text).toContain("<ComposerPrimitive.Cancel asChild>");
+    expect(text).toContain("aui-composer-send");
     expect(text).toContain("s.thread.capabilities.dictation");
+  });
+
+  it("puts attach alone on the left and everything else against send", () => {
+    const text = code(SURFACE);
+    const attach = text.indexOf("<ComposerAttachButton");
+    const actions = text.indexOf("<ComposerActions", attach);
+    const send = text.indexOf("<SendOrCancel");
+    expect(attach).toBeGreaterThan(0);
+    expect(actions).toBeGreaterThan(attach);
+    expect(send).toBeGreaterThan(actions);
+    for (const control of ["<WorkspaceContext", "<ComposerModel", "{expandControl}", "<NativeInterrupt"]) {
+      const at = text.indexOf(control, actions);
+      expect(at, control).toBeGreaterThan(actions);
+      expect(at, control).toBeLessThan(send);
+    }
   });
 });
 
-describe("the action row is the vendored toolbar, attach left and the rest right", () => {
-  it("composes the native toolbar and action groups", () => {
-    const text = workspaceComposer();
-    expect(text).toContain("<ComposerToolbar");
-    expect(text).toContain("<ComposerActions");
+describe("the unified triggers ride the same bar", () => {
+  it("opens `/` and `@` through assistant-ui's trigger primitives", () => {
+    const text = code(SURFACE);
+    expect(text).toContain("<ComposerPrimitive.Unstable_TriggerPopoverRoot>");
+    expect(text).toContain('char="/"');
+    expect(text).toContain('char="@"');
+    expect(text).toContain("unstable_useSlashCommandAdapter");
+    expect(text).toContain("unstable_useMentionAdapter");
   });
 
-  it("puts attach alone on the left and everything else on the right", () => {
-    // Both surfaces read the same way round: one quiet add-file verb at the
-    // start of the row, and every control that answers "how will this be sent"
-    // grouped against the send button it affects.
-    const text = workspaceComposer();
-    const attach = text.indexOf("<ComposerAttachButton");
-    const injected = text.indexOf("{children}");
-    const send = text.indexOf("ComposerPrimitive.Send");
-    expect(attach).toBeGreaterThan(0);
-    expect(injected).toBeGreaterThan(attach);
-    expect(send).toBeGreaterThan(injected);
-    expect(text.slice(attach, injected)).toContain("</ComposerActions>");
-    expect(text.slice(attach, injected)).toContain("<ComposerActions");
-    expect(text.slice(injected, send)).not.toContain("</ComposerActions>");
+  it("delivers a command through the control route, never as typed prose", () => {
+    const text = code(SURFACE);
+    expect(text).toContain("useInvokeControl");
+    expect(text).toContain("removeOnExecute: true");
+  });
+
+  it("never lets `@` fall back to the thread's tool list", () => {
+    // With no `items` the vendored adapter lists model-context tools instead,
+    // which Grove registers none of — an empty menu that looks broken.
+    expect(code(SURFACE)).toMatch(/unstable_useMentionAdapter\(\{\s*items\s*\}\)/);
   });
 });
 
@@ -203,7 +187,7 @@ describe("expanding moves the one composer through the shared dialog", () => {
     expect(text).not.toContain("<Dialog");
     expect(text).not.toContain("DialogContent");
     expect(text).not.toContain("onCloseAutoFocus");
-    expect(text).not.toContain("useState");
+    expect(text).not.toMatch(/useState<boolean>|setExpanded/);
   });
 
   it("titles the dialog something the editor inside it is not already called", () => {

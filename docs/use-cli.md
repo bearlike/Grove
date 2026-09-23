@@ -87,14 +87,14 @@ Sets or reads [task phase](features-status.md#the-third-axis-task-phase).
 grove phase [REF] [PHASE] [--note TEXT] [--ticket PROVIDER:ID] [--blocked]   # set
 grove phase [REF]                                                            # read
 
-grove phase implementing --note "wiring the CLI verb"   # from inside the worktree
-grove phase a1b2 verifying                    # another workspace, by id prefix
-grove phase verifying --ticket gitea:42       # scoped to one attached ticket
-grove phase implementing --blocked            # stuck on this step
+grove phase build --note "wiring the CLI verb"   # from inside the worktree
+grove phase a1b2 verify                    # another workspace, by id prefix
+grove phase verify --ticket gitea:42       # scoped to one attached ticket
+grove phase build --blocked            # stuck on this step
 grove phase                                   # read the cwd-inferred phase, tickets included
 ```
 
-- The phases are `scoping`, `planning`, `implementing`, `verifying`, `delivering` and `done`, and a note is one line under 200 characters.
+- The phases are `scope`, `plan`, `build`, `verify`, `deliver` and `handoff`, and a note is one line under 200 characters.
 - `--ticket` scopes the claim to one attached ticket's `provider:id` for a workspace working several at once.
 - `--blocked` is a flag beside the phase, never a replacement for it.
 
@@ -282,6 +282,24 @@ grove tickets handback 42   # unassign, leaving any workspace alone
 
 - `--workspace` defaults to the current worktree.
 - See [ticket providers](features-ticket-providers.md).
+
+### `grove watch`
+
+Waits for something without sleeping. Register a watch, end the turn, and Grove mails the outcome when it settles or the deadline passes.
+
+```bash
+grove watch ci SHA --owner O --repo R [--provider gitea|github] [--every SECONDS] [--deadline MINUTES] [--note TEXT] [--for WORKSPACE]
+grove watch timer MINUTES [--deadline MINUTES] [--note TEXT] [--for WORKSPACE]
+grove watch cmd [--every SECONDS] [--exit-code N] [--deadline MINUTES] [--note TEXT] [--for WORKSPACE] -- ARGV...
+grove watch ls
+grove watch cancel ID
+```
+
+- The recipient defaults to your own workspace, read from `GROVE_PHASE_FILE`. `--for` registers on another workspace's behalf.
+- Without `--deadline`, `ci` and `cmd` give up after 15 minutes, and the expiry is mailed too.
+- Ticket watches never need this command. Grove registers one for each ticket attached to a running workspace.
+
+[Watches](features-watches.md) explains the guarantees.
 
 ## Using the CLI from an agent
 

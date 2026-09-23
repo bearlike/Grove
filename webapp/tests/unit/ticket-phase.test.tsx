@@ -36,7 +36,7 @@ function ref(overrides: Partial<TicketRef> = {}): TicketRef {
 }
 
 function claim(overrides: Partial<PhaseView["tickets"][number]> = {}) {
-  return { ticket: "gitea:42", phase: "implementing" as const, note: null, blocked: false, index: 2, ...overrides };
+  return { ticket: "gitea:42", phase: "build" as const, note: null, blocked: false, index: 2, ...overrides };
 }
 
 function phaseWith(...tickets: PhaseView["tickets"]): PhaseView {
@@ -86,11 +86,11 @@ describe("ticketPhases", () => {
 
   it("keeps each ticket's own position rather than the workspace position", () => {
     const claims = ticketPhases(
-      phaseWith(claim({ index: 0, phase: "scoping" }), claim({ ticket: "gitea:9", index: 4, phase: "delivering" })),
+      phaseWith(claim({ index: 0, phase: "scope" }), claim({ ticket: "gitea:9", index: 4, phase: "deliver" })),
     );
 
-    expect(claims.get("gitea:42")?.phase).toBe("scoping");
-    expect(claims.get("gitea:9")?.phase).toBe("delivering");
+    expect(claims.get("gitea:42")?.phase).toBe("scope");
+    expect(claims.get("gitea:9")?.phase).toBe("deliver");
   });
 });
 
@@ -114,7 +114,7 @@ describe("a ticket row", () => {
     expect(html).toContain("Step 3 of 6");
   });
 
-  it("calls a missing agent claim not reported, rather than inventing scoping", () => {
+  it("calls a missing agent claim not reported, rather than inventing scope", () => {
     const html = row(ref());
 
     expect(html).not.toContain('data-testid="phase-badge"');

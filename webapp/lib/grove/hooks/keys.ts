@@ -11,6 +11,7 @@ export const groveKeys = {
   activity: ["grove", "activity"] as const,
   health: ["grove", "health"] as const,
   whoami: ["grove", "whoami"] as const,
+  mailboxContacts: ["grove", "mailboxes", "contacts"] as const,
 
   workspaces: ["grove", "workspaces"] as const,
   workspace: (id: string) => ["grove", "workspaces", id] as const,
@@ -20,6 +21,7 @@ export const groveKeys = {
   fleet: (id: string, sessionId: string) =>
     ["grove", "workspaces", id, "fleet", sessionId] as const,
   todo: (id: string) => ["grove", "workspaces", id, "todo"] as const,
+  watches: (id: string) => ["grove", "workspaces", id, "watches"] as const,
   history: (id: string) => ["grove", "workspaces", id, "history"] as const,
   panels: (id: string) => ["grove", "workspaces", id, "panels"] as const,
   diagram: (id: string) => ["grove", "workspaces", id, "diagram"] as const,

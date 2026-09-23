@@ -42,6 +42,7 @@ const system: SystemFacts = {
   startedAt: "2026-09-18T08:00:00Z",
   updateAvailable: false,
   latestVersion: null,
+  restartRequired: false,
 };
 
 function render(

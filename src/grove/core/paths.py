@@ -51,6 +51,7 @@ _SHARE_POLICIES_FILE = "share-policies.json"
 _TELEMETRY_LEDGER_FILE = "telemetry-exports.sqlite3"
 _SESSION_TURNS_FILE = "session-turns.json"
 _WORKSPACE_HISTORY_FILE = "workspace-history.sqlite3"
+_WATCHES_FILE = "watches.json"
 
 
 def ensure_dir(path: Path) -> Path:
@@ -309,6 +310,23 @@ def user_handover_path() -> Path:
     can be picked up a second time.
     """
     return Path(user_state_dir(_APP_NAME)) / _HANDOVER_FILE
+
+
+def user_watches_path() -> Path:
+    """Every registered callback an agent is currently waiting on.
+
+    Under the STATE dir beside the workspace state, because nobody authors it —
+    it is a record Grove writes about promises it has made. It must be durable
+    for the reason the whole feature exists: an agent that registered a watch
+    has STOPPED, so a registry lost to a daemon restart is an agent that waits
+    forever with no signal. Settled rows are retained for a week rather than
+    deleted on delivery, because the row is also the record that a callback was
+    already sent — which is what stops a restart from sending it twice.
+
+    Contains workspace ids, predicate subjects (a commit SHA, an argv, an
+    instant) and the rendered outcome summary. No credential.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _WATCHES_FILE
 
 
 def init_log_path(workspace_id: str) -> Path:

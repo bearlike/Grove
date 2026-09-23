@@ -4,13 +4,13 @@ import Link from "next/link";
 import { Suspense } from "react";
 
 import {
+  Composer,
   ComposerActions,
-  ComposerBody,
-  ComposerFrame,
+  ComposerBar,
   ComposerSend,
   ComposerToolbar,
-  ExpandedComposer,
-} from "@/components/grove/composer";
+} from "@/components/elements/composer";
+import { ExpandedComposer } from "@/components/grove/composer";
 import { useCloseAnnotationOnUnmount } from "@/components/grove/annotation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -62,9 +62,8 @@ function LaunchSurfaceContent(): React.ReactNode {
     <main
       className="flex min-h-0 flex-1 flex-col"
       data-testid={LAUNCH_TESTIDS.page}
-      // Only the measure. The composer's own surface, radius and padding come
-      // from the shared `ComposerBody`, so re-declaring `--composer-*` here
-      // would be this file having an opinion about a look it does not own.
+      // Only the measure. The composer's surface is the vendored
+      // `ComposerBar`'s, so this file has no opinion about its look.
       //
       // 52rem, not the transcript's 44rem: this surface carries a configuration
       // shelf under the bar where a reply composer carries none, and at 44rem
@@ -209,25 +208,19 @@ function LaunchSurfaceContent(): React.ReactNode {
 }
 
 /**
- * The task brief, in the anatomy both composers now share.
+ * The task brief, on the vendored `elements/composer` anatomy the workspace
+ * reply uses too: staged files, the editor, then the toolbar with attach on the
+ * left and model, expand and send on the right.
  *
- * Reads top to bottom as what is attached, what you are writing, what you can
- * do with it: native chips above the editor, the editor, then the toolbar with
- * attach on the left and model, expand and send on the right. The split in that
- * toolbar is by KIND — attaching is an input to the message, the three on the
- * right act on it.
+ * BELOW the bar sits the configuration shelf — what the workspace will BE, not
+ * what the message says. It is ghosted (no edge, the sunken fill, muted pills)
+ * so the bar stays the one surface that reads as the place you write.
  *
- * BELOW the bar, outside it, sits the configuration shelf. Writing and
- * configuring are different acts, and while the pills lived inside the bar they
- * competed with the brief for the same paper and shoved the send button around
- * as they wrapped. A sibling shelf lets the writing surface be one thing.
- *
- * The editor is the vendored `Textarea` and this surface still mounts no
- * assistant-ui runtime. That pairing is the whole point: `ComposerInput` is a
- * single-line `<input>` and a task brief is a paragraph, so the previous answer
- * was to borrow `ComposerPrimitive.Input` — which dragged in
- * `AssistantRuntimeProvider` and silently broke EVERY client-side navigation
- * away from this route (see `useLaunchSubmit` for the measurement).
+ * The editor is the vendored `Textarea`, and this route mounts no assistant-ui
+ * runtime: mounting `AssistantRuntimeProvider` here silently broke every
+ * client-side navigation away from the page (see `useLaunchSubmit`). So the
+ * vendored standalone parts are driven by plain React state instead of
+ * `ComposerPrimitive`.
  */
 function LaunchComposer({
   disabled,
@@ -245,18 +238,14 @@ function LaunchComposer({
   const { values } = useLaunchControls();
   const customModelInvalid =
     values.customModel && customModelError(values.model ?? "") !== null;
+  const blocked = !launch.canSubmit || customModelInvalid;
 
   return (
-    <ComposerFrame
-      className={expanded ? "flex min-h-0 max-w-none flex-1 flex-col" : "max-w-none"}
+    <Composer
+      className={expanded ? "flex min-h-0 max-w-none flex-1 flex-col gap-2" : "flex max-w-none flex-col gap-2"}
       data-testid={LAUNCH_TESTIDS.composer}
     >
-      {/*
-        The 11px padding and the 1px border that place the send edge 12px in
-        belong to `ComposerBody` and are not restated here — both composers
-        measure that inset, so it has exactly one owner.
-      */}
-      <ComposerBody className={expanded ? "flex min-h-0 flex-1 flex-col" : undefined}>
+      <ComposerBar className={expanded ? "min-h-0 flex-1" : undefined}>
         <LaunchAttachmentChips
           files={launch.attachments}
           pendingReAdd={launch.pendingReAdd}
@@ -284,14 +273,10 @@ function LaunchComposer({
             launch.submit();
           }}
           placeholder="Describe the work you want to do..."
-          // The vendored Textarea is a standalone form field and brings its own
-          // border, background and focus ring; inside the composer bar the BAR
-          // is the field, so those are dropped and only its sizing behaviour is
-          // kept. min-h-24/max-h-64 is the one range delta from the reply
-          // composer: this box is the whole screen, not a line under a
-          // conversation that already carries the context. Expanded it fills
-          // the dialog instead of capping — the point of expanding is that the
-          // brief is longer than the cap.
+          // The theme drops the Textarea's own border and ring inside the bar,
+          // which is the field. min-h-24/max-h-64 is the one range delta from
+          // the reply composer: this box is the whole screen, not a line under
+          // a conversation. Expanded it fills the dialog instead of capping.
           className={
             expanded
               ? "min-h-0 w-full flex-1 resize-none px-3"
@@ -305,29 +290,24 @@ function LaunchComposer({
         />
         <ComposerToolbar>
           <LaunchAttachFiles onAdd={launch.addFiles} disabled={disabled} />
-          <ComposerActions className="shrink-0">
+          <ComposerActions className="min-w-0">
             <ModelPill />
             {expandControl}
             <ComposerSend
               streaming={false}
               aria-label={launch.isPending ? "Creating workspace" : "Send message"}
               aria-busy={launch.isPending}
-              idle={!launch.canSubmit || customModelInvalid}
-              disabled={!launch.canSubmit || customModelInvalid}
-              className="size-[28px]"
+              idle={blocked}
+              disabled={blocked}
               onClick={launch.submit}
             />
           </ComposerActions>
         </ComposerToolbar>
-      </ComposerBody>
-      {/*
-        Inset from the bar's edges rather than spanning them: `mx-3` reads the
-        shelf as subordinate to the writing surface above it, where flush edges
-        would make it a second bar of equal weight.
-      */}
-      <div className="composer-shelf mx-3 flex items-center px-2 py-1.5">
+      </ComposerBar>
+      {/* A `ComposerToolbar` so its pills take the toolbar's ghost rule. */}
+      <ComposerToolbar className="composer-shelf mx-3 px-1 py-0.5">
         <LaunchControlRow />
-      </div>
-    </ComposerFrame>
+      </ComposerToolbar>
+    </Composer>
   );
 }

@@ -596,6 +596,17 @@ class WhoamiView(BaseModel):
     python_version: str
     latest_version: str | None = None
     update_available: bool = False
+    # `default_factory`, not `default=False`: a `default` key makes the generated
+    # TypeScript property REQUIRED, which breaks every client fixture literal.
+    restart_required: bool = Field(default_factory=lambda: False)
+    """The package's code on disk is newer than the code this daemon imported.
+
+    Set after a pull into an editable install, or a reinstall, when nobody has
+    restarted the daemon. The daemon then runs the code it booted with while
+    every fresh CLI call runs the new code, and the two can disagree without
+    either raising. Detected by source mtime (:class:`grove.core.loaded_source.LoadedSource`).
+    ``False`` also covers "could not tell", because only a positive answer
+    should prompt someone to restart."""
     langfuse_host: str | None = None
     """The configured Langfuse UI host (e.g. ``https://cloud.langfuse.com``),
     present only when ``telemetry.enabled`` AND the whole host/public/secret

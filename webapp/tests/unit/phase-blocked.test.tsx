@@ -21,7 +21,7 @@ describe("a blocked task phase", () => {
   it("keeps the reached position and six-step sequence", () => {
     const html = render(true, "Waiting for approval");
 
-    expect(html).toContain('data-phase="delivering"');
+    expect(html).toContain('data-phase="deliver"');
     expect(html).toContain("Deliver");
     expect(html.match(/<li /g)).toHaveLength(6);
     expect(html.match(/data-done="true"/g)).toHaveLength(4);

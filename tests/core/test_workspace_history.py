@@ -18,7 +18,7 @@ def _store(tmp_path: Path) -> WorkspaceHistoryStore:
 
 def _report(
     *,
-    phase: TaskPhase = "implementing",
+    phase: TaskPhase = "build",
     blocked: bool = False,
     note: str | None = None,
     tickets: tuple[TicketClaim, ...] = (),
@@ -35,7 +35,7 @@ def _report(
 def test_record_progress_deduplicates_note_less_workspace_and_ticket_claims(tmp_path: Path) -> None:
     store = _store(tmp_path)
     report = _report(
-        tickets=(TicketClaim(ticket="gitea:687", phase="implementing"),),
+        tickets=(TicketClaim(ticket="gitea:687", phase="build"),),
     )
 
     for _ in range(500):
@@ -44,8 +44,8 @@ def test_record_progress_deduplicates_note_less_workspace_and_ticket_claims(tmp_
     progress = store.history_for("workspace-1").progress
     assert len(progress) == 2
     assert {(entry.ticket_key, entry.phase, entry.note) for entry in progress} == {
-        (None, "implementing", None),
-        ("gitea:687", "implementing", None),
+        (None, "build", None),
+        ("gitea:687", "build", None),
     }
 
 
@@ -53,7 +53,7 @@ def test_record_progress_appends_each_content_transition(tmp_path: Path) -> None
     store = _store(tmp_path)
     reports = (
         _report(),
-        _report(phase="verifying"),
+        _report(phase="verify"),
         _report(blocked=True),
         _report(note="waiting for review"),
     )
@@ -63,10 +63,10 @@ def test_record_progress_appends_each_content_transition(tmp_path: Path) -> None
 
     progress = store.history_for("workspace-1").progress
     assert {(entry.phase, entry.blocked, entry.note) for entry in progress} == {
-        ("implementing", False, None),
-        ("verifying", False, None),
-        ("implementing", True, None),
-        ("implementing", False, "waiting for review"),
+        ("build", False, None),
+        ("verify", False, None),
+        ("build", True, None),
+        ("build", False, "waiting for review"),
     }
 
 
@@ -128,7 +128,7 @@ def test_mark_deleted_tombstones_known_workspace_without_losing_its_history(tmp_
     assert history.name.title == "Release work"
     assert history.name.description == "Ship it"
     assert [change.title for change in history.names] == ["Release work"]
-    assert [(entry.phase, entry.note) for entry in history.progress] == [("implementing", "ready")]
+    assert [(entry.phase, entry.note) for entry in history.progress] == [("build", "ready")]
     assert [ticket.ticket_key for ticket in history.tickets] == ["gitea:687"]
     assert store.history_for("unknown-workspace").is_empty
 
@@ -173,7 +173,7 @@ def test_record_progress_round_trips_missing_note_and_workspace_ticket_key_as_no
     store = _store(tmp_path)
     store.record_progress(
         "workspace-1",
-        _report(tickets=(TicketClaim(ticket="gitea:687", phase="planning"),)),
+        _report(tickets=(TicketClaim(ticket="gitea:687", phase="plan"),)),
         now=_AT,
     )
 

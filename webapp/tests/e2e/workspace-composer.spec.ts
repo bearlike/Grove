@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { dp } from "./density";
-import { openSharpSurface } from "./sharp-surface-probe";
+import { barInset, openSharpSurface } from "./sharp-surface-probe";
 
 test("workspace composer moves one runtime draft, fills the dialog, and restores focus", async ({ page }) => {
   await openSharpSurface(page, "info", 300, "dark");
@@ -25,8 +25,11 @@ test("workspace composer moves one runtime draft, fills the dialog, and restores
   const shellBox = await dialog.locator('[data-slot="composer-bar"]').boundingBox();
   expect(sendBox!.width).toBeCloseTo(28, 0);
   expect(sendBox!.height).toBeCloseTo(28, 0);
-  expect(shellBox!.x + shellBox!.width - sendBox!.x - sendBox!.width).toBeCloseTo(12, 0);
-  expect(shellBox!.y + shellBox!.height - sendBox!.y - sendBox!.height).toBeCloseTo(12, 0);
+  // Send sits IN the bar's corner: its own padding plus its border, the
+      // same on both edges — the vendored geometry, not a Grove constant.
+      const inset = await barInset(page);
+      expect(shellBox!.x + shellBox!.width - sendBox!.x - sendBox!.width).toBeCloseTo(inset, 0);
+  expect(shellBox!.y + shellBox!.height - sendBox!.y - sendBox!.height).toBeCloseTo(inset, 0);
   await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).not.toBeVisible();
   await expect(input).toHaveCount(1);
@@ -56,7 +59,8 @@ test("composer reports the model, delivers catalog choices, and does not claim a
   await expect(pending).toBeVisible();
   expect((await pending.boundingBox())!.width).toBeCloseTo(6, 0);
   expect((await pending.boundingBox())!.height).toBeCloseTo(6, 0);
-  await expect(trigger).toContainText("catalog-model");
+  // The label is `modelLabel`'s folded spelling; the id itself rides `title`.
+  await expect(trigger).toContainText(/catalog-model/i);
   await expect(trigger).not.toContainText("Running");
   await trigger.click();
   await page.keyboard.press("Escape");
@@ -80,15 +84,15 @@ test("composer marks only an exact reported catalog model as selected", async ({
   await openSharpSurface(page, "info", 300, "light");
   const trigger = page.getByTestId("composer-model-trigger");
   await expect(trigger).toHaveAttribute("aria-label", "Model");
-  await expect(trigger).toContainText(currentModel);
+  // The visible label folds the shared namespace away; the id is the title.
+  await expect(trigger).toHaveAttribute("title", `Reported current model: ${currentModel}`);
   await trigger.click();
 
   const selected = page.getByTestId("composer-model-item").filter({ hasText: "fast" });
   await expect(selected).toHaveAttribute("aria-selected", "true");
-  // The ramp's `text-xs` step at the density root, where it used to be a flat
-  // 12px held by an inline override. See `shell-band-heights.spec.ts` for why
-  // that override was the defect rather than the guard.
-  await expect(selected).toHaveCSS("font-size", `${dp(12)}px`);
+  // The vendor's own `text-sm` at the density root — the size every other menu
+  // in the app uses, so a picker is never the largest text on the page.
+  await expect(selected).toHaveCSS("font-size", `${dp(13)}px`);
   await expect(page.getByTestId("composer-model-pending")).toHaveCount(0);
 });
 

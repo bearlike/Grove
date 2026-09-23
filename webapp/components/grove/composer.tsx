@@ -1,24 +1,9 @@
 "use client";
 
 import { Maximize2Icon } from "lucide-react";
-import {
-  useCallback,
-  useRef,
-  useState,
-  type ComponentProps,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useCallback, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import {
-  Composer,
-  ComposerActions,
-  ComposerAttachments,
-  ComposerBar,
-  ComposerSend,
-  ComposerToolbar,
-} from "@/components/elements/composer";
 import {
   Dialog,
   DialogContent,
@@ -26,37 +11,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
 
-// Share presentation, not the create and message submission paths. A staged
-// file is `grove/attachment-file`'s row — the same one a sent turn draws.
-export {
-  Composer as ComposerFrame,
-  ComposerActions,
-  ComposerAttachments,
-  ComposerSend,
-  ComposerToolbar,
-};
-
-/** Keep the shared send corner 12px inside the bar, including its 1px border. */
-export function ComposerBody({
-  className,
-  style,
-  ...props
-}: ComponentProps<typeof ComposerBar>): ReactNode {
-  return (
-    <ComposerBar
-      style={{ padding: 11, ...style }}
-      className={cn(
-        "bg-surface-raised border-surface-edge surface-raised border",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-/** Move one editor into a dialog. Callers keep draft state above this boundary. */
+/**
+ * Move one composer into a dialog and back — the only composer behaviour
+ * assistant-ui does not ship (see `webapp/CLAUDE.md`, "Expanding a surface").
+ *
+ * Everything a composer LOOKS like is the vendored `elements/composer` anatomy,
+ * composed directly by each surface; this component owns only the move. The
+ * editor is rendered in exactly one place at a time, so callers must keep their
+ * draft ABOVE this boundary — the remount carries nothing.
+ */
 export function ExpandedComposer({
   children,
   title,
@@ -64,6 +28,8 @@ export function ExpandedComposer({
   testId,
   expandLabel,
 }: {
+  /** Renders the composer. `expandControl` is `null` while expanded, because
+   * the dialog's own close affordance is the way back. */
   readonly children: (
     expanded: boolean,
     inputRef: RefObject<HTMLTextAreaElement | null>,

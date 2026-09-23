@@ -12,8 +12,9 @@ import {
   useSubagentFleet,
   useSubagentFleetStream,
   useWorkspaceQueue,
+  useWorkspaceWatches,
 } from "@/lib/grove/hooks";
-import type { SubagentFleetData, WorkspaceQueueView } from "@/lib/grove/api";
+import type { SubagentFleetData, WatchList, WorkspaceQueueView } from "@/lib/grove/api";
 import type { GroveThreadState } from "@/lib/grove/runtime";
 import { GroveDataParts } from "./data-parts";
 import { PendingQuestion } from "./pending-question";
@@ -25,6 +26,7 @@ import { WorkspaceComposerSurface } from "./composer";
 import { Thread, type ThreadComponents } from "./thread";
 import { THREAD_INSET, THREAD_WIDTH } from "./thread-width";
 import { TodoPanel } from "./todo-panel";
+import { WatchesPanel } from "./watches-panel";
 import { agentExited } from "./selectors";
 import { WorkingLoader } from "@/components/grove/working-loader";
 import { GROVE_THREAD_COMPONENTS } from "./tool-call-part";
@@ -103,13 +105,23 @@ export function Transcript({
   // session to steer, since `enabled` is exactly what these hooks already gate
   // their fetch on.
   const queue = useWorkspaceQueue(sessionId === null ? null : workspaceId);
+  // Gated like the queue: the card lives in the thread's footer, which does not
+  // exist until there is a session to render, so fetching sooner feeds nothing.
+  const watches = useWorkspaceWatches(sessionId === null ? null : workspaceId);
   // `.query`: this component only needs the ordinary loading/error/data state
   // for its three-state gate below — `hasEarlier`/`loadEarlier` are read off
   // `thread` (from `useGroveThread` in the parent), the same split every other
   // duplicate read on this pane already follows.
   const turns = useSessionTurns(workspaceId, sessionId).query;
   const activity = useActivityStream();
-  const exitReason = native ? agentExited(findWorkspaceActivity(activity.snapshot, workspaceId)) : null;
+  const workspaceActivity = findWorkspaceActivity(activity.snapshot, workspaceId);
+  const exitReason = native ? agentExited(workspaceActivity) : null;
+  // Whether the fleet's ROOT is still working, read off the snapshot the page
+  // already holds. `null` while the root is not in it, so a child's own claim
+  // stands rather than every run reading stopped before the first frame lands.
+  const rootState = workspaceActivity?.sessions.find((entry) => entry.session.session_id === sessionId)
+    ?.activity.state;
+  const parentWorking = rootState === undefined ? null : rootState === "working" || rootState === "starting";
 
   // ONE subscription for the one mounted, visible root — never a second stream
   // per card. Its cache is independent of `groveKeys.turns`, so a child update
@@ -165,8 +177,10 @@ export function Transcript({
             thread={thread}
             narrow={narrow}
             queue={queue.data ?? null}
+            watches={watches.data ?? null}
             fleet={fleet.data ?? null}
             fleetStale={fleetStale}
+            fleetParentWorking={parentWorking}
             onOpenSubagentTranscript={openSubagentTranscript}
             exitReason={exitReason}
           />
@@ -212,8 +226,10 @@ function ThreadPane({
   thread,
   narrow,
   queue,
+  watches,
   fleet,
   fleetStale,
+  fleetParentWorking,
   onOpenSubagentTranscript,
   exitReason,
 }: {
@@ -222,10 +238,14 @@ function ThreadPane({
   narrow: boolean;
   /** The workspace's steer queue, or null while it has not loaded yet. */
   queue: WorkspaceQueueView | null;
+  /** Every watch whose callback lands here, or null while it has not loaded yet. */
+  watches: WatchList | null;
   /** The root session's live child roster, or null while it has not loaded yet. */
   fleet: SubagentFleetData | null;
   /** The fleet's own stream disconnected; the card still shows its last snapshot. */
   fleetStale: boolean;
+  /** Whether the fleet's root session is working; `null` while unknown. */
+  fleetParentWorking: boolean | null;
   onOpenSubagentTranscript: (sessionId: string, label: string) => void;
   /** The primary native owner ended; sending revives it. */
   exitReason: string | null;
@@ -277,6 +297,8 @@ function ThreadPane({
             {working && <WorkingLoader />}
             {todo && <TodoPanel todo={todo} />}
             {queue && <QueuePanel queue={queue} />}
+            {/* Beside Queue: both say what this agent is waiting on. */}
+            {watches && <WatchesPanel watches={watches} />}
             {/* Directly above the composer, below Queue — the approved
                 mockup's placement: a live subagent roster reads as
                 "what is happening right now", the same shelf as the queue
@@ -286,6 +308,7 @@ function ThreadPane({
                 fleet={fleet}
                 workspaceId={workspaceId}
                 stale={fleetStale}
+                parentWorking={fleetParentWorking}
                 onOpenTranscript={onOpenSubagentTranscript}
               />
             )}
@@ -314,8 +337,10 @@ function ThreadPane({
       narrow,
       todo,
       queue,
+      watches,
       fleet,
       fleetStale,
+      fleetParentWorking,
       onOpenSubagentTranscript,
       pending,
       answering,

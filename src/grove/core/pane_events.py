@@ -29,6 +29,7 @@ from grove.core.admission import (
     BoundedInbox,
     InboxClosed,
 )
+from grove.core.process import die_with_parent
 
 
 def _open_pty() -> tuple[int, int]:
@@ -413,6 +414,7 @@ class TmuxControlPaneSource:
                 stdout=slave,
                 stderr=slave,
                 start_new_session=True,
+                preexec_fn=die_with_parent,
             )
         except BaseException:
             os.close(master)
@@ -439,6 +441,7 @@ class TmuxControlPaneSource:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
+            preexec_fn=die_with_parent,
         )
         assert self._process.stdout is not None
         self._reader = self._process.stdout

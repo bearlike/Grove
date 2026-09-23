@@ -101,7 +101,7 @@ Every ticket a Grove workspace works gets one comment, rewritten in place as the
 
 </td>
 <td width="50%">
-  <a href="https://bearlike.github.io/Grove/latest/features-ticket-providers/"><img src="docs/img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue, showing a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done" width="100%" /></a>
+  <a href="https://bearlike.github.io/Grove/latest/features-ticket-providers/"><img src="docs/img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue, showing a table of phase, checklist, branch and commit above a six step progress diagram running from Scope to Handoff" width="100%" /></a>
 </td>
 </tr>
 <tr>

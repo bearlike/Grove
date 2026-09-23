@@ -19,16 +19,16 @@ import type { TaskPhase } from "@/components/grove/fleet/types";
  */
 
 const PHASES: readonly TaskPhase[] = [
-  "scoping",
-  "planning",
-  "implementing",
-  "verifying",
-  "delivering",
-  "done",
+  "scope",
+  "plan",
+  "build",
+  "verify",
+  "deliver",
+  "handoff",
 ];
 
 function mark(overrides: Partial<PhaseMark> = {}): PhaseMark {
-  return { phase: "implementing", note: null, index: 2, total: 6, blocked: false, ...overrides };
+  return { phase: "build", note: null, index: 2, total: 6, blocked: false, ...overrides };
 }
 
 function ticket(overrides: Partial<PhaseTooltipTicket> = {}): PhaseTooltipTicket {
@@ -56,12 +56,12 @@ describe("what the phase word means", () => {
     // turned around into third person.
     const meaning = (phase: TaskPhase) => phaseTooltip(mark({ phase })).meaning;
 
-    expect(meaning("scoping")).toContain("reading the ticket");
-    expect(meaning("planning")).toContain("choosing an approach");
-    expect(meaning("implementing")).toContain("editing files");
-    expect(meaning("verifying")).toContain("tests, linters or the build");
-    expect(meaning("delivering")).toContain("pull request");
-    expect(meaning("done")).toContain("Handed off");
+    expect(meaning("scope")).toContain("reading the ticket");
+    expect(meaning("plan")).toContain("choosing an approach");
+    expect(meaning("build")).toContain("editing files");
+    expect(meaning("verify")).toContain("tests, linters or the build");
+    expect(meaning("deliver")).toContain("pull request");
+    expect(meaning("handoff")).toContain("transferred the finished work");
   });
 
   it("makes the agent the subject, because the reader is WATCHING rather than doing", () => {
@@ -82,12 +82,12 @@ describe("what the phase word means", () => {
 
 describe("the headline", () => {
   it("leads with the state word the badge is already showing", () => {
-    expect(phaseTooltip(mark({ phase: "verifying" })).headline).toBe("verifying");
+    expect(phaseTooltip(mark({ phase: "verify" })).headline).toBe("verify");
   });
 
   it("says blocked AND where it stopped — a bare `blocked` drops the position", () => {
-    expect(phaseTooltip(mark({ phase: "verifying", blocked: true })).headline).toBe(
-      "blocked in verifying",
+    expect(phaseTooltip(mark({ phase: "verify", blocked: true })).headline).toBe(
+      "blocked in verify",
     );
   });
 
@@ -184,14 +184,14 @@ describe("the tracker's own claim, kept apart from Grove's", () => {
   });
 });
 
-describe("a closed ticket the agent is only just scoping", () => {
+describe("a closed ticket the agent is only just at scope on", () => {
   // The combination readers conflate: the tracker has finished with it and Grove
   // has barely started. Both are true, and the tooltip's whole job is to let a
   // reader hold both without deciding one of them is wrong.
-  const tip = phaseTooltip(mark({ phase: "scoping", index: 0 }), ticket({ status: "closed" }));
+  const tip = phaseTooltip(mark({ phase: "scope", index: 0 }), ticket({ status: "closed" }));
 
   it("reports both claims, each with its claimant named", () => {
-    expect(tip.headline).toBe("scoping");
+    expect(tip.headline).toBe("scope");
     expect(tip.meaning).toBe(
       "The agent is reading the ticket, the code and the tests, working out what the job actually is.",
     );
@@ -200,18 +200,18 @@ describe("a closed ticket the agent is only just scoping", () => {
 
   it("never joins them into one sentence, which is what makes them read as one axis", () => {
     expect(tip.meaning).not.toContain("closed");
-    expect(tip.tracker).not.toContain("scoping");
+    expect(tip.tracker).not.toContain("scope");
   });
 
   it("carries both into the accessible name too, in the same order", () => {
-    expect(tip.aria).toBe("task phase: scoping, step 1 of 6. Gitea says this issue is closed.");
+    expect(tip.aria).toBe("task phase: scope, step 1 of 6. Gitea says this issue is closed.");
   });
 });
 
 describe("the accessible name", () => {
   it("is at least what the old native title and aria-label carried between them", () => {
     expect(phaseTooltip(mark({ blocked: true, note: "waiting on review" })).aria).toBe(
-      "task phase: blocked in implementing — waiting on review, step 3 of 6",
+      "task phase: blocked in build — waiting on review, step 3 of 6",
     );
   });
 });
@@ -254,7 +254,7 @@ describe("the rendered body", () => {
   it("stacks every claim it was given", () => {
     const html = body(phaseTooltip(mark({ blocked: true, note: "needs 498 merged" }), ticket()));
 
-    expect(html).toContain("blocked in implementing");
+    expect(html).toContain("blocked in build");
     expect(html).toContain("The agent is editing files.");
     expect(html).toContain("cannot finish this issue");
     expect(html).toContain("needs 498 merged");

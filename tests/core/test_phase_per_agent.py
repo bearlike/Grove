@@ -124,14 +124,14 @@ def test_two_root_workspaces_report_phases_independently(
     assert one.placement is Placement.ROOT
     assert Path(one.worktree_path) == Path(two.worktree_path) == tmp_repo
 
-    manager.set_phase(one.id, "implementing", "editing the parser")
-    manager.set_phase(two.id, "verifying", "running the suite")
+    manager.set_phase(one.id, "build", "editing the parser")
+    manager.set_phase(two.id, "verify", "running the suite")
 
     first = manager.phase(one.id)
     second = manager.phase(two.id)
     assert first is not None and second is not None
-    assert (first.phase, first.note) == ("implementing", "editing the parser")
-    assert (second.phase, second.note) == ("verifying", "running the suite")
+    assert (first.phase, first.note) == ("build", "editing the parser")
+    assert (second.phase, second.note) == ("verify", "running the suite")
 
 
 def test_two_root_workspaces_are_told_different_paths_at_launch(
@@ -154,9 +154,9 @@ def test_two_root_workspaces_are_told_different_paths_at_launch(
     assert Path(first).parent == tmp_repo / PhaseFile.RELDIR
     # And what the agent writes is exactly what the manager reads back.
     Path(first).parent.mkdir(parents=True, exist_ok=True)
-    Path(first).write_text('{"phase": "planning"}\n', encoding="utf-8")
+    Path(first).write_text('{"phase": "plan"}\n', encoding="utf-8")
     report = manager.phase(one.id)
-    assert report is not None and report.phase == "planning"
+    assert report is not None and report.phase == "plan"
     assert manager.phase(two.id) is None
 
 
@@ -177,13 +177,13 @@ def test_two_agents_in_one_container_report_phases_independently(
     extra = PhaseFile.key_for(state.id, agent="agent-2")
     assert primary != extra
 
-    PhaseFile.write(worktree, primary, "implementing", "the workspace's own agent")
-    PhaseFile.write(worktree, extra, "verifying", "the added agent")
+    PhaseFile.write(worktree, primary, "build", "the workspace's own agent")
+    PhaseFile.write(worktree, extra, "verify", "the added agent")
 
     own = manager.phase_for(state)
     added = PhaseFile.read(worktree, extra)
-    assert own is not None and own.phase == "implementing"
-    assert added is not None and added.phase == "verifying"
+    assert own is not None and own.phase == "build"
+    assert added is not None and added.phase == "verify"
 
 
 def test_an_added_container_agent_crosses_with_its_own_phase_path(
@@ -266,9 +266,9 @@ def test_a_nested_workspace_is_pointed_at_the_worktree_root(
     assert Path(published) == worktree / PhaseFile.RELDIR / f"{state.id}.json"
     assert Path(published).parent != Path(state.agent_cwd) / PhaseFile.RELDIR
 
-    Path(published).write_text('{"phase": "scoping"}\n', encoding="utf-8")
+    Path(published).write_text('{"phase": "scope"}\n', encoding="utf-8")
     report = manager.phase_for(state)
-    assert report is not None and report.phase == "scoping"
+    assert report is not None and report.phase == "scope"
     # And git really does exclude it there — the anchoring that chose the spot.
     assert _check_ignore(worktree, f"{PhaseFile.RELDIR}/{state.id}.json")
     assert not _check_ignore(worktree, f"services/api/{PhaseFile.RELDIR}/{state.id}.json")
@@ -282,7 +282,7 @@ def test_the_single_shared_phase_file_is_never_read(manager: WorkspaceManager) -
 
     Written from the incident's own inputs: under ROOT placement the worktree
     is the repo root, shared by every root workspace on the repo, and a stale
-    ``.grove/phase.json`` there (measured: a 42-day-old "scoping" claim) was
+    ``.grove/phase.json`` there (measured: a 42-day-old "scope" claim) was
     inherited by every new root workspace — then recorded into the durable
     history under the newcomer's id. A shared file is exactly the cwd-shaped
     inference the keyed layout replaced, so it is not a fallback either.
@@ -292,12 +292,12 @@ def test_the_single_shared_phase_file_is_never_read(manager: WorkspaceManager) -
     )
     legacy = Path(state.worktree_path) / PhaseFile.LEGACY_RELPATH
     legacy.parent.mkdir(parents=True, exist_ok=True)
-    legacy.write_text('{"phase": "delivering", "note": "from before"}\n', encoding="utf-8")
+    legacy.write_text('{"phase": "deliver", "note": "from before"}\n', encoding="utf-8")
 
     assert manager.phase_for(state) is None
-    manager.set_phase(state.id, "done")
+    manager.set_phase(state.id, "handoff")
     report = manager.phase_for(state)
-    assert report is not None and (report.phase, report.note) == ("done", None)
+    assert report is not None and (report.phase, report.note) == ("handoff", None)
 
 
 # ─── the git exclude, against real git ──────────────────────────────────────
@@ -312,7 +312,7 @@ def test_the_exclude_covers_the_per_agent_directory(manager: WorkspaceManager) -
     the way a user would hit them.
     """
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="excluded"))
-    manager.set_phase(state.id, "implementing")
+    manager.set_phase(state.id, "build")
     worktree = Path(state.worktree_path)
 
     assert _check_ignore(worktree, f"{PhaseFile.RELDIR}/{state.id}.json")
@@ -329,7 +329,7 @@ def test_pause_and_resume_survive_a_reported_phase(manager: WorkspaceManager) ->
     """``git worktree remove`` refuses while untracked files exist, so an
     unexcluded phase file breaks ``pause`` for the rest of a workspace's life."""
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="pause me"))
-    manager.set_phase(state.id, "implementing", "mid-flight")
+    manager.set_phase(state.id, "build", "mid-flight")
     assert Path(state.worktree_path).exists()
 
     paused = manager.pause(state.id)
@@ -344,13 +344,32 @@ def test_pause_and_resume_survive_a_reported_phase(manager: WorkspaceManager) ->
 
 def test_kill_succeeds_with_a_phase_file_present(manager: WorkspaceManager) -> None:
     state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="kill me"))
-    manager.set_phase(state.id, "done")
+    manager.set_phase(state.id, "handoff")
 
     manager.kill(state.id)
     assert not Path(state.worktree_path).exists()
 
 
 # ─── the key itself ─────────────────────────────────────────────────────────
+
+
+def test_legacy_phase_file_values_normalize_on_read(tmp_path: Path) -> None:
+    """Older agents keep publishing usable progress after the vocabulary rename."""
+    key = PhaseFile.key_for("workspace")
+    path = PhaseFile.path_for(tmp_path, key)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '{"phase":"implementing","tickets":{"gitea:42":{"phase":"done"}}}\n',
+        encoding="utf-8",
+    )
+
+    report = PhaseFile.read(tmp_path, key)
+
+    assert report is not None
+    assert report.phase == "build"
+    ticket = report.for_ticket("gitea:42")
+    assert ticket is not None
+    assert ticket.phase == "handoff"
 
 
 def test_the_key_is_the_workspace_plus_the_slot() -> None:

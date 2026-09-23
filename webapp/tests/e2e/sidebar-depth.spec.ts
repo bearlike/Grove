@@ -74,8 +74,10 @@ for (const theme of ["light", "dark"] as const) {
       await tree.evaluate((element) => { element.scrollTop = element.scrollHeight; });
       const end = await measure();
       // Scroll offsets round to device pixels while card bounds can be fractional.
+      // The same rounding bounds the second check: a card's fractional height
+      // (87.2px at the 80% root) can leave the gap a sub-pixel short of the fade.
       expect(Math.abs(end.bottomGap - end.bottom.height)).toBeLessThanOrEqual(1);
-      expect(end.bottom.height).toBeLessThanOrEqual(end.bottomGap);
+      expect(end.bottom.height).toBeLessThanOrEqual(end.bottomGap + 0.5);
       expect(end.frame).toEqual(start.frame);
       await page.screenshot({ path: test.info().outputPath(`sidebar-${theme}-${mobile ? "mobile" : "desktop"}.png`) });
       await context.close();

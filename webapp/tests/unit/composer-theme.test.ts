@@ -164,31 +164,35 @@ describe("the composer theme seam speaks in TOKENS", () => {
     }
   });
 
-  it("gives the shelf the QUIETER rung, as a full tuple, and owns no geometry", () => {
-    // A shelf below the bar cannot repeat the bar's `raised` rung without
-    // reading as a second composer. A rung is a TUPLE — the light ladder's steps
-    // sit exactly on the 0.05 L floor, so fill alone cannot carry the boundary.
+  it("gives the shelf the sunken rung and its OWN hairline, quieter than the bar's", () => {
+    // Two outlines, not one: the shelf takes the decorative tier and the bar
+    // above it takes a stronger mix, so the writing surface stays the anchor.
     const shelf = classBody(".composer-shelf");
     expect(shelf, ".composer-shelf is missing").not.toBeNull();
     expect(shelf).toContain("var(--surface-sunken)");
-    expect(shelf).toContain("var(--surface-edge)");
+    expect(shelf).toMatch(/border:\s*1px solid var\(--border\)/);
+    const bar = RULES.find((rule) => rule.selector === '[data-slot="composer-bar"]' && /border-color:/.test(rule.body));
+    expect(bar?.body, "the composer bar has no outline of its own").toMatch(/var\(--border-source\) 36%/);
     expect(shelf).toMatch(/border-radius:\s*var\(--radius-lg\)/);
     expect(shelf, "the inset is the caller's").not.toMatch(
       /\b(margin|padding|width|height|inset)\b/,
     );
   });
 
-  it("keeps a compliant OPAQUE focus indicator, on the bar", () => {
-    // The nested textarea gives up its own border, so §4.6 binds: the vendored
-    // `ring-ring/50` halo measures 1.65–1.89:1 on every rung and is not an
-    // indicator alone — and here it would be alone. An `outline`, so the bar
-    // cannot resize when focus arrives.
-    const focus = COMPOSER.filter(({ selector }) => selector.includes(":focus-visible"));
+  it("marks editor focus on the bar itself, one quiet tier up", () => {
+    // A focused text field always matches `:focus-visible` and both composers
+    // autofocus, so a `--ring` outline here was the bar's RESTING look — the
+    // loud perimeter. The caret carries focus; the bar's own line steps up to
+    // the control tier, an opaque token rather than an alpha. `:not(...)` is
+    // the ghost rule stepping ASIDE for focus, so only a positive match counts.
+    const focus = COMPOSER.filter(
+      ({ selector }) => selector.includes(":focus-visible") && !selector.includes(":not(:focus-visible)"),
+    );
     expect(focus.length, "the bar draws no focus indicator").toBeGreaterThan(0);
     for (const { selector, body } of focus) {
       expect(selector, selector).toContain('[data-slot="composer-bar"]');
-      expect(body, selector).toMatch(/outline:[^;]*var\(--ring\)/);
-      expect(body, `${selector} must not tint the ring`).not.toMatch(/--ring[^)]*\/|color-mix/);
+      expect(body, selector).toMatch(/border-color:\s*var\(--ring\)/);
+      expect(body, `${selector} must not resize the bar`).not.toMatch(/border(-width)?:\s*\d/);
     }
   });
 
@@ -259,59 +263,48 @@ describe("the decorative brand field is decoration and nothing else", () => {
   });
 });
 
-describe("the composer control pill", () => {
-  /** The pill's own edge declaration — the one rule that makes a control a pill. */
-  const PILL_EDGE = /border:\s*1px\s+solid\s+var\(--edge-control\)/;
+describe("the composer controls are GHOSTED", () => {
+  /** Every toolbar rule that touches a control's paint. */
+  const painted = RULES.filter(
+    ({ selector, body }) =>
+      selector.includes('[data-slot="composer-toolbar"]') &&
+      /(?:^|;|\s)(?:border(?:-color)?|background(?:-color|-image)?):/.test(body),
+  );
 
-  it("draws attach and the model trigger ONLY inside a composer toolbar", () => {
-    // SCOPE. `composer-attach` is the vendored composer's own slot and
-    // `model-selector-trigger` is a standalone element — the create dialog and
-    // the workspace Controls surface both mount one away from any composer, so
-    // an unscoped pill rule repaints a control that is not on a toolbar at all.
-    // `[data-slot="composer-toolbar"] ` is the whole seam, and it is what lets
-    // three composers share one decision.
-    const painted = RULES.filter(
+  it("paints attach and the model trigger ONLY inside a composer toolbar", () => {
+    // SCOPE. `model-selector-trigger` is a standalone element — the create
+    // dialog mounts one away from any composer, so an unscoped rule repaints a
+    // control that is not on a toolbar at all.
+    const touching = RULES.filter(
       ({ selector, body }) =>
         (selector.includes("composer-attach") || selector.includes("model-selector-trigger")) &&
         /(?:^|;|\s)(?:border|background(?:-color|-image)?):/.test(body),
     );
-    expect(painted.length, "no pill paint rules found at all").toBeGreaterThan(0);
-    for (const { selector } of painted) {
+    expect(touching.length, "no control paint rules found at all").toBeGreaterThan(0);
+    for (const { selector } of touching) {
       expect(selector, `${selector} paints a control outside a composer toolbar`).toContain(
         '[data-slot="composer-toolbar"] ',
       );
     }
   });
 
-  it("takes its gradient from the attachment card's TOKENS, never a literal", () => {
-    // TOKEN, and reuse rather than a new pair: a pill and an attachment card
-    // sit on the same bar, so a second ramp would be two answers to one
-    // question and would drift the moment either theme is retuned.
-    const gradients = RULES.filter(
-      ({ selector, body }) =>
-        selector.includes('[data-slot="composer-toolbar"]') && /background-image:/.test(body),
-    );
-    expect(gradients.length, "the pill draws no gradient").toBeGreaterThan(0);
-    for (const { selector, body } of gradients) {
-      const image = body.match(/background-image:\s*([^;]+);/)?.[1] ?? "";
-      expect(image, `${selector} does not use --attachment-card-start`).toContain(
-        "var(--attachment-card-start)",
-      );
-      expect(image, `${selector} does not use --attachment-card-end`).toContain(
-        "var(--attachment-card-end)",
-      );
-      expect(image, `${selector} writes a literal colour`).not.toMatch(
-        /#[\da-f]{3,8}|\b(?:oklch|oklab|rgb|hsl)a?\(/i,
-      );
+  it("draws no edge and no gradient on a resting control — the bar is the one line", () => {
+    expect(painted.length, "no toolbar paint rules found").toBeGreaterThan(0);
+    for (const { selector, body } of painted) {
+      expect(body, `${selector} draws a gradient`).not.toMatch(/background-image:/);
+      expect(body, `${selector} draws an edge`).not.toMatch(/border:\s*1px/);
+    }
+  });
+
+  it("leaves SEND alone — it is the one ink-filled control on the bar", () => {
+    for (const { selector } of painted) {
+      expect(selector, `${selector} repaints send`).not.toContain("composer-send");
     }
   });
 
   it("gives the open menu its elevation in BOTH themes, not just light", () => {
     // §4.3: overlay is the one rung that carries a shadow in both themes. The
-    // vendored content ships `shadow-md`, tuned for a white page — on the dark
-    // ladder it reads as the composer's own plane, so the theme boundary
-    // supplies the dark half too. The values are the design system's to change;
-    // what is pinned is that BOTH rules exist.
+    // vendored content ships `shadow-md`, tuned for a white page.
     const lit = RULES.filter(
       ({ selector, body }) =>
         selector.includes('[data-slot="model-selector-content"]') && /box-shadow:/.test(body),
@@ -324,16 +317,5 @@ describe("the composer control pill", () => {
       lit.some(({ selector }) => /^\.dark\b/.test(selector)),
       "the open model menu has no shadow in dark",
     ).toBe(true);
-  });
-
-  it("leaves SEND alone — it is the one ink-filled control on the bar", () => {
-    // A filled primary that also wore the pill's edge and gradient would be two
-    // treatments arguing on one button, and the send action would stop being
-    // the loudest thing on the toolbar. Its pointer floor above still applies.
-    const edged = RULES.filter(({ body }) => PILL_EDGE.test(body));
-    expect(edged.length, "no rule draws the pill edge").toBeGreaterThan(0);
-    for (const { selector } of edged) {
-      expect(selector, `${selector} gives send the pill treatment`).not.toContain("composer-send");
-    }
   });
 });

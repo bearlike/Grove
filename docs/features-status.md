@@ -61,7 +61,7 @@ Grove shows workspace status, agent activity, and task phase so you can see what
 - Workspace status tells you whether the worktree and session are ready.
 - Agent activity tells you whether the agent is working, waiting, blocked, idle, or in error.
 - Task phase tells you how far the agent has reached in the job.
-- A workspace can be ACTIVE while its agent is WAITING and its task phase is `verifying`.
+- A workspace can be ACTIVE while its agent is WAITING and its task phase is `verify`.
 
 ## The spectrum
 
@@ -111,19 +111,19 @@ Task phase reports job progress without requiring you to read the transcript.
 
 | Phase | Meaning |
 |---|---|
-| `scoping` | Reading the ticket and code, scoping the job. |
-| `planning` | Understands the problem, choosing an approach. |
-| `implementing` | Editing files. |
-| `verifying` | Running tests, linters, the build, reviewing its own diff. |
-| `delivering` | Committing, pushing, opening or updating the PR. |
-| `done` | Handed off. |
+| `scope` | Reading the ticket and code, scoping the job. |
+| `plan` | Understands the problem, choosing an approach. |
+| `build` | Editing files. |
+| `verify` | Running tests, linters, the build, reviewing its own diff. |
+| `deliver` | Committing, pushing, opening or updating the PR. |
+| `handoff` | Finished work transferred to the user in the form they asked for, with nothing left for the agent to do. |
 
-- An agent can return from `verifying` to `planning` when verification changes the approach.
-- No reported phase is distinct from `scoping` and means the agent has not reported yet.
+- An agent can return from `verify` to `plan` when verification changes the approach.
+- No reported phase is distinct from `scope` and means the agent has not reported yet.
 - An agent writes its phase to the file named by `GROVE_PHASE_FILE`.
 
 ```json
-{"phase": "implementing", "note": "wiring the parser"}
+{"phase": "build", "note": "wiring the parser"}
 ```
 
 - Each agent gets a separate phase file, while a missing variable uses `.grove/phase.json`.

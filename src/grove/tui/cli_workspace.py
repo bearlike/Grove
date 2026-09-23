@@ -119,7 +119,13 @@ from grove.core.contracts.activity import DashboardSnapshotView
 from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.views import WorkspaceDefaultsView, WorkspaceStateView
 from grove.core.issueops import HandoverKey, PickupEngine
-from grove.core.phase import PHASE_ORDER, PhaseFile, PhaseReport, TaskPhase, TicketClaim
+from grove.core.phase import (
+    PHASE_ORDER,
+    PhaseFile,
+    PhaseReport,
+    TicketClaim,
+    normalize_phase,
+)
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tmux import AttachInstruction
 from grove.tui.cli_complete import Complete
@@ -1329,7 +1335,7 @@ def _phase_summary(report: PhaseReport | TicketClaim | None) -> str:
 
     ``None`` renders as an explicit "(none reported)" rather than an empty
     string: an agent that has said nothing is a distinct, common answer from
-    "reported scoping", and a blank would read as the latter (``PhaseFile.read``
+    "reported scope", and a blank would read as the latter (``PhaseFile.read``
     makes the same distinction on the engine side). ``blocked`` is a flag
     beside the phase, not a replacement — appended as a trailing note so the
     reader still sees *where it stopped* alongside *that it stopped*, mirroring
@@ -1377,7 +1383,7 @@ def phase_workspace(
         "current phase.",
         autocompletion=Complete.workspaces_or_phases,
     ),
-    phase: TaskPhase | None = _PHASE_ARGUMENT,
+    phase: str | None = _PHASE_ARGUMENT,
     *,
     note: str | None = typer.Option(
         None, "--note", help="One-line note attached to the phase (<=200 chars)."
@@ -1398,18 +1404,18 @@ def phase_workspace(
     ),
 ) -> None:
     """Report or read a workspace's task-phase: how far through its task the
-    agent says it is (scoping/planning/implementing/verifying/delivering/done)
+    agent says it is (scope/plan/build/verify/deliver/handoff)
     — orthogonal to the tmux/session status `grove show` reports.
 
     The common caller is an agent sitting inside its own worktree, so a bare
     phase word is enough — the workspace is inferred from the cwd:
 
     \b
-      grove phase planning                        # cwd-inferred, no note
-      grove phase implementing --note "wiring the CLI verb"
-      grove phase a1b2 verifying                   # explicit workspace ref
-      grove phase verifying --ticket gitea:42      # scoped to one attached ticket
-      grove phase implementing --blocked           # stuck on this step
+      grove phase plan                        # cwd-inferred, no note
+      grove phase build --note "wiring the CLI verb"
+      grove phase a1b2 verify                   # explicit workspace ref
+      grove phase verify --ticket gitea:42      # scoped to one attached ticket
+      grove phase build --blocked           # stuck on this step
       grove phase                                  # show the cwd-inferred phase
       grove phase a1b2                              # show a1b2's phase
       grove phase show                              # same as bare `grove phase`
@@ -1420,32 +1426,41 @@ def phase_workspace(
         # Single-token form: `grove phase <phase>` — Click hands a lone
         # positional to the FIRST argument (`ref`), so a real phase word
         # landing there means "set, cwd-inferred", not "show workspace <word>".
-        if target_phase is None and ref is not None and ref != "show" and ref in PHASE_ORDER:
-            target_phase = ref
-            target_ref = None
+        if target_phase is None and ref is not None and ref != "show":
+            normalized_ref = normalize_phase(ref)
+            if normalized_ref in PHASE_ORDER:
+                target_phase = normalized_ref
+                target_ref = None
         elif target_ref == "show":
             target_ref = None
 
         if target_phase is not None:
+            normalized_phase = normalize_phase(target_phase)
+            if normalized_phase not in PHASE_ORDER:
+                raise GroveError(f"unknown task phase: {target_phase}")
             manager, state = resolve_or_infer_workspace(target_ref)
             written = manager.set_phase(
-                state.id, target_phase, note, blocked=blocked, ticket=ticket
+                state.id,
+                normalized_phase,
+                note,
+                blocked=blocked,
+                ticket=ticket,
             )
             _emit_phase(state, written)
             return
 
         if note is not None:
             raise GroveError(
-                "--note only applies when setting a phase, e.g. `grove phase planning --note ...`"
+                "--note only applies when setting a phase, e.g. `grove phase plan --note ...`"
             )
         if ticket is not None:
             raise GroveError(
                 "--ticket only applies when setting a phase, "
-                "e.g. `grove phase planning --ticket gitea:42`"
+                "e.g. `grove phase plan --ticket gitea:42`"
             )
         if blocked:
             raise GroveError(
-                "--blocked only applies when setting a phase, e.g. `grove phase planning --blocked`"
+                "--blocked only applies when setting a phase, e.g. `grove phase plan --blocked`"
             )
         manager, state = resolve_or_infer_workspace(target_ref)
         current = manager.phase(state.id)
@@ -1591,7 +1606,8 @@ def tickets_attach(
     made it. Provider and issue-vs-PR are both INFERRED from ``ref``; you never
     need to know or guess which tracker the repo uses. Idempotent — attaching
     the same ticket again, or re-attaching to correct a wrong kind, is a no-op
-    / in-place fix, never a duplicate.
+    / in-place fix, never a duplicate. While the workspace runs, its agent is
+    mailed whenever a person changes the ticket.
 
     \b
       grove tickets attach https://github.com/acme/api/pull/42

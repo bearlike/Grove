@@ -45,12 +45,12 @@ const WORKSPACE_STATUSES: readonly WorkspaceStatus[] = [
 ];
 
 const TASK_PHASES: readonly TaskPhase[] = [
-  "scoping",
-  "planning",
-  "implementing",
-  "verifying",
-  "delivering",
-  "done",
+  "scope",
+  "plan",
+  "build",
+  "verify",
+  "deliver",
+  "handoff",
 ];
 
 /** UI labels are sentence case; state labels never use enum spelling or title case. */

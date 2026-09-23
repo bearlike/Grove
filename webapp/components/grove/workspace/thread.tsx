@@ -165,11 +165,9 @@
  *      exposes no `a` — and because fixing the anchor per renderer would still
  *      miss every card. See `./new-tab-links` for the whole argument.
  *
- *  14. COMPOSER DRAFTS RESTORE THROUGH THE RUNTIME after mount. The browser
- *      preserves words and the file list per tab, but never turns saved file
- *      metadata into a staged byte upload: restored rows explicitly ask for a
- *      re-add. `WorkspaceComposer` takes the workspace key rather than finding
- *      it itself, because this port is also the read-only catalog's fallback.
+ *  14. THE COMPOSER IS THE CALLER'S. Upstream mounts its own `Composer`; the
+ *      workspace passes `workspace/composer`'s surface through the `composer`
+ *      prop, and every other caller is read-only, so none is mounted there.
  *
  * `components/assistant-ui/thread.tsx` stays in place, unmodified: it is the
  * oracle this file is diffed against. Nothing renders it any more — the
@@ -177,7 +175,6 @@
  * rendered one way, which is what delta 9 exists to make safe.
  */
 
-import { ComposerAttachButton } from "@/components/elements/composer";
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import {
@@ -199,45 +196,28 @@ import { cn } from "@/lib/utils";
 import {
   AuiIf,
   type AssistantState,
-  ComposerPrimitive,
   ErrorPrimitive,
   groupPartByType,
-  useAui,
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
   type ToolCallMessagePartComponent,
   useAuiState,
 } from "@assistant-ui/react";
-import { ArrowDownIcon, MicIcon, SquareIcon } from "lucide-react";
+import { ArrowDownIcon } from "lucide-react";
 import {
   createContext,
-  useCallback,
   useContext,
-  useEffect,
-  useMemo,
-  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
   type ReactNode,
-  type RefObject,
 } from "react";
 
-import {
-  ComposerActions,
-  ComposerBody,
-  ComposerSend,
-  ComposerToolbar,
-} from "@/components/grove/composer";
-import { useWorkspaceOnboardingDemands } from "@/components/grove/onboarding";
-import { ComposerAttachmentRows, MessageAttachmentRows } from "./composer-attachment";
+import { MessageAttachmentRows } from "./composer-attachment";
 import { NewTabLinks } from "./new-tab-links";
 import { THREAD_INSET, THREAD_WIDTH } from "./thread-width";
 
-/** The tour's one ask of the composer. A module constant so the hook's deps stay stable. */
-const TOUR_KINDS = ["workspace-prompt"] as const;
-import { flushComposerDraft, useComposerDraft } from "./use-composer-draft";
 import {
   clampStyle,
   showsToggle,
@@ -350,13 +330,6 @@ const ThreadRoot: FC<{
       className="aui-root aui-thread-root bg-background @container relative isolate flex h-full flex-col overflow-hidden"
       style={{
         ["--thread-max-width" as string]: maxWidth,
-        ["--composer-bg" as string]:
-          "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
-        // GROVE DELTA 15 — theme radius instead of upstream's inline 1.5rem.
-        // The shell's 1px border plus 11px padding gives the send control its
-        // measured 12px inset. Attachment corners have their own cell role.
-        ["--composer-radius" as string]: "var(--radius-lg)",
-        ["--composer-padding" as string]: "11px",
       }}
     >
       {/* GROVE DELTA 7 — chrome depth stays inside this pane. Explicit stacking
@@ -446,7 +419,7 @@ const ThreadRoot: FC<{
               Keyed off the capability rather than a `composer?: boolean`
               prop so no caller can forget it. */}
           <AuiIf condition={(s) => !s.thread.isDisabled}>
-            {composer ?? <Composer />}
+            {composer}
           </AuiIf>
           <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
             <ThreadSuggestions />
@@ -515,254 +488,6 @@ const ThreadSuggestionItem: FC = () => {
         </Button>
       </SuggestionPrimitive.Trigger>
     </div>
-  );
-};
-
-export function WorkspaceComposer({
-  inputRef,
-  toolbar,
-  notice,
-  expanded = false,
-  draftKey,
-}: {
-  readonly inputRef?: RefObject<HTMLTextAreaElement | null>;
-  /** Workspace-only controls composed at the reply composer's native toolbar seam. */
-  readonly toolbar?: ReactNode;
-  /** A session-state explanation immediately above the next send action. */
-  readonly notice?: string | null;
-  /** The dialog moves this same composer and lets its editor use the available height. */
-  readonly expanded?: boolean;
-  /** The workspace owns draft identity; the reusable port never assumes one. */
-  readonly draftKey?: string;
-}): ReactNode {
-  const aui = useAui();
-  const composer = aui.composer;
-  const text = useAuiState((state) => state.composer.text);
-  const attachments = useAuiState((state) => state.composer.attachments);
-  // Names a previous visit staged and this one cannot: see `onRestore`. It
-  // clears the moment a file of that name is staged again, so re-adding the
-  // file is what dismisses the reminder rather than a separate ✕.
-  const [pendingReAdd, setPendingReAdd] = useState<readonly string[]>([]);
-  const staged = new Set(attachments.map(({ name }) => name));
-  const outstanding = pendingReAdd.filter((name) => !staged.has(name));
-  const savedAttachments = useMemo(
-    () =>
-      attachments.map((attachment) => ({
-        name: attachment.name,
-        contentType: attachment.contentType ?? "application/octet-stream",
-      })),
-    [attachments],
-  );
-  useComposerDraft({
-    storageKey: draftKey ?? "",
-    draft: {
-      text,
-      attachments: [
-        ...savedAttachments,
-        // Kept in the draft so the reminder survives a SECOND navigation; a
-        // reader who did not re-add the file the first time has not changed
-        // their mind about wanting it.
-        ...outstanding.map((name) => ({
-          name,
-          contentType: "application/octet-stream",
-          pendingReAdd: true,
-        })),
-      ],
-    },
-    // TEXT GOES BACK INTO THE RUNTIME; ATTACHMENTS DO NOT, and that asymmetry
-    // is the honest one rather than an omission.
-    //
-    // A browser cannot recover a local file's bytes after a navigation, so a
-    // restored attachment is a REMINDER to re-add it — and pushing a
-    // zero-byte entry into the composer's own store to represent that says the
-    // opposite: it would render as staged, and send a message promising a file
-    // that does not exist. It also does not work: the runtime outlives this
-    // component (a pane switch or the expand dialog remounts the composer while
-    // the store keeps its state), so re-adding on every mount hands
-    // assistant-ui a duplicate id and it throws "Duplicate key … in
-    // useResources", taking the whole workspace page down.
-    //
-    // So the names ride beside the editor as Grove's own row (see
-    // `pendingReAdd` below) and the store holds only what is genuinely staged.
-    // The text guard is the same rule one field over: only restore into an
-    // editor the reader has not already started typing in.
-    onRestore: ({ text: restoredText, attachments: restoredAttachments }) => {
-      if (!draftKey) return;
-      if (!aui.composer.getState().text) composer.setText(restoredText);
-      setPendingReAdd(restoredAttachments.map(({ name }) => name));
-    },
-    onAcknowledged: () => setPendingReAdd([]),
-  });
-
-  // The onboarding tour writes its diagram query here, through the same
-  // `setText` the draft restore uses. Only the inline mount takes it, so the
-  // expand dialog's copy of this component cannot write it a second time.
-  useWorkspaceOnboardingDemands(
-    TOUR_KINDS,
-    useCallback(
-      (demand) => {
-        if (draftKey && !expanded) composer.setText(demand.text);
-      },
-      [composer, draftKey, expanded],
-    ),
-  );
-
-  useEffect(() => {
-    setPendingReAdd((current) => {
-      const dismissed = current.filter((name) =>
-        savedAttachments.some((attachment) => attachment.name === name),
-      );
-      if (dismissed.length === 0) return current;
-      const next = current.filter((name) => !dismissed.includes(name));
-      // A re-added file dismisses its own reminder immediately, ahead of the
-      // debounce: without this, navigating within that window would restore a
-      // reminder for a file that is once again genuinely staged.
-      if (draftKey) {
-        flushComposerDraft(draftKey, {
-          text: aui.composer.getState().text,
-          attachments: [
-            ...savedAttachments,
-            ...next.map((name) => ({
-              name,
-              contentType: "application/octet-stream",
-              pendingReAdd: true,
-            })),
-          ],
-        });
-      }
-      return next;
-    });
-  }, [aui, draftKey, savedAttachments]);
-
-
-  return (
-    <ComposerPrimitive.Root
-      className={cn(
-        "aui-composer-root relative flex w-full flex-col",
-        expanded && "min-h-0 flex-1",
-      )}
-    >
-      {/* `asChild` ONTO the shared bar, never a wrapper around it: the dropzone
-          sets `data-dragging="true"` on whatever element it renders, and the
-          vendored bar is the element the theme layer can show that on. A wrapper
-          would make the drop target a different box from the one that reacts. */}
-      <ComposerPrimitive.AttachmentDropzone asChild>
-        <ComposerBody className={cn("relative", expanded && "min-h-0 flex-1")}>
-          {/* GROVE DELTA 12 — `File` rows in place of the vendored tile grid. */}
-          <ComposerAttachmentRows />
-          {outstanding.length > 0 && (
-            <p
-              role="status"
-              className="px-2.5 text-xs text-content-tertiary"
-              data-testid="composer-pending-re-add"
-            >
-              Re-add to send:{" "}
-              <span className="text-content-secondary">{outstanding.join(", ")}</span>
-            </p>
-          )}
-          {notice ? (
-            <p role="status" className="px-2.5 text-xs text-content-secondary" data-testid="composer-session-ended">
-              {notice}
-            </p>
-          ) : null}
-          <ComposerPrimitive.Input
-            addAttachmentOnPaste
-            ref={inputRef}
-            placeholder="Send a message..."
-            // The VENDORED slot, not just the `aui-` class: `Input` spreads
-            // native textarea props, so the theme's shared focus and placeholder
-            // rules — which key on `[data-slot=composer-input]` — reach this
-            // editor exactly as they reach the landing brief's.
-            data-slot="composer-input"
-            className={cn(
-              "aui-composer-input caret-primary placeholder:text-muted-foreground/80 max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none",
-              expanded && "max-h-none min-h-0 flex-1",
-            )}
-            rows={1}
-            autoFocus
-            enterKeyHint="send"
-            aria-label="Message input"
-          />
-          <ComposerAction>{toolbar}</ComposerAction>
-        </ComposerBody>
-      </ComposerPrimitive.AttachmentDropzone>
-    </ComposerPrimitive.Root>
-  );
-}
-
-const Composer: FC = () => <WorkspaceComposer />;
-
-/**
- * The reply composer's action row: attach on the LEFT, everything that answers
- * "how will this be sent" grouped against the send button on the right.
- *
- * Both Grove composers read that way round, and the row is the vendored
- * `ComposerToolbar`'s `justify-between` plus two `ComposerActions` groups rather
- * than three hand-rolled flex divs. `items-end` rather than the vendored
- * `items-center` is the one delta: the left group can wrap on a narrow pane and
- * Send must stay in the composer's bottom-right corner, where it is on every
- * other surface, instead of floating against the middle of a two-line group.
- */
-const ComposerAction: FC<PropsWithChildren> = ({ children }) => {
-  const canSend = useAuiState((state) => state.composer.canSend);
-  return (
-    <ComposerToolbar className="aui-composer-action-wrapper relative items-end gap-1.5">
-      <ComposerActions className="shrink-0">
-        <ComposerPrimitive.AddAttachment asChild>
-          <ComposerAttachButton aria-label="Add Attachment" />
-        </ComposerPrimitive.AddAttachment>
-      </ComposerActions>
-      <ComposerActions className="min-w-0 justify-end gap-1.5">
-        {children}
-        <AuiIf condition={(s) => s.thread.capabilities.dictation}>
-          <AuiIf condition={(s) => s.composer.dictation == null}>
-            <ComposerPrimitive.Dictate asChild>
-              <TooltipIconButton
-                tooltip="Voice input"
-                side="bottom"
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="aui-composer-dictate size-7 rounded-full"
-                aria-label="Start voice input"
-              >
-                <MicIcon className="aui-composer-dictate-icon size-4" />
-              </TooltipIconButton>
-            </ComposerPrimitive.Dictate>
-          </AuiIf>
-          <AuiIf condition={(s) => s.composer.dictation != null}>
-            <ComposerPrimitive.StopDictation asChild>
-              <TooltipIconButton
-                tooltip="Stop dictation"
-                side="bottom"
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="aui-composer-stop-dictation text-destructive size-7 rounded-full"
-                aria-label="Stop voice input"
-              >
-                <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current" />
-              </TooltipIconButton>
-            </ComposerPrimitive.StopDictation>
-          </AuiIf>
-        </AuiIf>
-        <AuiIf condition={(s) => !s.thread.isRunning}>
-          <ComposerPrimitive.Send asChild>
-            <ComposerSend
-              streaming={false}
-              idle={!canSend}
-              className="aui-composer-send size-[28px]"
-              title="Send message"
-            />
-          </ComposerPrimitive.Send>
-        </AuiIf>
-        <AuiIf condition={(s) => s.thread.isRunning}>
-          <ComposerPrimitive.Cancel asChild>
-            <ComposerSend streaming idle={false} className="aui-composer-cancel size-[28px]" title="Stop generating" />
-          </ComposerPrimitive.Cancel>
-        </AuiIf>
-      </ComposerActions>
-    </ComposerToolbar>
   );
 };
 

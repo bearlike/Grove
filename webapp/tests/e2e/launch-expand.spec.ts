@@ -1,4 +1,5 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { barInset } from "./sharp-surface-probe";
 
 /**
  * A click that lands before React attaches its handler is silently dropped —
@@ -51,8 +52,11 @@ test.describe("launch composer expand", () => {
       const shell = await page.locator('[data-slot="composer-bar"]').boundingBox();
       expect(send!.width).toBeCloseTo(28, 0);
       expect(send!.height).toBeCloseTo(28, 0);
-      expect(shell!.x + shell!.width - send!.x - send!.width).toBeCloseTo(12, 0);
-      expect(shell!.y + shell!.height - send!.y - send!.height).toBeCloseTo(12, 0);
+      // Send sits IN the bar's corner: its own padding plus its border, the
+      // same on both edges — the vendored geometry, not a Grove constant.
+      const inset = await barInset(page);
+      expect(shell!.x + shell!.width - send!.x - send!.width).toBeCloseTo(inset, 0);
+      expect(shell!.y + shell!.height - send!.y - send!.height).toBeCloseTo(inset, 0);
     };
     await assertSendGeometry();
 

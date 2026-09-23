@@ -121,6 +121,7 @@ from grove.core.contracts.views import (
     WorkspaceStateView,
     attach_instruction_view,
 )
+from grove.core.contracts.watches import TicketPredicate
 from grove.core.errors import (
     AgentSessionNotFound,
     BranchAlreadyCheckedOut,
@@ -149,6 +150,8 @@ from grove.core.errors import (
 )
 from grove.core.gallery import DiagramGallery, GalleryItem
 from grove.core.issueops import AssigneePoller, IssueOpsEngine, TicketStatusPublisher
+from grove.core.loaded_source import LoadedSource
+from grove.core.mailboxes import MailboxDelivery
 from grove.core.manager import WorkspaceManager
 from grove.core.model_catalog import model_options
 from grove.core.native_owners import NativeOwnerRegistry
@@ -166,7 +169,22 @@ from grove.core.sessions import SessionCatalog, SessionExplorer, SessionListing
 from grove.core.share_policy import SharePolicy, SharePolicyStore
 from grove.core.store import JsonWorkspaceStore
 from grove.core.telemetry.project import LangfuseProject
+from grove.core.tickets.provider import TicketProvider
+from grove.core.tickets.reads import TicketReads
+from grove.core.tickets.registry import TicketProviderRegistry
 from grove.core.trace_forwarder import TraceForwarder
+from grove.core.watches import (
+    CiWatcher,
+    CommandWatcher,
+    MailboxWatchCourier,
+    TicketSubscriptions,
+    TicketWatcher,
+    TimerWatcher,
+    WatcherRegistry,
+    WatchLog,
+    WatchScheduler,
+)
+from grove.core.watches.ticket import ProviderLookup
 from grove.core.workspace import WorkspaceState
 from grove.core.workspace_history import WorkspaceHistoryStore
 from grove.daemon._audience import _PollAudience
@@ -195,6 +213,7 @@ from grove.daemon.mailbox_socket import MailboxSocket
 from grove.daemon.mailboxes import MailboxRouter, OwnerSteerClient
 from grove.daemon.repos import RepoRegistry
 from grove.daemon.usage import _default_usage_service, build_usage_router
+from grove.daemon.watches import WatchRouter
 
 if TYPE_CHECKING:
     # Type-only: the real import is deferred into `build_app`, gated on
@@ -264,6 +283,7 @@ def _build_whoami(
     started_at: datetime,
     release: ReleaseStatus,
     *,
+    restart_required: bool = False,
     langfuse_host: str | None = None,
     langfuse_project_id: str | None = None,
 ) -> WhoamiView:
@@ -289,6 +309,7 @@ def _build_whoami(
         python_version=platform.python_version(),
         latest_version=release.latest,
         update_available=release.update_available,
+        restart_required=restart_required,
         langfuse_host=langfuse_host,
         langfuse_project_id=langfuse_project_id,
     )
@@ -495,6 +516,42 @@ def _parse_last_event_id(raw: str | None) -> int | None:
         return None
 
 
+def _workspace_lookup(registry: RepoRegistry) -> Callable[[str], WorkspaceState | None]:
+    """Adapt the registry's raising resolver to the watcher's optional one.
+
+    `resolve_workspace` raises for a ref that names nothing, which is right for
+    a user-typed verb and wrong here: a command watch outlives its workspace by
+    design, and a killed one is an ordinary outcome the watcher reports rather
+    than an error that would abort the whole tick.
+    """
+
+    def lookup(workspace_id: str) -> WorkspaceState | None:
+        try:
+            _, state = registry.resolve_workspace(workspace_id)
+        except GroveError:
+            return None
+        return state
+
+    return lookup
+
+
+def _ticket_provider_lookup(registry: RepoRegistry) -> ProviderLookup:
+    """Resolve a ticket watch's provider through its workspace's own repo cascade.
+
+    ``None`` once the workspace is gone or its repo no longer enables that
+    tracker. The watcher reads that as "cannot tell", never as a change.
+    """
+
+    def lookup(predicate: TicketPredicate) -> TicketProvider | None:
+        try:
+            manager, _ = registry.resolve_workspace(predicate.workspace_id)
+            return manager.ticket_providers.get(predicate.provider)
+        except GroveError:
+            return None
+
+    return lookup
+
+
 def build_app(  # noqa: PLR0915
     *,
     cfg: GroveConfig,
@@ -507,6 +564,7 @@ def build_app(  # noqa: PLR0915
     issue_ops_engine: IssueOpsEngine | None = None,
     status_publisher: TicketStatusPublisher | None = None,
     assignee_poller: AssigneePoller | None = None,
+    loaded_source: LoadedSource | None = None,
 ) -> FastAPI:
     """Construct the daemon's FastAPI app.
 
@@ -522,6 +580,8 @@ def build_app(  # noqa: PLR0915
     lifespan bind/close wiring, mirroring ``notification_broker``.
     ``release_checker`` defaults to a real GitHub-backed one — tests inject one
     with a fake fetcher so ``/whoami`` never touches the network.
+    ``loaded_source`` defaults to a snapshot of the package taken here, at
+    build time — tests inject one over a scratch tree to move its files.
 
     The statement count grows linearly with route count (this is FastAPI's
     factory pattern); the function still has one job — register routes —
@@ -576,6 +636,10 @@ def build_app(  # noqa: PLR0915
     # be N x refs upstream requests — an amplification vector pointed at a third
     # party, driven by callers Grove never authenticated.
     public_ticket_memo = _PublicTicketMemo()
+    # ONE ticket-read cache for the daemon: the sticky publisher and the ticket
+    # watcher read the same tickets, so sharing it is what holds each ticket to
+    # one forge read per minute however many consumers ask.
+    ticket_reads = TicketReads()
     activity_runtime = ActivityRuntime(activity_service, limits=cfg.activity_admission)
     activity_sources = ActivitySources(activity_runtime, store)
     runtime_sources = RuntimeSources(
@@ -601,6 +665,7 @@ def build_app(  # noqa: PLR0915
             transcript_probe=lambda kind, cwd, session_id: (
                 catalog.find(kind=kind, cwd=cwd, session_id=session_id) is not None
             ),
+            reads=ticket_reads,
         )
     # The issue-ops router: resolves an event's repo through the SAME
     # per-repo registry every other route dispatches on, so a forwarded comment
@@ -646,8 +711,45 @@ def build_app(  # noqa: PLR0915
     )
     if notification_broker is None:
         notification_broker = NotificationBroker.from_config(cfg.notifications)
+    # The watch scheduler is NOT an activity-bus subscriber: a watch is woken by
+    # its own deadline rather than by anything a workspace does, so it owns a
+    # heap instead of a subscription. It is constructed here for the lifespan's
+    # sake and delivers through the same MailboxDelivery the mailbox routes use,
+    # so a callback reaches every session kind without a second transport.
+    # The CI watcher resolves its provider from the DAEMON-wide ticket config
+    # rather than a repo's cascade: a watch names its forge, owner and repo
+    # explicitly, so there is no repo in hand to resolve a cascade against at
+    # probe time — and the credential a forge read needs is the same one at
+    # either scope.
+    watch_scheduler = WatchScheduler(
+        log=WatchLog(),
+        watchers=WatcherRegistry(
+            [
+                TimerWatcher(),
+                CiWatcher(TicketProviderRegistry(cfg.tickets)),
+                # A command runs in the workspace that registered it, so the
+                # watcher is handed a lookup rather than a manager — it must not
+                # import the engine's orchestration to answer where to run. A
+                # workspace that has since been killed resolves to None, which
+                # the watcher settles honestly rather than retrying forever.
+                CommandWatcher(_workspace_lookup(registry)),
+                # A ticket is named the way its workspace names it, so the
+                # provider comes from THAT workspace's repo cascade.
+                TicketWatcher(_ticket_provider_lookup(registry), ticket_reads),
+            ]
+        ),
+        deliver=MailboxWatchCourier(MailboxDelivery(registry)),
+    )
+    # Standing ticket watches follow each running workspace's attached tickets.
+    ticket_subscriptions = TicketSubscriptions(
+        scheduler=watch_scheduler, workspaces=_workspace_lookup(registry)
+    )
     if release_checker is None:
         release_checker = ReleaseChecker()
+    # Taken once, as the process boots: the code this daemon will run for its
+    # whole life, against which every later edit on disk is compared.
+    if loaded_source is None:
+        loaded_source = LoadedSource.capture()
     # One per daemon, like the release checker: the cache is what keeps a
     # whoami off Langfuse's API on every call.
     langfuse_projects = LangfuseProject()
@@ -744,6 +846,19 @@ def build_app(  # noqa: PLR0915
             notification_broker.bind(activity_service.subscribe)
             audience.join()
             app.state.notification_broker = notification_broker
+        # Re-arms every durable watch and begins waiting. A restart must not
+        # lose a callback an agent has already halted waiting for.
+        await watch_scheduler.start()
+        app.state.watch_scheduler = watch_scheduler
+        # Ticket watches follow the activity bus (attach, detach, pause, kill,
+        # from any process); the start-up pass repairs whatever changed while
+        # the daemon was down. No `audience.join()`: these edges arrive by
+        # invalidation, not by the fleet poll. Off the loop: store + log reads.
+        ticket_subscriptions.bind(activity_service.subscribe)
+        await asyncio.to_thread(
+            ticket_subscriptions.reconcile_all,
+            [state.id for state in registry.workspace_states()],
+        )
         # The issue-ops status publisher is the bus's third subscriber
         # (alongside the SSE hub + notification broker) — same discipline: bind
         # after `sse_hub.start`, close on shutdown. None when issue-ops is off.
@@ -812,6 +927,8 @@ def build_app(  # noqa: PLR0915
             await _aclose_best_effort("activity sources", activity_sources.close)
             await _aclose_best_effort("runtime sources", runtime_sources.close)
             await _aclose_best_effort("activity runtime", activity_runtime.close)
+            _close_best_effort("ticket watches", ticket_subscriptions.close)
+            _close_best_effort("watch scheduler", watch_scheduler.close)
             if notification_broker is not None:
                 _close_best_effort("notification broker", notification_broker.close)
             if status_publisher is not None:
@@ -877,6 +994,7 @@ def build_app(  # noqa: PLR0915
     # per-route auth decisions stay local to ``build_auth_router``.
     app.include_router(build_auth_router(auth_store=auth_store, require_session=require_session))
     app.include_router(mailbox_router.router())
+    app.include_router(WatchRouter(scheduler=watch_scheduler, auth_dep=require_session).router())
 
     # The historical usage-audit router — bounded reads over the SQLite cache,
     # the past-tense sibling of `/activity` + `/events` above. Auth is applied
@@ -1514,6 +1632,7 @@ def build_app(  # noqa: PLR0915
         rides the executor too.
         """
         release = await asyncio.to_thread(release_checker.check)
+        restart_required = await asyncio.to_thread(loaded_source.changed)
         langfuse_host = await asyncio.to_thread(_resolve_langfuse_host, cfg)
         langfuse_project = await asyncio.to_thread(
             _resolve_langfuse_project, cfg, langfuse_projects
@@ -1521,6 +1640,7 @@ def build_app(  # noqa: PLR0915
         return _build_whoami(
             app.state.started_at,
             release,
+            restart_required=restart_required,
             langfuse_host=langfuse_host,
             langfuse_project_id=langfuse_project,
         )
@@ -3107,7 +3227,7 @@ def build_app(  # noqa: PLR0915
         """The workspace's current task-phase claim.
 
         ``null`` (200, never 404) means the agent has not reported one yet —
-        a real, distinct answer from "phase=scoping", not an error: a fleet
+        a real, distinct answer from "phase=scope", not an error: a fleet
         watcher needs to tell "hasn't reported" from "is at step zero". Runs
         in the executor: ``WorkspaceManager.phase`` reads the phase file.
         """

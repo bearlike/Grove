@@ -5,7 +5,7 @@ const read = (path: string): string => readFileSync(new URL(`../../${path}`, imp
 
 describe("clipboard files reuse each composer's existing attachment path", () => {
   it("lets assistant-ui own workspace paste rather than uploading twice", () => {
-    const source = read("components/grove/workspace/thread.tsx");
+    const source = read("components/grove/workspace/composer.tsx");
     expect(source).toMatch(/<ComposerPrimitive\.Input\s+addAttachmentOnPaste/);
     expect(source).not.toContain("onPaste=");
   });

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from grove import __version__ as GROVE_VERSION
 from grove.core.config import GroveConfig
+from grove.core.loaded_source import LoadedSource
 from grove.core.release import ReleaseChecker
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon import build_app
@@ -120,3 +122,27 @@ def test_whoami_no_update_when_remote_not_newer(tmp_state_dir: Path) -> None:
         body = client.get("/whoami").json()
     assert body["latest_version"] == GROVE_VERSION
     assert body["update_available"] is False
+
+
+def test_whoami_asks_for_a_restart_once_the_code_on_disk_moves(
+    tmp_state_dir: Path, tmp_path: Path
+) -> None:
+    """The daemon keeps running what it booted with; this says when that is stale.
+
+    Both answers are read from ONE app, before and after an edit, so a
+    `restart_required` hard-wired to either value fails one of them.
+    """
+    package = tmp_path / "pkg"
+    package.mkdir()
+    module = package / "mod.py"
+    module.write_text("x = 1\n")
+    os.utime(module, ns=(1_000_000_000, 1_000_000_000))
+    app = build_app(
+        cfg=daemon_test_config(),
+        store=JsonWorkspaceStore(),
+        loaded_source=LoadedSource.capture(package),
+    )
+    with TestClient(app) as client:
+        assert client.get("/whoami").json()["restart_required"] is False
+        os.utime(module, ns=(2_000_000_000, 2_000_000_000))
+        assert client.get("/whoami").json()["restart_required"] is True

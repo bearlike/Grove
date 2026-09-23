@@ -29,7 +29,7 @@ const WORKSPACES = {
     title: "Console release complete",
     branch: "release/console",
     needsAttention: false,
-    phase: "done" as const,
+    phase: "handoff" as const,
   },
   consoleBlocked: {
     id: "sidebar-console-blocked",
@@ -38,7 +38,7 @@ const WORKSPACES = {
     // a permanently growing metadata slot.
     branch: "main",
     needsAttention: true,
-    phase: "implementing" as const,
+    phase: "build" as const,
   },
   api: {
     id: "sidebar-api-attention-only",
@@ -57,7 +57,7 @@ function phaseFor(spec: WorkspaceSpec): PhaseView | null {
     phase: spec.phase,
     note: spec.id === WORKSPACES.consoleBlocked.id ? "Awaiting approval" : null,
     updated_at: new Date().toISOString(),
-    index: spec.phase === "done" ? 5 : spec.phase === "implementing" ? 2 : 3,
+    index: spec.phase === "handoff" ? 5 : spec.phase === "build" ? 2 : 3,
     total: 6,
     blocked: spec.id === WORKSPACES.consoleBlocked.id,
     tickets: [],
@@ -146,6 +146,7 @@ function snapshot(): DashboardSnapshotView {
 
 /** A snapshot route alone is racy: the fake event source sends its own snapshot. */
 async function useSnapshot(page: Page): Promise<void> {
+  await page.addInitScript(() => localStorage.setItem("grove.onboarding.seen", "true"));
   await page.route("**/api/grove/activity", (route) => route.fulfill({ json: snapshot() }));
   await page.route("**/api/grove/events", (route) =>
     route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }),
@@ -198,7 +199,7 @@ test.describe("native sidebar project context", () => {
       const search = page.getByTestId("sidebar-search-trigger");
       await page.getByTestId("shell-header").click({ position: { x: 250, y: 15 } });
       await page.mouse.move(900, 500);
-      for (const id of ["sidebar-search-trigger", "fleet-create-rail", "fleet-filter-trigger", "marquee-pause", "shell-sidebar-toggle"]) {
+      for (const id of ["fleet-create-rail", "fleet-filter-trigger", "marquee-pause"]) {
         const control = page.getByTestId(id);
         await expect(control).toHaveCSS("box-shadow", "none");
         const quietEdge = await control.evaluate(el => {
@@ -210,6 +211,11 @@ test.describe("native sidebar project context", () => {
           return color;
         });
         await expect(control).toHaveCSS("border-top-color", quietEdge);
+      }
+      // Header-band icon controls rest with NO visible edge; focus still rings.
+      for (const id of ["sidebar-search-trigger", "shell-sidebar-toggle"]) {
+        await expect(page.getByTestId(id)).toHaveCSS("box-shadow", "none");
+        await expect(page.getByTestId(id)).toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
       }
       await page.locator('aside').getByRole("link", { name: "Grove", exact: true }).focus();
       await page.keyboard.press("Tab");
@@ -227,7 +233,7 @@ test.describe("native sidebar project context", () => {
     }
   });
 
-  test("keeps active working pixels distinct against the dark card header", async ({ page }) => {
+  test("keeps active working pixels distinct against the dark card body", async ({ page }) => {
     await useSnapshot(page);
     await page.goto("/");
     await expect(railRows(page)).toHaveCount(4);
@@ -238,8 +244,9 @@ test.describe("native sidebar project context", () => {
     const mark = page.locator('aside [data-testid="working-mark"]').first();
     await expect(mark).toBeVisible();
     const ratios = await mark.evaluate((loader) => {
-      const header = loader.closest("header")!;
-      const css = getComputedStyle(header);
+      // The title line no longer has a header band; the mark lands on the
+      // raised card body, so that rung is the ground it must clear.
+      const css = getComputedStyle(loader.closest("[data-slot='card']")!);
       const pixel = loader.querySelector(".opacity-90")!;
       const canvas = document.createElement("canvas").getContext("2d")!;
       const paint = (background: string, foreground?: string) => {
@@ -257,7 +264,7 @@ test.describe("native sidebar project context", () => {
           return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
         }).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
       };
-      return ["--surface-header-start", "--surface-header-end"].map(token => {
+      return ["--surface-raised"].map(token => {
         const background = css.getPropertyValue(token);
         const ground = paint(background);
         const signal = paint(background, getComputedStyle(pixel).backgroundColor);
@@ -374,14 +381,16 @@ test.describe("native sidebar project context", () => {
     await useSnapshot(page);
     await page.goto(`/w/${BASE_WORKSPACE_ID}`);
     await expect(railRows(page)).toHaveCount(4);
+    // The padding sits on the link that holds the agent tile and the lines
+    // beside it (`p-3`), so the tile and the text share one inset.
     const cards = await railRows(page).evaluateAll((rows) => rows.map((row) => {
-      const body = row.querySelector('[data-testid="rail-metadata"]')!.parentElement!;
+      const body = row.querySelector("a")!;
       const style = getComputedStyle(body);
       return {
         selected: row.getAttribute("data-selected") === "true",
         top: Number.parseFloat(style.paddingTop),
         bottom: Number.parseFloat(style.paddingBottom),
-        expected: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) / 2,
+        expected: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 0.75,
       };
     }));
     expect(cards.some((card) => card.selected)).toBe(true);
@@ -600,7 +609,9 @@ test.describe("native sidebar project context", () => {
       },
     );
 
-    expect(geometry.blocked.box!.height).toBeLessThanOrEqual(78);
+    // Tile-and-three-lines anatomy: 87px measured at the 80% root. The ceiling
+    // catches a fourth line or a reserved slot, not the tile's own height.
+    expect(geometry.blocked.box!.height).toBeLessThanOrEqual(92);
     expect(geometry.blocked.clipped).toBe(false);
     expect(geometry.blocked.titleFont).toBeCloseTo(11.2, 1);
     expect(geometry.blocked.metadataFont).toBeCloseTo(10.4, 1);
@@ -625,8 +636,8 @@ test.describe("native sidebar project context", () => {
     expect(geometry.shortBranchGaps.attentionToPhase).toBeGreaterThanOrEqual(4);
     expect(geometry.shortBranchGaps.attentionToPhase).toBeLessThanOrEqual(10);
     expect(geometry.shortBranchGaps.branchWidth).toBeLessThan(48);
-    expect(geometry.donePhaseText).toMatch(/done/i);
-    expect(geometry.blockedPhaseText).toMatch(/implementing/i);
+    expect(geometry.donePhaseText).toMatch(/handoff/i);
+    expect(geometry.blockedPhaseText).toMatch(/build/i);
     for (const quantity of geometry.quantities) expect(quantity.clipped, quantity.testId).toBe(false);
   });
 

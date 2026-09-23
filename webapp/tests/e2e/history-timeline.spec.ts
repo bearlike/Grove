@@ -16,9 +16,9 @@ const LOCAL_DAY = "2026-09-14";
 const PREVIOUS_LOCAL_DAY = "2026-09-13";
 
 const title = {
-  done: "Reported Done",
-  delivering: "Reported Delivering",
-  verifying: "Reported Verifying",
+  done: "Reported Handoff",
+  delivering: "Reported Deliver",
+  verifying: "Reported Verify",
   renamed: "Name recorded",
   ticket: "Ticket first recorded",
 } as const;
@@ -71,28 +71,28 @@ const mixedHistory: WorkspaceHistoryView = {
   progress: [
     {
       recorded_at: "2026-09-14T23:42:00.000Z",
-      phase: "done",
+      phase: "handoff",
       blocked: false,
       note: "Published the release and verified the preview.",
       ticket_key: null,
     },
     {
       recorded_at: "2026-09-14T23:38:00.000Z",
-      phase: "delivering",
+      phase: "deliver",
       blocked: false,
       note: "Preparing the release after the verification gates passed.",
       ticket_key: null,
     },
     {
       recorded_at: "2026-09-14T23:30:00.000Z",
-      phase: "verifying",
+      phase: "verify",
       blocked: false,
       note: "Checking the layout and keyboard navigation.",
       ticket_key: "gitea:730",
     },
     {
       recorded_at: "2026-09-14T00:10:00.000Z",
-      phase: "verifying",
+      phase: "verify",
       blocked: true,
       note: "Preview service unavailable. Waiting for access.",
       ticket_key: null,
@@ -124,7 +124,7 @@ function unconfiguredTicketHistory(): WorkspaceHistoryView {
       ...(mixedHistory.progress ?? []),
       {
         recorded_at: "2026-09-13T23:55:00.000Z",
-        phase: "implementing",
+        phase: "build",
         blocked: false,
         note: "This provider is recorded but deliberately unconfigured.",
         ticket_key: "github:999",
@@ -142,7 +142,7 @@ function manyProgressHistory(): WorkspaceHistoryView {
       // Index zero is latest, so the search target at 121 proves the query
       // reaches records the initial 50-row render did not mount.
       recorded_at: new Date(Date.parse("2026-09-15T01:00:00.000Z") - index * 60_000).toISOString(),
-      phase: "implementing",
+      phase: "build",
       blocked: false,
       note:
         index === 121

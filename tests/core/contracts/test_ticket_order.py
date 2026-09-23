@@ -26,28 +26,28 @@ def test_state_order_is_open_draft_unknown_then_settled() -> None:
 
 
 def test_higher_phase_sorts_before_lower_phase() -> None:
-    assert _sort(("issue", "open", "planning", "1"), ("issue", "open", "delivering", "2")) == [
+    assert _sort(("issue", "open", "plan", "1"), ("issue", "open", "deliver", "2")) == [
         "2",
         "1",
     ]
 
 
 def test_done_sorts_after_other_claimed_phases() -> None:
-    assert _sort(("issue", "open", "done", "1"), ("issue", "open", "delivering", "2")) == [
+    assert _sort(("issue", "open", "handoff", "1"), ("issue", "open", "deliver", "2")) == [
         "2",
         "1",
     ]
 
 
 def test_unclaimed_ticket_sorts_after_claimed_ticket() -> None:
-    assert _sort(("issue", "open", None, "1"), ("issue", "open", "scoping", "2")) == ["2", "1"]
+    assert _sort(("issue", "open", None, "1"), ("issue", "open", "scope", "2")) == ["2", "1"]
 
 
 def test_ticket_id_tiebreak_is_repeatably_stable() -> None:
     tickets = [
-        ("issue", "open", "implementing", "10"),
-        ("issue", "open", "implementing", "2"),
-        ("issue", "open", "implementing", "ENG-1"),
+        ("issue", "open", "build", "10"),
+        ("issue", "open", "build", "2"),
+        ("issue", "open", "build", "ENG-1"),
     ]
     first = sorted(tickets, key=lambda ticket: ticket_sort_key(*ticket))
     assert [ticket[-1] for ticket in first] == ["2", "10", "ENG-1"]

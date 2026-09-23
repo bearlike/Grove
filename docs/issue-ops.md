@@ -5,7 +5,7 @@
 Comment `@grove fix the flaky test` on an issue and your own agent picks it up.
 
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scope to Handoff" /></div>
   <figcaption class="ms-shot__body">One comment per ticket, rewritten in place as the work moves.</figcaption>
 </figure>
 
@@ -21,17 +21,17 @@ flowchart LR
   classDef done fill:#96938c,stroke:#96938c,color:#111111
   classDef now fill:#84cc16,stroke:#111111,stroke-width:3px,color:#111111
   classDef todo fill:#e4f7c0,stroke:#e4f7c0,color:#111111
-  p0["Scoping"]:::done
-  p1["Planning"]:::done
-  p2["Implementing"]:::done
-  p3["Verifying<br>running make lint"]:::now
-  p4["Delivering"]:::todo
-  p5["Done"]:::todo
+  p0["Scope"]:::done
+  p1["Plan"]:::done
+  p2["Build"]:::done
+  p3["Verify<br>running make lint"]:::now
+  p4["Deliver"]:::todo
+  p5["Handoff"]:::todo
   p0 --> p1 --> p2 --> p3 --> p4 --> p5
 ```
 
 ```
-**Phase** ●●●●○○ Verifying (4/6) — running make lint
+**Phase** ●●●●○○ Verify (4/6) — running make lint
 
 **Checklist**
 - [x] Reproduce the flaky test

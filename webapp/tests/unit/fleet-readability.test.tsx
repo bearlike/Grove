@@ -9,7 +9,7 @@ import type { PhaseView } from "@/lib/grove/api";
 import { workspace } from "@/tests/fixtures/fleet";
 
 const phase: PhaseView = {
-  phase: "verifying", note: "Checking the built page at narrow widths.", blocked: false,
+  phase: "verify", note: "Checking the built page at narrow widths.", blocked: false,
   index: 3, total: 6, updated_at: "2026-09-06T12:00:00Z", tickets: [],
 };
 
@@ -29,7 +29,7 @@ describe("the Grove status is a report, not a prompt", () => {
   });
 
   it("uses a phase word for a blank note, and never fabricates a phase", () => {
-    expect(workspaceStatusText({ phase: { ...phase, note: "  " } })).toBe("Verifying");
+    expect(workspaceStatusText({ phase: { ...phase, note: "  " } })).toBe("Verify");
     expect(workspaceStatusText({ phase: null })).toBeNull();
     expect(workspaceStatusText({})).toBeNull();
   });
@@ -64,7 +64,11 @@ describe("the same labelled change vocabulary reaches both surfaces", () => {
     expect(html).toContain("12,345 lines added on the branch since its diff base");
     expect(html).toContain("text-success");
     expect(html).toContain("text-destructive");
-    expect(html).toContain("text-warning");
+    // The dirty count is neutral in the rail: nearly every live row has one,
+    // so amber on each was a column of warnings. The card keeps the amber.
+    const dirty = html.slice(html.indexOf('data-testid="rail-dirty"'));
+    expect(dirty.slice(0, dirty.indexOf("</span></span>"))).not.toContain("text-warning");
+    expect(renderToStaticMarkup(<WorkspaceMetrics workspace={ws} />)).toContain("text-warning");
   });
 
   it("labels branch divergence honestly instead of claiming pushes", () => {

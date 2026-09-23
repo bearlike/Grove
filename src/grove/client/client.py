@@ -70,7 +70,12 @@ from grove.core.contracts.views import (
     WorkspacePeekView,
     WorkspaceStateView,
 )
-from grove.core.phase import TaskPhase
+from grove.core.contracts.watches import (
+    WatchList,
+    WatchRegistration,
+    WatchView,
+)
+from grove.core.phase import normalize_phase
 
 if TYPE_CHECKING:
     from grove.client.attach import AttachSession
@@ -445,6 +450,21 @@ class GroveClient:
         body = await self._post("/mailboxes/messages", json_payload=request.model_dump(mode="json"))
         return MailboxReceipt.model_validate(body)
 
+    async def register_watch(self, request: WatchRegistration) -> WatchView:
+        """Ask to be woken when something settles, then stop waiting for it."""
+        body = await self._post("/watches", json_payload=request.model_dump(mode="json"))
+        return WatchView.model_validate(body)
+
+    async def list_watches(self) -> WatchList:
+        """Every watch this host holds, live and recently settled."""
+        body = await self._get("/watches")
+        return WatchList.model_validate(body)
+
+    async def cancel_watch(self, watch_id: str) -> WatchView:
+        """Withdraw a watch. Already-settled ones come back unchanged."""
+        body = await self._delete(f"/watches/{watch_id}")
+        return WatchView.model_validate(body)
+
     async def get_attach(self, ws_id: str) -> AttachInstructionView:
         body = await self._get(f"/workspaces/{ws_id}/attach")
         return ATTACH_INSTRUCTION_ADAPTER.validate_python(body)
@@ -658,7 +678,7 @@ class GroveClient:
     async def set_phase(
         self,
         ws_id: str,
-        phase: TaskPhase,
+        phase: str,
         note: str | None = None,
         *,
         blocked: bool = False,
@@ -672,7 +692,7 @@ class GroveClient:
         omitted from the payload at their defaults so an older daemon, which
         does not know either field, keeps decoding the request.
         """
-        payload: dict[str, object] = {"phase": phase}
+        payload: dict[str, object] = {"phase": normalize_phase(phase)}
         if note is not None:
             payload["note"] = note
         if blocked:

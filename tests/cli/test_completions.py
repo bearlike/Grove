@@ -131,7 +131,7 @@ def test_phase_argument_completes_both_phases_and_workspaces(
 
     values = {item.value for item in _complete(["phase"])}
 
-    assert "implementing" in values
+    assert "build" in values
     assert ws_id in values
 
 
@@ -139,7 +139,7 @@ def test_completion_filters_on_the_partial_word(runner: CliRunner, project: Path
     """Typer applies the prefix filter, which is why no completer does."""
     del project, runner
 
-    assert {item.value for item in _complete(["phase"], "impl")} == {"implementing"}
+    assert {item.value for item in _complete(["phase"], "b")} == {"build"}
 
 
 def test_command_names_still_complete(runner: CliRunner, project: Path) -> None:

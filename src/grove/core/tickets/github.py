@@ -49,7 +49,12 @@ from grove.core.contracts.tickets import (
     TicketRef,
 )
 from grove.core.errors import TicketProviderError
-from grove.core.tickets.provider import NumberTicketProvider, TicketThread
+from grove.core.tickets.provider import (
+    CommitCheck,
+    CommitChecks,
+    NumberTicketProvider,
+    TicketThread,
+)
 
 
 class GitHubProvider(NumberTicketProvider):
@@ -58,6 +63,7 @@ class GitHubProvider(NumberTicketProvider):
     name: ClassVar[TicketProviderName] = "github"
     label: ClassVar[str] = "GitHub"
     builtin_prefixes: ClassVar[tuple[str, ...]] = ("gh",)
+    checks_supported: ClassVar[bool] = True
     comments_supported: ClassVar[bool] = True
     assignees_supported: ClassVar[bool] = True
     body_supported: ClassVar[bool] = True
@@ -128,6 +134,49 @@ class GitHubProvider(NumberTicketProvider):
         if not isinstance(payload, dict):
             raise TicketProviderError(f"github returned an unexpected shape for pull {ticket_id}")
         return self._to_ref(payload, kind="pull_request")
+
+    def get_commit_checks(self, owner: str, repo: str, sha: str) -> CommitChecks:
+        """Combine Checks API runs and legacy commit statuses for one SHA."""
+        checks_payload = self._request(
+            "GET", f"/repos/{owner}/{repo}/commits/{sha}/check-runs", params={"per_page": "100"}
+        )
+        statuses_payload = self._request("GET", f"/repos/{owner}/{repo}/commits/{sha}/status")
+        if not isinstance(checks_payload, dict) or not isinstance(statuses_payload, dict):
+            raise TicketProviderError(
+                f"github returned an unexpected shape for commit {sha} checks"
+            )
+        runs = checks_payload.get("check_runs")
+        statuses = statuses_payload.get("statuses")
+        if not isinstance(runs, list) or not isinstance(statuses, list):
+            raise TicketProviderError(
+                f"github returned an unexpected checks shape for commit {sha}"
+            )
+        checks = tuple(
+            [
+                CommitCheck(
+                    name=str(run.get("name") or "unnamed check"),
+                    state=str(run.get("conclusion") or run.get("status") or "pending").lower(),
+                    url=str(run["details_url"]) if run.get("details_url") else None,
+                )
+                for run in runs
+                if isinstance(run, dict)
+            ]
+            + [
+                CommitCheck(
+                    name=str(status.get("context") or "unnamed status"),
+                    state=str(status.get("state") or "pending").lower(),
+                    url=str(status["target_url"]) if status.get("target_url") else None,
+                )
+                for status in statuses
+                if isinstance(status, dict)
+            ]
+        )
+        running_states = {"pending", "queued", "in_progress", "running"}
+        return CommitChecks(
+            checks=checks,
+            running=any(check.state in running_states for check in checks),
+            url=next((check.url for check in checks if check.url), None),
+        )
 
     def read_thread(self, ticket_id: str) -> TicketThread:
         """The issue plus its whole comment thread — two GETs, one answer."""

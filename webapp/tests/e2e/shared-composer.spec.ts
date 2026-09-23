@@ -27,16 +27,24 @@ import { openSharpSurface } from "./sharp-surface-probe";
  * no exact colour is asserted anywhere.
  */
 
-test("composer focus uses one inset line rather than an outer frame", async ({ page }) => {
+test("composer editor focus strengthens its border without an outer frame", async ({ page }) => {
   await page.goto("/");
   const input = page.getByRole("textbox", { name: "Task brief", exact: true });
   const bar = page.getByTestId("launch-composer").locator('[data-slot="composer-bar"]');
-  const restingShadow = await bar.evaluate(el => getComputedStyle(el).boxShadow);
-  await input.click();
-  await expect(bar).toHaveCSS("outline-width", "1px");
-  await expect(bar).toHaveCSS("outline-offset", "-1px");
-  await expect(bar).toHaveCSS("outline-style", "solid");
-  await expect(bar).toHaveCSS("box-shadow", restingShadow);
+  await expect(input).toBeFocused();
+  expect(await input.evaluate(element => element.matches(":focus-visible"))).toBe(true);
+  const focusBorder = await bar.evaluate((element) => {
+    const root = getComputedStyle(document.documentElement);
+    const swatch = document.createElement("div");
+    swatch.style.color = root.getPropertyValue("--ring");
+    document.body.append(swatch);
+    const ring = getComputedStyle(swatch).color;
+    swatch.remove();
+    return { border: getComputedStyle(element).borderColor, ring };
+  });
+  expect(focusBorder.border).toBe(focusBorder.ring);
+  await expect(bar).toHaveCSS("outline-style", "none");
+  await expect(bar).toHaveCSS("box-shadow", "none");
 });
 
 const WORKSPACE_ID = FIXTURE_WORKSPACES[0].id;
@@ -453,8 +461,8 @@ test.describe("the shared native composer", () => {
 
       // The container role (5.75px at the default scale), not the 2.3px inner
       // cell the row used to take — which is what made it read as a chip. The
-      // composer bar is the documented 20%-softer 6.9px exception, so it is
-      // intentionally not this card's geometry peer.
+      // composer bar keeps the vendor's larger radius, so it is intentionally
+      // not this card's geometry peer.
       expect(radius, `${theme} card corner`).toBe("5.75px");
     }
   });

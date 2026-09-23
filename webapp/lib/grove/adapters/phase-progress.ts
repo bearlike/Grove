@@ -44,12 +44,12 @@ export function stepState(index: number, reached: number): StepState {
 }
 
 /**
- * `done` completes the list, so nothing is "current" — every step reads
+ * `handoff` completes the list, so nothing is "current" — every step reads
  * complete. Past-the-end comes from `phase.total`, THE WIRE'S OWN COUNT, so a
  * client never pins a second copy of the vocabulary.
  */
 export function activeIndex(phase: PhaseView): number {
-  return phase.phase === "done" ? phase.total : phase.index;
+  return phase.phase === "handoff" ? phase.total : phase.index;
 }
 
 /**
@@ -115,7 +115,7 @@ export function reportIsStale(
   working: boolean,
   now: number,
 ): boolean {
-  if (!working || phase.phase === "done") return false;
+  if (!working || phase.phase === "handoff") return false;
   const reported = Date.parse(phase.updated_at);
   if (Number.isNaN(reported)) return false;
   return now - reported >= STALE_REPORT_MS;
@@ -131,5 +131,5 @@ export function reportIsStale(
  * word `blocked` reads as activity.
  */
 export function stepIsLive(phase: PhaseView, working: boolean): boolean {
-  return working && !phase.blocked && phase.phase !== "done";
+  return working && !phase.blocked && phase.phase !== "handoff";
 }

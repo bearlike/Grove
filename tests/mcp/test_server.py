@@ -18,6 +18,9 @@ from tests.mcp.conftest import FakeGroveClient
 
 EXPECTED_TOOLS = {
     "grove_list_projects",
+    "grove_register_watch",
+    "grove_list_watches",
+    "grove_cancel_watch",
     "grove_list_workspaces",
     "grove_get_workspace",
     "grove_get_skill",
@@ -54,6 +57,7 @@ EXPECTED_TOOLS = {
 # derived (EXPECTED_TOOLS - this) rather than listed a second time — adding a
 # tool to the contract above without classifying it here fails these tests.
 NON_MUTATING_TOOLS = {
+    "grove_list_watches",
     "grove_list_projects",
     "grove_list_workspaces",
     "grove_get_workspace",

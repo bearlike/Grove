@@ -152,12 +152,12 @@ describe("WorkingLoader", () => {
   it("reserves the rail header corner wide enough for the options button", async () => {
     const rail = await source("components/grove/fleet/fleet-tree.tsx");
 
-    // The button is 28px at `right-1.5` (6px) = the last 34px; `pr-10` reserves
-    // 32 and was always 2px short. Nothing had occupied that gap until the
-    // working mark became the last item on the line. Measured on the built app:
-    // overlapping at pr-10, 2.4px clearance at pr-11.
-    expect(rail).toMatch(/py-1 pr-11\b/);
-    expect(rail).not.toMatch(/py-1 pr-10\b/);
+    // The button is 28px at `right-1.5` (6px) = the card's last 34px. The title
+    // line sits inside the link's `p-3`, which covers the first ~10px of that,
+    // so the line itself reserves `pr-9`; `sidebar-sessions.spec.ts` measures
+    // the clearance on the rendered row.
+    const header = rail.slice(rail.indexOf("<header"), rail.indexOf("</header>"));
+    expect(header).toMatch(/\bpr-9\b/);
   });
 
   it("drops the word in the rail but keeps the accessible name", () => {

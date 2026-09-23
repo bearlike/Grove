@@ -35,7 +35,7 @@ const { WorkspaceHistoryDialog } = await import(
 function claim(over: Partial<ProgressEntryView> = {}): ProgressEntryView {
   return {
     recorded_at: "2026-09-14T03:00:00Z",
-    phase: "implementing",
+    phase: "build",
     blocked: false,
     note: "wiring the store",
     ticket_key: null,

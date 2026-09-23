@@ -44,7 +44,7 @@ function render(
         context={CONTEXT}
         counts={{ working: 1, idle: 0, blocked: 0 }}
         accounts={[]}
-        system={{ version: "0.0.9", startedAt: "2026-09-19T08:00:00Z", updateAvailable: false, latestVersion: null }}
+        system={{ version: "0.0.9", startedAt: "2026-09-19T08:00:00Z", updateAvailable: false, latestVersion: null, restartRequired: false }}
         connected
         progress={{ fraction: 0.6, reported: 8, tickets: 11 }}
         attention={2}
@@ -196,13 +196,13 @@ describe("the fleet aggregate reads the snapshot the shell already holds", () =>
           {
             state: { id: "a", ticket_refs: [{ provider: "gitea", id: "1" }, { provider: "gitea", id: "2" }] },
             needs_attention: true,
-            phase: { phase: "delivering", index: 4, total: 6, tickets: [{ ticket: "gitea:1", phase: "delivering", index: 4 }] },
+            phase: { phase: "deliver", index: 4, total: 6, tickets: [{ ticket: "gitea:1", phase: "deliver", index: 4 }] },
             sessions: [],
           },
           {
             state: { id: "b", ticket_refs: [{ provider: "gitea", id: "3" }] },
             needs_attention: false,
-            phase: { phase: "done", index: 5, total: 6, tickets: [{ ticket: "gitea:3", phase: "done", index: 5 }] },
+            phase: { phase: "handoff", index: 5, total: 6, tickets: [{ ticket: "gitea:3", phase: "handoff", index: 5 }] },
             sessions: [],
           },
         ],

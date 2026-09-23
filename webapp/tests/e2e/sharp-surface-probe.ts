@@ -37,3 +37,16 @@ export async function captureSharpSurface(
 ): Promise<void> {
   await page.screenshot({ path: testInfo.outputPath(`sharp-${tab}-${width}-${theme}.png`) });
 }
+
+/**
+ * How far the send control sits in from the bar's bottom-right corner: the
+ * vendored `ComposerBar`'s own padding plus its 1px border, read from the page
+ * rather than restated, so the specs pin "send sits in the corner" without
+ * owning a number the vendor decides.
+ */
+export async function barInset(page: Page): Promise<number> {
+  return page.locator('[data-slot="composer-bar"]').first().evaluate((bar) => {
+    const style = getComputedStyle(bar);
+    return Number.parseFloat(style.paddingRight) + Number.parseFloat(style.borderRightWidth);
+  });
+}

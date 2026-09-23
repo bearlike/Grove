@@ -67,12 +67,12 @@ const AGENT_LABEL: Record<AgentActivityState, string> = {
 
 /** The phase an agent reports for itself, as a headline. */
 const PHASE_LABEL: Record<TaskPhase, string> = {
-  scoping: "Scoping",
-  planning: "Planning",
-  implementing: "Implementing",
-  verifying: "Verifying",
-  delivering: "Delivering",
-  done: "Done",
+  scope: "Scope",
+  plan: "Plan",
+  build: "Build",
+  verify: "Verify",
+  deliver: "Deliver",
+  handoff: "Handoff",
 };
 
 /**

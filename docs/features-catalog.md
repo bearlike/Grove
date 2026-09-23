@@ -55,6 +55,8 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Refs from the branch | Grove reads the ticket off the branch name so the link follows the branch. | [Ticket providers](features-ticket-providers.md#deriving-refs-from-the-branch-name) |
 | Sticky comment | One comment on the ticket carries phase, checklist, branch, commit and links. | [Issue ops](issue-ops.md) |
 | Task phase per ticket | Each attached ticket reports its own six stage phase and a blocked flag. | [Status semantics](features-status.md#the-third-axis-task-phase) |
+| Ticket change mail | A person's change to an attached issue or PR is mailed to its workspace, once a minute at most. | [Ticket providers](features-ticket-providers.md#changes-reach-the-agent) |
+| Watches | Wait on CI, a timer or a command without polling; the outcome or the expiry arrives as mail. | [Watches](features-watches.md) |
 
 ## Observability
 

@@ -338,14 +338,14 @@ Two consequences worth stating:
 
 **Overlay content takes that both-themes shadow from the theme boundary** — `model-selector-content`, `popover-content`, `dropdown-menu-content` and `select-content` — because the vendored `shadow-md` is tuned for a white page and on the dark ladder reads as the composer's own plane rather than as something floating above it.
 
-**FIVE RADII, EACH A ROLE.** This is the whole radius vocabulary; a corner outside it is a bug, and a Playwright census over every visible element on the workspace page enforces it in both themes.
+**FIVE RADII, EACH A ROLE — THE VENDORED COMPOSER BAR KEEPS ITS OWN CORNER.** This is the app's radius vocabulary; a corner outside it is a bug except for the composer bar's native `rounded-[24px]`, and a Playwright census over every visible element on the workspace page enforces that exception in both themes.
 
 | Radius | Role |
 |---|---|
 | `0` | list rows, table cells — a row's boundary is its neighbours |
 | `2.3` | keycaps, badges, inner cells, code blocks |
 | `3.45` | buttons, inputs, selects, tab triggers, chips |
-| `5.75` | cards, popovers, dialogs, the page panel — and the composer bar at **6.9** (20% past the role, the one container that holds an editor plus a toolbar of rounded squares; scoped to its slot, admitted by the radius census for that slot only) |
+| `5.75` | cards, popovers, dialogs, the page panel |
 | `full` | circles ONLY — status dots, avatars, brand marks, spinners |
 
 `--radius: 0.2875rem` and a `5.75px` container floor make the original role scale 15% softer without changing its hierarchy. **The whole Tailwind scale collapses onto those roles:** `xs`/`sm` → 2.3, `md` → 3.45, `lg`/`xl`/`2xl`/`3xl`/`4xl` → 5.75. Both the rem base and its floor scale together, so reader font settings can still enlarge them. Zero and circular roles are unchanged; vendored files remain untouched.
@@ -409,7 +409,7 @@ Not aspirations. A surface that misses one is not done.
 | Body text | 4.5:1 | WCAG AA |
 | Large text (≥24px, or ≥18.66px bold) | 3:1 | WCAG AA |
 | **Control edges and state indicators** | **3:1** | WCAG 1.4.11 non-text |
-| Decorative container edges | 60% of their opaque source over the actual background | approved 40% reduction in border prominence, not a WCAG threshold |
+| Decorative container edges | 30% of their opaque source over the actual background | barely-there hairline hierarchy, not a WCAG threshold |
 
 **That last row is a real distinction, not a loophole.** 1.4.11 scopes non-text contrast to what identifies a *component* or its *state*. Chasing 3:1 between adjacent container fills would produce a checkerboard, and no adjacent rung here reaches it (the best is 1.21:1) — which is correct and expected. **The 3:1 belongs to the edge, not the fill.**
 
@@ -439,8 +439,8 @@ the structure adopted here.
 | Tier | Tokens | Floor | Job |
 |---|---|---|---|
 | **prominent** | `--input`, `--ring` | 3:1, per 1.4.11 | identifies a component or its state |
-| **decorative** | `--border`, `--surface-edge`, `--sidebar-border` | 60% source opacity | card perimeters, interior separators and shell dividing lines |
-| **control resting** | `--edge-control` | existing opaque value, unchanged | resting outlines on labelled interactive controls |
+| **decorative** | `--border`, `--surface-edge`, `--sidebar-border` | 30% source opacity | card perimeters, interior separators, shell and tab-band rules, the composer bar |
+| **control resting** | `--edge-control` | opaque, one step above decorative | resting outlines on labelled interactive controls; every native control's own `--border` resolves to it |
 
 **The prominent tier remains unchanged.** Its light L0.594 and dark L0.56 values were solved against the worst surface. The decorative reduction does not alter that contrast guarantee or the resting control token.
 
@@ -461,9 +461,19 @@ was the number on screen.
 
 | token | renders mostly on | light | dark |
 |---|---|---|---|
-| `--border`, `--sidebar-border` | `raised` (card edges, dividers) | 1.69 | 1.62 |
-| `--surface-edge` | `raised` (enclosures) | 1.75 | 1.62 |
-| `--edge-control` | `sidebar` (labelled controls) | 1.79 | 1.92 |
+| `--border`, `--sidebar-border` | `raised` / `base` (card edges, band rules) | 1.16 / 1.11 | 1.13 / 1.13 |
+| `--surface-edge` | `raised` (enclosures) | 1.16 | 1.13 |
+| `--edge-control` | `base` / `raised` (labelled controls) | 1.24 / 1.43 | 1.34 / 1.20 |
+| `--footer-rule` / `--footer-seam` | `sunken` (status band) | 1.21 / 1.14 | 1.25 / 1.14 |
+
+**THESE ARE DELIBERATELY BELOW THE PEER BAND (2026-09-22).** Primer 1.45 and M3
+1.70 read as outlines here, competing with the content they enclose; the
+reviewed direction is edges that are barely visible and only state hierarchy.
+Hierarchy is carried by the fill ladder, spacing and type first, the line
+last. What still carries 3:1 is unchanged: `--input`, `--ring`, and every focus
+and invalid state. The first half of this section — "1.09:1 reads as undrawn" —
+remains true for a seam that is the ONLY thing separating two regions; check
+that a fill step or spacing does the separating before trusting a hairline.
 
 **Treat the peer benchmark as a CEILING, not a target.** Primer 1.45 and M3
 `outline-variant` 1.70 are where mature systems put a divider *on its own page*;
@@ -484,7 +494,7 @@ there needs its own value (ADD).** The measured rows name `raised` and
 1.62-1.70 band the same token achieves one rung up, so a seam drawn with it
 there is the "reads as undrawn" failure this section opens with. The global
 status footer sits on that rung and takes `--footer-rule`, solved against it:
-**1.75:1 dark, 1.59:1 light**. Do not reach for `--border` and conclude the
+**1.25:1 dark, 1.21:1 light** — the hairline tier, one step above its seam. Do not reach for `--border` and conclude the
 design is flat; ask which rung the element renders on first.
 
 **A WASH IS SPECIFIED AS A LIGHTNESS STEP, NEVER AS A RATIO.** The footer
@@ -510,7 +520,7 @@ check a wash owes before it ships.
 
 **A BAND THAT DIVIDES ITS SECTIONS AND NOT THEIR CONTENTS HAS DIVIDED NOTHING — so dividers come in TWO ORDERED TIERS (ADD).** The status band shipped with a full-height `--footer-rule` between sections and nothing inside them, and the result read as one stream: project, sub-path, branch, worktree, agent and context ran together as an undivided run of glyphs, and two subscription accounts abutted, so the boundary between one account and the next was no stronger than the boundary between a plan and its own percentage. **Two levels of structure sharing one divider is the same failure as no divider.**
 
-- **The second tier must be genuinely QUIETER, and the arithmetic is the proof.** Measured on `surface-sunken`: `--footer-rule` is 1.59:1 light / 1.75:1 dark, `--footer-seam` is 1.39:1 light / 1.41:1 dark. The seam clears §4's 1.09:1 "reads as undrawn" floor and sits under the Primer `borderColor-default` 1.45:1 the decorative tier answers to. **Drawing both with one token is the inverse failure:** seven equal divisions carry no grouping at all.
+- **The second tier must be genuinely QUIETER, and the arithmetic is the proof.** Measured on `surface-sunken`: `--footer-rule` is 1.21:1 light / 1.25:1 dark, `--footer-seam` is 1.14:1 light / 1.14:1 dark — both in the hairline tier, the seam still one step quieter and half the height. **Drawing both with one token is the inverse failure:** seven equal divisions carry no grouping at all.
 - **Nesting is carried by HEIGHT as well as weight.** The section rule runs the band's full 24px (44px coarse), the seam is half of it — so the hierarchy survives a monochrome display and a reader who cannot resolve a 0.16 L step. A tier separated by colour alone is §4.7's rule applied to structure.
 - **A DIVIDER INSIDE A PHYSICAL-PIXEL BAND IS ITSELF A PHYSICAL PIXEL.** `h-3` measured **9.59px** on the deployed page — 0.75rem at the 80% density root, §3's `h-6` trap exactly. The band is a rendered-pixel contract and its divider was not, so the density lever moved the seam while leaving the band alone and the half-band ratio the hierarchy rests on drifted with a setting that should never touch it. **The type inside the band stays on the rem ramp**; only the chrome that frames it is pinned.
 - **Ask what the two values are, not how many there are.** `ahead`/`behind` take no seam (two directions of one comparison against the base branch) and neither does `Grove › webapp` (one location in two parts, where the chevron is already the separator). A seam between those would claim they were peers. A plan and its percentage DO take one; so do an agent's name and its context reading, which had been one span and rendered as a name running straight into a number.
@@ -529,9 +539,9 @@ check a wash owes before it ships.
 section already said it "is not a 3:1 focus indicator", which describes what it
 is not; the table says what it is.
 
-**Decorative borders deliberately depend on their background (ADD).** Their current output is `color-mix(in srgb, var(--border-source) 60%, transparent)`, with the equivalent `--surface-edge-source` formula for enclosures. This replaces the previous opaque decorative edge policy. The source keeps the existing hue and RGB value while the other 40% comes from the actual surface under the border. Do not apply opacity to a parent, which would fade text and marks as well.
+**Decorative borders deliberately depend on their background (ADD).** Their current output is `color-mix(in srgb, var(--border-source) 30%, transparent)`, with the equivalent `--surface-edge-source` formula for enclosures. This replaces the previous opaque decorative edge policy. The source keeps the existing hue and RGB value while the other 70% comes from the actual surface under the border. Do not apply opacity to a parent, which would fade text and marks as well.
 
-The opaque source tokens also preserve non-border derivations such as attachment gradients. Controls retain opaque resting outlines and unchanged input and focus indicators. Verify composite pixels on card bodies, interior regions, base headers and the sunken rail in both themes. The earlier decorative contrast figures above describe the opaque source, not the softened result.
+The opaque source tokens also preserve non-border derivations such as attachment gradients. Inside a native control, `--border` and `--surface-edge` resolve to `--edge-control` — one quiet opaque resting value for every control, never the opaque decorative source (which rendered 1.6–2.2:1 and was the loudest edge in the app). Input and focus indicators are unchanged. Verify composite pixels on card bodies, interior regions, base headers and the sunken rail in both themes. The earlier decorative contrast figures above describe the opaque source, not the softened result.
 
 Text on every rung, measured:
 
@@ -560,7 +570,7 @@ identifiable at all.
 
 **It was applied to `--muted-foreground`, not to `--content-tertiary`, because tertiary aliases it.** Retuning the tier token alone would have left the migrated call sites dark and the unmigrated ones at 4.83 for the length of the migration — and it would have falsified §2's "adoption is a rename, never a re-pick", which is the property that lets tier deltas land ahead of the ladder at all.
 
-**Resting control outlines and focus/input boundaries have different jobs.** `--edge-control` is a subtle secondary enclosure for controls already identified by readable labels or glyphs: light `oklch(0.82 0.008 286)`, dark `oklch(0.34 0.008 286)`. It is not a 3:1 focus indicator. `--input` and `--ring` retain the former stronger values independently (light L0.594, dark L0.56), preserving their contrast floors. The theme applies the quiet edge to native outlined buttons and select triggers only while unfocused and valid; text fields, focus, and invalid states keep their dedicated tokens. Match outlined controls by semantic element plus `data-variant`, not `data-slot`: tooltip wrappers replace the slot and otherwise silently restore the bright input border. Outlined controls have no shadow/halo; their opaque focus border remains the indicator.
+**Resting control outlines and focus/input boundaries have different jobs.** `--edge-control` is a subtle secondary enclosure for controls already identified by readable labels or glyphs: light `oklch(0.88 0.009 286)`, dark `oklch(0.28 0.009 286)`. **Icon controls in a header band (`.workspace-header`) drop the resting edge entirely** — the glyph says where to click, and a boxed icon in a 32px band was the loudest mark in the shell; their focus border is untouched. It is not a 3:1 focus indicator. `--input` and `--ring` retain the former stronger values independently (light L0.594, dark L0.56), preserving their contrast floors. The theme applies the quiet edge to native outlined buttons and select triggers only while unfocused and valid; text fields, focus, and invalid states keep their dedicated tokens. Match outlined controls by semantic element plus `data-variant`, not `data-slot`: tooltip wrappers replace the slot and otherwise silently restore the bright input border. Outlined controls have no shadow/halo; their opaque focus border remains the indicator.
 
 #### The terminal palette: constrain the RANGE, do not pick sixteen colours
 
@@ -690,7 +700,7 @@ Every colour decision this app has made, including the ones that previously exis
 | `--content-*` and the type ramp | See §1 and §2. **They shipped GLOBALLY ahead of per-surface adoption** — see the migration state below. | shipped |
 | Terminal ANSI colour is themed, not exempt | The palette is `--ansi-*` (§4.6); the meaning stays the data's. The old exemption rested on "inline styles", which the shipped `dist` disproves. | **superseded** |
 | `PhaseBadge`/`TicketRollupMeter` never spend a TONE on phase position, only on `blocked` | Their position is the grayscale-safe shape-and-word ramp, so `destructive` can mean blocked without contradicting a green or amber phase. In either shape, `blocked` is a flag across the phase axis, never a seventh position. | shipped |
-| `PhaseMeter`'s track DOES spend a hue on position | **The original reasoning, kept so it is not re-derived:** a badge variant table (`secondary`/`default`/`outline`) ranked reached/current/ahead, on the argument that a tone spent on position leaves none for `blocked`. That held while the track's only carrier of rank was weight. It no longer describes the surface: the six connected checkpoints are one composite sequence, the glyph ramp and the content tiers *already* say which step the agent is on, so `--primary` on what is reached and `--success` on `done` is **redundant with the shape rather than load-bearing on it** — 1.4.1 is satisfied by the silhouettes, and removing every hue would lose nothing a reader relies on. `blocked` is still the flag across the axis, and still outranks the position hue. | **partly superseded** — the badge row above stands; the variant-table half does not |
+| `PhaseMeter`'s track DOES spend a hue on position | **The original reasoning, kept so it is not re-derived:** a badge variant table (`secondary`/`default`/`outline`) ranked reached/current/ahead, on the argument that a tone spent on position leaves none for `blocked`. That held while the track's only carrier of rank was weight. It no longer describes the surface: the six connected checkpoints are one composite sequence, the glyph ramp and the content tiers *already* say which step the agent is on, so `--primary` on what is reached and `--success` on `handoff` is **redundant with the shape rather than load-bearing on it** — 1.4.1 is satisfied by the silhouettes, and removing every hue would lose nothing a reader relies on. `blocked` is still the flag across the axis, and still outranks the position hue. | **partly superseded** — the badge row above stands; the variant-table half does not |
 
 ### 4.9 The check only a human can run
 
@@ -729,7 +739,9 @@ Four kinds, and the vendored `variant` that expresses each. No others — `secon
 - **An icon-only button always has an `aria-label` and a tooltip.** Use `TooltipIconButton` from `components/assistant-ui/`; it does both.
 - **Anything clickable looks clickable** — a hover state that changes background or underline, plus the pointer cursor. **The cursor is handled globally and you must not add `cursor-pointer` at a call site** (see [the one OVERRIDE](#the-one-override)); `components/grove/**` carrying it is Grove code inventing a look. A row that navigates is a link, not a `div` with an `onClick`.
 
-**ADD — The composer control.** Every control on a composer toolbar is one pill: a 1px `--edge-control` edge, the top-lit gradient reusing `--attachment-card-start`/`--attachment-card-end`, `--content-secondary` ink rising to `--content-primary` on hover and while open, and ONE shape for the whole row — a rounded square at the control role (3.45), attach, model, expand and send alike — never below the 24px pointer floor; icon-only controls sit at 28px. The vendor draws send and attach as circles and the model trigger as a rectangle, and that mix read as three families on one bar; a toolbar's controls are one family and take one corner. **Send keeps its ink fill and is exempt from the pill's edge and gradient**; a second treatment on it would argue with the one action the bar exists for. The rule lives at the theme boundary in `app/globals.css`, keyed by `data-slot` inside `[data-slot="composer-toolbar"]`, because three composers — landing, workspace reply, expand dialog — mount the same controls and each would otherwise decide separately. And a glyph floating in a bar is not a control: with no edge, nothing says where the target begins, which is §0's undesigned default wearing a hit area.
+**RECORD — The composer bar.** Preserve the vendored `ComposerBar`'s `rounded-[24px]`: its literal pixel radius is deliberate, not a member of the app's collapsed radius scale. Do not include it in the `.rounded-\[24px\]` literal sweep or the container-role slot rule. On the bar alone, use the page's `--surface-base` fill rather than the dark `--popover` elevation and draw its resting perimeter at 36% of `--border-source`, 20% more opaque than the decorative tier's 30%, so the one place you write stays findable on a quiet page. **Editor focus steps that line up to `--edge-control`, never a `--ring` outline:** a focused text field always matches `:focus-visible`, and both composers autofocus, so a ring outline there was the bar's RESTING look — the loud perimeter. The caret carries focus; toolbar controls keep their own ring. Do not add a new surface token, wrapper, or per-page style: both composers and the loading skeleton already compose the same vendor surface.
+
+**ADD — The composer control.** Every control on a composer toolbar is GHOSTED — the reference's `ghostButton`: no edge, no fill, `--content-secondary` ink rising to `--content-primary` over a quiet foreground tint on hover and while open, and ONE shape for the whole row — assistant-ui's own full round, a circle for an icon and a pill for the worded model trigger, never below the 24px pointer floor; icon-only controls, send included, sit at 28px. The bar's own perimeter line is the only edge on the surface, so a control needs none to say where the writing surface ends; an edged, gradient pill on every control is what made the composer read as metallic and loud. **Send keeps its ink fill** — the one filled control, because it is the one action the bar exists for. The rule lives at the theme boundary in `app/globals.css`, keyed by `data-slot` inside `[data-slot="composer-toolbar"]`, because every composer (landing, workspace reply, expand dialog) and the landing shelf mount the same controls and each would otherwise decide separately.
 
 ---
 
@@ -837,11 +849,13 @@ Each of these means one thing, everywhere, forever. Adding a row is a change to 
 
 Every workspace lifecycle state and agent state has one sentence-case label and one Lucide mark in `fleet/tokens.ts`; the rail, filters, cards and palette consume that total table rather than spelling or decorating a state locally. The ordinary-English labels need no hover explanation. Only `provisioning`, `offline`, `orphaned`, and the agent's `blocked` state take the glossary, because they carry a Grove-specific meaning a newcomer cannot reliably infer. `active` and wire-level `running` deliberately render as the same reader-facing state, **Active**, with the same radio mark: the distinction is an implementation detail, not a second condition to teach.
 
+**A subagent reports a RUN, never agent attention (ADD).** Nobody answers a subagent directly, so the agent axis's `destructive` "Waiting for you" is false about one: its closed turn means it handed the result back to its parent. `SUBAGENT_RUN_PRESENTATION` has exactly three states. **Running** (`CirclePlayIcon`, `outline` + progress accent), **Finished** (`CircleCheckIcon`, `secondary`) and **Stopped** (`CircleStopIcon`, `secondary`). None of them is loud, because none wants a human. Stopped is only visible against the parent: a child killed mid-tool keeps reporting `working`, so once the root's turn has closed, a child still claiming to work is stopped. Running rows come first, then the rest newest first. A row is titled by its description, with the id demoted to a mono line beneath, and it shows started and last-active times when they were measured.
+
 The lifecycle and agent tables share `LoaderCircleIcon` for starting work and `CircleXIcon` for error, because those are the same claim on distinct axes. Runtime belongs to the same presentation owner (`ServerIcon` / `BoxIcon`) but retains its fixed-property `outline` treatment.
 
 **One mark per axis, one native explanation owner (ADD).** Sidebar attention and task phase never share a priority-selected slot or a hue. Attention is question (`MessageCircleQuestionIcon`), agent blocked (`OctagonAlertIcon`), or failure (`CircleXIcon`), with distinct explanatory labels from `AGENT_PRESENTATION`, all destructive. Phase uses the six distinct Lucide silhouettes from `PHASE_PRESENTATION` through `phaseGlyph`: dashed circle, dot circle, play circle, big-check circle, send, check circle. The font-dependent `○◔◑◕●✓` ramp is retired on the web. Phase is tertiary, success when done, warning with its corner flag when phase-blocked—never the attention red. The corner flag is positioned within the icon's fixed-size wrapper, never against the whole label row. Each mark retains its accessible name; the row's single native hover/focus tooltip explains both claims.
 
-The header reads logo → title, with a reserved options corner. Body context reads branch → attention → phase at intrinsic widths. Missing states occupy no slots, and the title does not move when they appear. Pointer hover and keyboard focus reveal options; touch keeps the action discoverable.
+The row reads tile → title, with a reserved options corner. Body context reads branch → attention pill → phase pill at intrinsic widths. Missing states occupy no slots, and the title does not move when they appear. Pointer hover and keyboard focus reveal options; touch keeps the action discoverable.
 
 ### Ticket state — the one entity whose glyph varies
 
@@ -917,13 +931,15 @@ Three things about them are contracts rather than styling:
 
 ### The rail's session row: compact, intrinsic, and stateful (ADD)
 
-**A row has three authored lines: title, context, ledger.** `CardShell` is raised; its `surface-header` title band holds a `size-5` agent mark and `text-base` title, while the body is `text-sm`. These steps stay subordinate to workspace reading surfaces rather than using display-heading sizes for navigation. Every session uses body `py-2` for the same expanded breathing room, whether selected or not. Selection changes emphasis, never padding or geometry. Cards, groups and vertical control gaps share `gap-3`, matching the scroller's `p-3` edge gutter. Horizontal action and metadata gaps remain unchanged. Heights grow with content and enlarged text, never a fixed crop. Unselected cards use a restrained `opacity-95`, returning to full opacity on hover/focus; selection stays full. This narrowly scoped emphasis preserves semantic hues and must retain 4.5:1 composite text contrast on its actual card/rail surfaces.
+**A row is a leading agent tile beside three authored lines: title, context, ledger.** `CardShell` is raised, with no header band: the tile is the row's identity column and a band would draw a second one. The tile is `size-10` holding the `size-5` `AgentMark`, looked through `.rail-agent-tile` in `globals.css` — the container corner plus a 16% wash of the agent's BRAND hue, the vendored mark's own primary fill. That is an **identity** colour (§4.1), fixed per agent and gated on no state, so it cannot be read as a claim; an unbranded agent keeps a neutral well. A per-workspace or per-task hue was considered and refused — nothing on the wire names one, and a colour chosen per row would mean nothing a reader could learn. The title is `text-base font-medium`, the body `text-sm`, with `gap-1.5` between lines and `p-3` around both columns. Selection changes emphasis, never padding or geometry. Cards, groups and vertical control gaps share `gap-3`, matching the scroller's `p-3` edge gutter. Heights grow with content and enlarged text, never a fixed crop. Unselected cards use a restrained `opacity-95`, returning to full opacity on hover/focus; selection stays full. This narrowly scoped emphasis preserves semantic hues and must retain 4.5:1 composite text contrast on its actual card/rail surfaces.
 
-**Context is intrinsic: branch → attention → phase.** The branch is `min-w-0 flex-[0_1_auto]` and may marquee; attention and phase are independent `shrink-0` groups. Use `gap-2` between groups and `gap-1` within a glyph-label pair. Phase is always worded, including Done; a blocked phase adds its warning flag and never borrows destructive attention tone. Missing facts take no placeholder or reserved slot.
+**Context is intrinsic: branch → attention → phase, and the two claims are PILLS.** The branch is `min-w-0 flex-[0_1_auto]` with a `size-3.5` glyph and may marquee. Attention and phase are canonical `outline` badges at the fleet density, toned by `railPillAccent` in `fleet/tokens.ts`: a 15% tint of the claim's own hue with the word in that hue — destructive for attention, success for a handoff, warning for a blocked phase, `muted` for a phase in progress. **Soft, not solid, and that is specific to the rail**: the rail lists every workspace at once, so a solid destructive badge per waiting row is a wall of red that no single row can rise above, while the fleet card — a surface you stop on — keeps the solid `AGENT_TONE` badge. Shape and word still lead (§4.7). A blocked phase keeps its corner flag. Missing facts take no placeholder or reserved slot.
 
-**The ledger is compact, static, and honest.** Branch changes are `tabular-nums` figures at intrinsic width; the only flex remainder is the ledger before the intrinsic creation age. Figures never clip, scroll, or pretend an unknown is zero; the ledger wraps whole figures when user-enlarged text exceeds its width. One native row tooltip owns identity, branch, state claims, exact metric scopes, and timestamps on hover or keyboard focus. It requests `side="left"` with an 8px offset; native collision handling flips it to the right at the window edge rather than placing it over the row. Individual values retain accessible labels, not nested tooltip triggers that open competing popovers. The creation age identifies itself there, while list order remains last activity.
+**The ledger is compact, static, and honest.** The dirty count, `+`/`−` branch deltas and the creation age share one line: the figures at intrinsic width with `gap-2.5`, the age flush right as `3h ago`. **The dirty count is neutral here** (its glyph says what it is) and amber on the card: nearly every live row has uncommitted files, so amber on each was a column of warnings saying nothing about any one row, while the deltas keep their hues because they have a direction. Figures never clip, scroll, or pretend an unknown is zero; the ledger wraps whole figures when user-enlarged text exceeds its width. One native row tooltip owns identity, branch, state claims, exact metric scopes, and timestamps on hover or keyboard focus. It requests `side="left"` with an 8px offset; native collision handling flips it to the right at the window edge rather than placing it over the row. Individual values retain accessible labels, not nested tooltip triggers that open competing popovers. The creation age identifies itself there, while list order remains last activity.
 
-**Row options reserve only their own title corner.** The sibling menu button has a real pointer target, matching header minimum height, and title padding, so revealing it never covers text or moves the header. Compact targets stay at least 28px and coarse-pointer targets at least 44px; touch reveals the action without hover. This is an action reservation, not permission to reserve absent state groups. Body context never uses fixed slots or `space-between`.
+**The left edge carries at most one claim, and selection wins.** A full-height 2px `bg-primary` marker says where you are; otherwise a handed-off, unblocked row takes a `bg-success` edge so finished work reads down the column without a tooltip. No other state earns the edge — attention already has the loudest pill, and two red signals on one row compete rather than add.
+
+**Row options reserve only their own title corner.** The sibling menu button has a real pointer target aligned to the title line, and the title line's `pr-9` (plus the link's own `p-3`) reserves its 34px, so revealing it never covers text or moves the line. Compact targets stay at least 28px and coarse-pointer targets at least 44px; touch reveals the action without hover. This is an action reservation, not permission to reserve absent state groups. Body context never uses fixed slots or `space-between`.
 
 **A destructive verb may sit in that menu, behind the SAME confirmation the rest of the app uses.** The rail's Delete opens `KillDialog`, not a second dialog with its own wording — two dialogs asking the delete-the-branch question differently is how a user learns to distrust both. The trailing ellipsis on the menu label is load-bearing: it promises the confirm step that licenses a destructive item one click from a navigation row.
 
@@ -933,11 +949,11 @@ Three things about them are contracts rather than styling:
 
 | State | Carrier |
 |---|---|
-| rest | raised card body, `surface-header` title band, `border-surface-edge` |
+| rest | raised card body, `border-surface-edge` |
 | hover | `bg-surface-base`, `border-edge-control` |
 | pressed | `bg-accent` |
-| selected | `border-primary` + a 24×2px `bg-primary` marker at the left edge, `aria-current="page"` |
-| selected + hover | the hover tint, with the clay edge and the marker kept |
+| selected | `border-edge-control` + a full-height 2px `bg-primary` marker at the left edge, `aria-current="page"` |
+| selected + hover | the hover tint, with the marker kept |
 | focus-visible | a 2px `outline-ring` at a 2px offset, independent of selection |
 
 **Hover and press step AWAY FROM THE RAIL'S RUNG, not toward a fixed colour.** `sunken → base → accent` reads as deeper in both themes precisely because lightness runs in opposite directions between them while *distance from the surface underneath* does not — the same reasoning §4.5 gives for the shell panel, applied to a control.
@@ -1250,11 +1266,11 @@ Type, tiers, the null state, the colour and the badge tables are done. **Two fin
 
 **ADD — Launch composer input: `min-h-24 max-h-64`.** The vendored composer is sized for a reply in a running conversation, where the message above carries context; Launch's composer is the whole screen and holds a task brief, so it needs the taller range.
 
-**RECORD — Both composers share Assistant UI anatomy.** `ComposerBar` contains the vendored `File` element's cards (`size="sm"`) above the editor and a `ComposerToolbar` below it; a sent message draws the identical cards above its bubble, outside the clamp, so a file is one object — and one width — on every surface it crosses.
+**RECORD — Both composers ARE the Assistant UI anatomy.** Each composes the vendored `elements/composer` parts directly (`Composer` → `ComposerBar` → attachments, editor, `ComposerToolbar`); Grove adds no shell. `ComposerBar` contains the vendored `File` element's cards (`size="sm"`) above the editor and a `ComposerToolbar` below it; a sent message draws the identical cards above its bubble, outside the clamp, so a file is one object — and one width — on every surface it crosses.
 
 **ADD — Attachment cards use the container role.** `.attachment-card` supplies `--radius-lg`, a thin outline and a subtle vertical gradient derived from semantic tokens. Both dark stops must be lighter than the composer's actual `dark:bg-popover` fill, which resolves to overlay rather than raised. Light cards fade from raised toward the edge token. Filename uses `text-base` above a `text-sm` metadata region. That region always names kind and size, or `Size not recorded`. Upload status preserves known size. Metadata may wrap in narrow cards rather than clip. Attach stays left and model, expand and send stay right. Launch uses the vendored shadcn `Textarea` without a runtime. Sessions retain `ComposerPrimitive.Input` and its runtime attachment behavior. The theme boundary integrates both editors with the same surface and focus treatment. Editor focus uses a single 1px inset `--ring` outline at offset -1px, not a second outer frame around the whole composer; toolbar controls retain their own focus boundaries.
 
-**ADD — Launch configuration occupies an inset shelf below the writing surface.** Compose `ComposerToolbar` with `composer-shelf` for project, agent, branch and runtime. Keep the controls discoverable through labelled triggers and expose full values in native pickers. Working directory and advanced settings may use progressive disclosure. Strategic placement separates writing from configuration without hiding useful choices. The session composer does not acquire redundant metadata or controls that cannot change its workspace.
+**ADD — Launch configuration occupies a GHOSTED inset shelf below the writing surface.** Compose `ComposerToolbar` with `composer-shelf` for project, agent, branch and runtime, so its pills take the toolbar's ghost rule. The shelf is a muted sunken fill with its own hairline at the decorative `--border`, one step quieter than the bar above it. Keep the controls discoverable through labelled triggers and expose full values in native pickers. Working directory and advanced settings may use progressive disclosure. The session composer does not acquire redundant metadata or controls that cannot change its workspace; it carries the context ring, the model, `/` commands and `@` peers instead.
 
 **ADD — The welcome mark has a static decorative grid.** `launch-brand-field` uses the existing neutral tokens and fades at its edges. Keep it `aria-hidden` and outside pointer interaction. The existing Grove mark remains unchanged. The welcome heading uses `text-2xl` and its supporting sentence uses `text-base`, with the normal content tiers and no new font or typography scale.
 

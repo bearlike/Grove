@@ -8,8 +8,8 @@ import { FIXTURE_PHASE } from "../e2e/_fixtures";
  * WIDTH CHANGES THE WORDS, NOT THE TASK'S SHAPE.
  *
  * The task card lives in a resizable panel, so labels respond to its container
- * rather than the viewport. Every checkpoint stays labelled: abbreviated below
- * 420px, full words at and above it, while the horizontal sequence stays intact.
+ * rather than the viewport. Every checkpoint stays labelled with its canonical
+ * phase word on both sides of 420px, while the horizontal sequence stays intact.
  */
 function render(): string {
   return renderToStaticMarkup(<PhaseMeter phase={FIXTURE_PHASE} />);
@@ -38,12 +38,11 @@ describe("phase responsiveness", () => {
     expect(html.match(/@min-\[420px\]\/task:block/g)).toHaveLength(6);
   });
 
-  it("uses shorter words below the container threshold and full words above it", () => {
+  it("keeps canonical phase words on both sides of the container threshold", () => {
     const html = render();
 
-    expect(html).toContain("Deliver</span>");
-    expect(html).toContain("Delivering</span>");
-    expect(html).toContain("Verify</span>");
-    expect(html).toContain("Verifying</span>");
+    for (const label of ["Scope", "Plan", "Build", "Verify", "Deliver", "Handoff"]) {
+      expect(html.match(new RegExp(`>${label}</span>`, "g"))).toHaveLength(2);
+    }
   });
 });

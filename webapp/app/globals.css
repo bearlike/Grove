@@ -281,12 +281,14 @@
   --accent-foreground: oklch(0.21 0.006 285.885);
   --destructive: oklch(0.48 0.245 27.325);
   /* Decorative edges composite over the surface that actually owns each
-     perimeter, which is the only generic 40%-reduction seam: the same 60% alpha
-     applies to raised cards, base headers, and sunken dividers. Do not use parent
+     perimeter, which is the only generic reduction seam: the same 30% alpha
+     applies to raised cards, base headers, and sunken dividers — measured
+     1.07-1.16:1 light and 1.08-1.13:1 dark, a hairline that states hierarchy
+     without competing with the content it encloses. Do not use parent
      opacity; it would also fade text and state marks. `--border-source` keeps the
      pre-change opaque value for non-border derivations. */
   --border-source: oklch(0.83 0.006 286);
-  --border: color-mix(in srgb, var(--border-source) 60%, transparent);
+  --border: color-mix(in srgb, var(--border-source) 30%, transparent);
   /* PROMINENT TIER, unchanged. These identify a component or its state, which
      is the only thing WCAG 1.4.11 actually reaches, and they were already
      solved from the extreme: 3.00 / 3.66 / 4.05 across sunken / base / raised. */
@@ -335,10 +337,10 @@
      here would have cost the card/page step that a user actually looks at. */
   --surface-overlay: oklch(1 0 0);
   /* `--surface-edge` is a decorative perimeter, so it uses the same exact
-     60%-opacity reduction as `--border`. The opaque source remains available to
+     30%-opacity reduction as `--border`. The opaque source remains available to
      fill derivations below; those fills are not borders and must not change. */
   --surface-edge-source: oklch(0.82 0.007 286);
-  --surface-edge: color-mix(in srgb, var(--surface-edge-source) 60%, transparent);
+  --surface-edge: color-mix(in srgb, var(--surface-edge-source) 30%, transparent);
   /* The card's ramp, LIGHT: white down toward the edge token, because there is
      nothing above `raised` to climb to. Derived, never a new colour. */
   --attachment-card-start: var(--surface-raised);
@@ -346,12 +348,12 @@
   /* SUBTLE TIER, stated rather than implied. This token never made a 3:1 claim
      — §4.6 already said it "is not a 3:1 focus indicator" — so naming its tier
      turns a caveat into a fact. It is the New workspace button's border, which
-     is `bg-transparent` on the sidebar and measured 1.67:1; 1.79 there now.
+     is `bg-transparent` on the sidebar: 1.24:1 on base, 1.43:1 on raised.
      1.4.11 does not reach it (the button's own label identifies it), so this is
      a legibility decision, not a compliance one — and it sits a step above the
      divider tier because a control's edge is the only thing drawing it, where a
      divider merely separates two things that are already visible. */
-  --edge-control: oklch(0.80 0.009 286);
+  --edge-control: oklch(0.88 0.009 286);
   /* Grove's one addition to the shadcn palette: a semantic green for measured
      progress and healthy quota. shadcn ships `destructive` but no positive
      counterpart, so without this every "good" signal reaches for a raw palette
@@ -426,10 +428,10 @@
   --accent: oklch(0.274 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  /* The surface below supplies the other 40% of every decorative seam; keeping
+  /* The surface below supplies the other 70% of every decorative seam; keeping
      this reduction in the color token avoids dimming the content it encloses. */
   --border-source: oklch(0.36 0.008 286);
-  --border: color-mix(in srgb, var(--border-source) 60%, transparent);
+  --border: color-mix(in srgb, var(--border-source) 30%, transparent);
   /* The biggest single accessibility gain in this commit, and it was invisible
      to the audit because it is not a solid colour: dark `--input` was a 15%
      white ALPHA edge, which composites to 1.49–1.62:1 over these rungs. A
@@ -458,14 +460,14 @@
   /* This remains the source for attachment fills; only its edge output below
      becomes translucent. */
   --surface-edge-source: oklch(0.36 0.008 286);
-  --surface-edge: color-mix(in srgb, var(--surface-edge-source) 60%, transparent);
+  --surface-edge: color-mix(in srgb, var(--surface-edge-source) 30%, transparent);
   /* ComposerBar's dark:bg-popover resolves to overlay, not raised. Both
      attachment stops must sit above it to retain the approved separation. */
   --attachment-card-start: color-mix(in oklab, var(--surface-edge-source) 94%, var(--foreground));
   --attachment-card-end: var(--surface-edge-source);
   /* SUBTLE TIER. A quiet resting edge, distinct from the stronger input/ring
-     values that carry the 3:1 identity claim. 1.85:1 at `overlay`. */
-  --edge-control: oklch(0.40 0.009 286);
+     values that carry the 3:1 identity claim. 1.34:1 on base, 1.20:1 raised. */
+  --edge-control: oklch(0.28 0.009 286);
   --success: oklch(0.7 0.17 162.48);
   --success-foreground: oklch(0.21 0.006 285.885);
   --info: oklch(0.7 0.14 250);
@@ -696,8 +698,7 @@
 .aui-attachment-tile {
   border-radius: var(--radius-sm);
 }
-.rounded-\[20px\],
-.rounded-\[24px\] {
+.rounded-\[20px\] {
   border-radius: var(--radius-lg);
 }
 
@@ -721,11 +722,18 @@
   border-color: var(--edge-control);
 }
 
-/* The global base border is decorative. Rebind its source only inside actual
-   controls so their existing border, state, and focus utilities stay intact. */
+/* The global base border is decorative. Inside an actual control it takes the
+   resting CONTROL tier instead, so every control edge is one quiet value while
+   focus (`--ring`) and invalid states keep their own, stronger edges. */
 :is(button, input, select, textarea, summary, [role="button"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [role="combobox"], a[data-slot="badge"]) {
-  --border: var(--border-source);
-  --surface-edge: var(--surface-edge-source);
+  --border: var(--edge-control);
+  --surface-edge: var(--edge-control);
+}
+
+/* Header bands carry icon controls whose glyph already says where to click, so
+   their resting edge is dropped outright — keyboard focus still draws `--ring`. */
+.workspace-header :is(button, a)[data-variant="outline"]:not(:focus-visible):not([aria-invalid="true"]) {
+  border-color: transparent;
 }
 
 /* Native outline buttons add a one-pixel shadow that makes their enclosure read
@@ -1093,16 +1101,12 @@
 }
 
 /* Controls — 3. Anything a pointer acts on that is not a circle. */
-[data-slot="composer-send"],
-[data-slot="composer-attach"],
-[data-slot="composer-voice-button"],
-[data-slot="composer-model-trigger"],
 [data-slot="agent-status"] {
   border-radius: var(--radius-md);
 }
 
-/* Containers — 5. Cards, bars, menus, panels: anything that holds a surface. */
-[data-slot="composer-bar"],
+/* Containers — 5. Cards, menus, panels: anything that holds a surface.
+   The composer bar keeps the vendor's own radius instead of this scale. */
 [data-slot="composer-menu"],
 [data-slot="composer-context"],
 [data-slot="agent-card"],
@@ -1173,11 +1177,28 @@
   border-radius: var(--radius-lg);
 }
 
-/* Native composer roles reach vendor literals here, without editing upstream.
-   Configuration sits below the raised writing surface. Callers own geometry. */
+/* The rail row's leading agent tile, named by `fleet/fleet-tree.tsx`. It takes
+   the container corner so it reads as a small card inside the row, not a badge,
+   and a wash of the agent's BRAND hue — an identity colour (§4.1), fixed per
+   agent and gated on no state, so it can never be read as a claim. The hues are
+   the vendored marks' own fills; an unbranded agent keeps a neutral well. */
+.rail-agent-tile {
+  --agent-hue: var(--surface-edge-source);
+  background-color: color-mix(in oklab, var(--agent-hue) 16%, var(--surface-raised));
+  border: 1px solid color-mix(in oklab, var(--agent-hue) 22%, transparent);
+  border-radius: var(--radius-lg);
+}
+.rail-agent-tile:has([data-brand="claude"]) { --agent-hue: #d97757; }
+.rail-agent-tile:has([data-brand="codex"]) { --agent-hue: #7a9dff; }
+.rail-agent-tile:has([data-brand="gemini"]) { --agent-hue: #3186ff; }
+
+/* The landing configuration shelf, below the writing surface: a muted fill
+   and a hairline of its own at the decorative tier — one step quieter than the
+   composer bar above it, so the bar stays the surface you write in. Its pills
+   are toolbar controls and take the ghost rule below. Callers own geometry. */
 .composer-shelf {
-  background-color: var(--surface-sunken);
-  border: 1px solid var(--surface-edge);
+  background-color: color-mix(in oklab, var(--surface-sunken) 55%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
 }
 
@@ -1215,12 +1236,15 @@
   background-color: transparent;
 }
 
-/* Use an opaque focus edge only for the editor. Toolbar controls keep their own. */
+/* The editor's focus is the vendor's `focus-within` step: the bar's line moves
+   up to the prominent focus tier. A focused text field ALWAYS matches
+   `:focus-visible`, and both composers autofocus, so a `--ring` outline here
+   was the bar's resting look — the loud perimeter. The caret carries focus;
+   toolbar controls keep their ring. */
 [data-slot="composer-bar"]:has([data-slot="textarea"]:focus-visible),
 [data-slot="composer-bar"]:has(.aui-composer-input:focus-visible),
 [data-slot="composer-bar"]:has([data-slot="composer-input"]:focus-visible) {
-  outline: 1px solid var(--ring);
-  outline-offset: -1px;
+  border-color: var(--ring);
 }
 
 /* Placeholder contrast follows the same theme tier as metadata. */
@@ -1241,80 +1265,65 @@
   min-height: 24px;
 }
 
-/* Every control on a composer toolbar is one defined pill (§5, "the composer
-   control"): a 1px edge and the same top-lit gradient the attachment card
-   wears, so attach, model and expand read as objects on the bar rather than
-   glyphs floating in it. Reached by slot so the landing page, the workspace
-   reply and the expand dialog cannot each decide it. Send is deliberately
-   absent — it is the one filled (ink) control and the vendor already draws it.
-   The expand control is matched by element + variant, never by slot: it is a
-   `TooltipIconButton`, and `TooltipTrigger asChild` overwrites the button's
-   `data-slot` with its own (see the outline-button rule above). The model
-   trigger is ALSO a ghost button, so the circle rule below excludes it. */
+/* Every control on a composer toolbar is GHOSTED (§5, "the composer
+   control"): no edge, no fill, the secondary tier, lifting to a quiet tint and
+   the primary tier on hover or while its menu is open — the reference's
+   `ghostButton`, so the bar's own perimeter line is the only edge on the
+   surface and send is the only filled control. Reached by slot so the landing
+   page, the workspace reply, the expand dialog and the landing shelf (itself a
+   `composer-toolbar`) cannot each decide it. The expand control is matched by
+   element + variant, never by slot: `TooltipTrigger asChild` overwrites a
+   `TooltipIconButton`'s `data-slot` (see the outline-button rule above). The
+   `:not()` pair outranks that rule's resting `--edge-control` border while
+   leaving keyboard focus and an invalid value their own edge. */
 [data-slot="composer-toolbar"] [data-slot="composer-attach"],
-[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"],
+[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"]:not(:focus-visible):not([aria-invalid="true"]),
 [data-slot="composer-toolbar"] button[data-variant="ghost"] {
-  border: 1px solid var(--edge-control);
-  background-color: var(--attachment-card-end);
-  background-image: linear-gradient(
-    to bottom,
-    var(--attachment-card-start),
-    var(--attachment-card-end)
-  );
+  border-color: transparent;
+  background-color: transparent;
   color: var(--content-secondary);
 }
 [data-slot="composer-toolbar"] [data-slot="composer-attach"]:hover,
 [data-slot="composer-toolbar"] [data-slot="model-selector-trigger"]:hover,
 [data-slot="composer-toolbar"] [data-slot="model-selector-trigger"][aria-expanded="true"],
 [data-slot="composer-toolbar"] button[data-variant="ghost"]:hover {
-  border-color: var(--surface-edge);
+  background-color: color-mix(in oklab, var(--foreground) 7%, transparent);
   color: var(--content-primary);
-}
-/* The mark and the pressed state: the vendored ghost trigger fills with
-   `--accent` on hover, which flattens the pill it just stopped being. */
-[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"]:hover,
-[data-slot="composer-toolbar"] [data-slot="model-selector-trigger"][aria-expanded="true"] {
-  background-image: linear-gradient(
-    to bottom,
-    var(--attachment-card-end),
-    var(--attachment-card-start)
-  );
 }
 /* The worded control shares the icon-only controls' height, or the row
    reads as one short pill among three squares. */
 [data-slot="composer-toolbar"] [data-slot="model-selector-trigger"] {
-  padding-inline: calc(var(--spacing) * 2.5);
+  padding-inline: calc(var(--spacing) * 2);
   height: 28px;
 }
-/* Icon-only controls are ONE size: send is drawn at 28px on both composers,
-   and attach (25.6px) and expand (19.2px) beside it read as three different
-   controls until they match. A size, not a floor — the 24px pointer floor
-   above still holds and this sits over it. */
+/* Icon-only controls are ONE size, send included: the vendor draws send and
+   attach at 25.6px and expand at 19.2px, which read as three different
+   controls on one row. A size, not a floor — the 24px pointer floor above
+   still holds and this sits over it. */
 [data-slot="composer-toolbar"] [data-slot="composer-attach"],
+[data-slot="composer-toolbar"] [data-slot="composer-send"],
 [data-slot="composer-toolbar"] button[data-variant="ghost"]:not([data-slot="model-selector-trigger"]) {
   width: 28px;
   height: 28px;
 }
-/* One shape for every toolbar control, send included: a rounded square at
-   the control role. The vendor draws send and attach as circles and the
-   model trigger at `rounded-md`, so a row mixed two circles, a rectangle and
-   a pill; a composer's controls are one family and take one corner. This is
-   a shape decision on the toolbar, not a new radius role — it reuses the
-   control role's own token, so the census still sees 3.45. */
-[data-slot="composer-toolbar"] [data-slot="composer-attach"],
-[data-slot="composer-toolbar"] [data-slot="composer-send"],
+/* One shape for every toolbar control: assistant-ui's own. The vendor draws
+   send and attach as circles (`rounded-full`); the expand, interrupt and model
+   controls are shadcn buttons at `rounded-md`, so they take the same full
+   round — a circle for an icon, a pill for the worded model trigger. */
 [data-slot="composer-toolbar"] [data-slot="model-selector-trigger"],
 [data-slot="composer-toolbar"] button[data-variant="ghost"] {
-  border-radius: var(--radius-md);
+  border-radius: 9999px;
 }
 
-/* The composer bar alone takes a corner 20% past the container role. It is
-   the one container that holds a live editor plus a toolbar of rounded
-   squares, and at 5.75px its corner read tighter than the controls inside it.
-   Scoped to the bar's own slot so cards, menus and the page panel keep 5.75;
-   the radius census admits this value for exactly that slot. */
+/* `ComposerBar` brings its own `rounded-[24px]` and `paper` surface. Scope the
+   quieter fill and perimeter to that bar, without changing the vendor's corner
+   or adding another token: its editor remains the most legible part of the page
+   while the surrounding transcript or landing surface still has its own rung. */
 [data-slot="composer-bar"] {
-  border-radius: calc(var(--radius-lg) * 1.2);
+  background-color: var(--surface-base);
+  /* 20% more opaque than the decorative tier (36% of the source against
+     `--border`'s 30%), so the one place you write stays findable. */
+  border-color: color-mix(in srgb, var(--border-source) 36%, transparent);
 }
 
 /* An open menu is the overlay rung (§4.3): edge AND shadow, in BOTH themes.
@@ -1350,6 +1359,12 @@
   flex-direction: column;
   max-height: min(24rem, var(--radix-popover-content-available-height));
 }
+/* The same bound across: a caller's fixed `w-72`/`w-80` is a desktop width,
+   and on a phone it ran off the screen. Radix measures what fits. */
+[data-slot="model-selector-content"],
+[data-slot="popover-content"] {
+  max-width: var(--radix-popover-content-available-width);
+}
 [data-slot="model-selector-content"] > [data-slot="command"] {
   flex: 1 1 auto;
   min-height: 0;
@@ -1360,28 +1375,14 @@
   max-height: none;
 }
 
-/* A model row is two lines — a name over its context window — and it was
-   reading cramped for two reasons at once. The rows sat flush against each
-   other, and they inherit the vendored `text-sm`, which at this app's 80%
-   density root resolves to 10.4px with a 9.6px caption: both under §1's 12px
-   floor, on the one surface whose whole job is to be read and compared.
-
-   Fixed with RAMP STEPS, never px literals, so the menu still tracks the
-   density lever, the reader's font size and zoom (§1, "a px floor opts that
-   surface out"). The row keeps sizing itself — nothing here sets a height. */
+/* Option rows keep the vendor's own `text-sm` name over a `text-xs` caption —
+   the size every other menu, select and command list in the app uses. They
+   were stepped up to `--text-lg`, which made these pickers the largest text
+   on the page and pushed them past a phone's viewport. The rows only get air
+   between them; nothing here sets a size or a height. */
 [data-slot="model-selector-content"] [data-slot="model-selector-group"] {
   padding-inline: calc(var(--spacing) * 1);
   padding-block: calc(var(--spacing) * 1);
-}
-[data-slot="model-selector-content"] [data-slot="model-selector-item"] {
-  font-size: var(--text-lg);
-  line-height: var(--text-lg--line-height);
-}
-/* The caption is one step below the name, not two: the vendored row's own
-   `text-xs` would land at 9.6px here. */
-[data-slot="model-selector-content"] [data-slot="model-selector-item"] .text-xs {
-  font-size: var(--text-base);
-  line-height: var(--text-base--line-height);
 }
 [data-slot="model-selector-content"]
   [data-slot="model-selector-item"]
@@ -1433,9 +1434,9 @@
  * 1.62-1.70 band the guide reports for a card edge on `raised` — so the seam
  * that reads as a quiet hairline on a card reads as UNDRAWN here, which is
  * exactly why the first cut of this band had no visible sections at all.
- * `--footer-rule` is solved against the band: measured 1.75:1 dark and 1.59:1
- * light, both inside the guide's stated look and under the peer-benchmark
- * ceiling (M3 `outline-variant` 1.70 is a ceiling here, not a target).
+ * `--footer-rule` is solved against the band: measured 1.25:1 dark and 1.21:1
+ * light — a hairline, well under the peer-benchmark ceiling (M3
+ * `outline-variant` 1.70 is a ceiling here, not a target).
  *
  * THE WASH IS SPECIFIED AS A LIGHTNESS STEP, NOT A RATIO. Near black a 0.045 L
  * step is 1.04:1 — a contrast figure says "invisible" for something plainly
@@ -1451,17 +1452,17 @@
  * destructive 6.85:1), so the wash costs no legibility.
  */
 :root {
-  --footer-rule: oklch(0.76 0.006 286);
+  --footer-rule: oklch(0.84 0.006 286);
   --footer-wash: oklch(0.855 0.004 286);
   --footer-accent: oklch(0.822 0.008 286);
-  --footer-seam: oklch(0.8 0.005 286);
+  --footer-seam: oklch(0.86 0.005 286);
 }
 
 .dark {
-  --footer-rule: oklch(0.34 0.008 286);
+  --footer-rule: oklch(0.24 0.008 286);
   --footer-wash: oklch(0.145 0.006 286);
   --footer-accent: oklch(0.178 0.009 286);
-  --footer-seam: oklch(0.28 0.007 286);
+  --footer-seam: oklch(0.2 0.007 286);
 }
 
 /*

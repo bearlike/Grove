@@ -8,6 +8,7 @@ import { MoreHorizontalIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ConnectionState } from "@/components/elements/connection-state";
 import { ErrorState } from "@/components/elements/error-state";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -60,6 +61,7 @@ import {
   PHASE_BLOCKED_ICON,
   phaseGlyph,
   phaseLabel,
+  railPillAccent,
 } from "./tokens";
 import type { FleetSearchController } from "./fleet-palette";
 import type { FleetRow } from "./types";
@@ -262,14 +264,14 @@ function NewWorkspaceButton({
   );
 }
 
-const PHASE_MARK_TONE = {
-  progress: "text-content-tertiary",
-  done: "text-success",
-  blocked: "text-warning",
-} as const;
+/**
+ * The rail's pill geometry: the fleet badge density with room for the blocked
+ * flag, which sits just outside its glyph's box and the badge would clip.
+ */
+const RAIL_PILL = "h-5 gap-1 overflow-visible px-1.5 py-0 [&>svg]:size-3";
 
 const ROW_RESTING = "border-surface-edge hover:border-edge-control";
-const ROW_SELECTED = "border-primary hover:border-primary focus-visible:border-primary";
+const ROW_SELECTED = "border-edge-control";
 const ROW_STATES = cn(
   "bg-transparent",
   "hover:bg-surface-base dark:hover:bg-surface-base",
@@ -340,61 +342,63 @@ function WorkspaceRow({
                 href={`/w/${state.id}`}
                 aria-current={active ? "page" : undefined}
                 aria-label={`${state.title}. ${row.repoName}. ${state.agent_name}.`}
-                className={cn("block min-w-0 focus-visible:outline-none", ROW_STATES)}
+                className={cn("flex min-w-0 items-start gap-3 p-3 focus-visible:outline-none", ROW_STATES)}
               >
-                {/* `pr-11`, not `pr-10`: the options button is 28px wide and
-                    sits at `right-1.5` (6px), so it occupies the last 34px —
-                    `pr-10` reserved 32 and was always 2px short. Nothing had
-                    landed in that gap until the working mark became the last
-                    item on the line, which is how a latent off-by-two became
-                    visible. Measured, not computed from the class names. */}
-                <header className="surface-header flex min-h-[28px] min-w-0 items-center gap-2 px-2.5 py-1 pr-11 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:pr-14">
-                  <AgentMark agentName={state.agent_name} className="size-5 shrink-0" />
-                  <LoopingText className="min-w-0 flex-1 text-base font-medium text-content-primary">
-                    {state.title}
-                  </LoopingText>
-                  {/* LAST in the title band, so it reads as a property of this
-                      row's name rather than of the marks on the line below —
-                      and it is the one mark here that says something is
-                      happening RIGHT NOW, which is why it moves and they do
-                      not. It sits inside the header's own `pr-10`, so it can
-                      never collide with the options button that reserves that
-                      corner. Rendered only while working: an absent claim takes
-                      no space (design system §7). */}
-                  {agentState === "working" ? (
-                    <WorkingMark className="shrink-0" />
-                  ) : null}
-                  {!grouped ? <span className="sr-only">Project: {row.repoName}</span> : null}
-                </header>
-                <div className="flex min-w-0 flex-col gap-1 px-2.5 py-2 text-sm text-content-secondary">
+                {/* The agent's mark on its own sunken tile, spanning the title
+                    and context lines: identity is read before the name, and a
+                    tile is what lets a row be found by its leading column
+                    alone. The tile is neutral on purpose — the agent brand is
+                    the only identity the wire carries, and a hue picked per
+                    row would be a colour meaning nothing (design system §4.1). */}
+                <span aria-hidden className="rail-agent-tile flex size-10 shrink-0 items-center justify-center" data-testid="rail-agent-tile">
+                  <AgentMark agentName={state.agent_name} className="size-5" />
+                </span>
+                <div className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm text-content-secondary">
+                  {/* `pr-9` reserves the options button's corner: 28px at
+                      `right-1.5` is the card's last 34px, and the link's own
+                      `p-3` already covers ~10 of those. Measured, not computed
+                      from the class names. */}
+                  <header className="flex min-h-[28px] min-w-0 items-center gap-2 pr-9 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:pr-11">
+                    <LoopingText className="min-w-0 flex-1 text-base font-medium text-content-primary">
+                      {state.title}
+                    </LoopingText>
+                    {/* LAST on the title line: the one mark that says something
+                        is happening RIGHT NOW, which is why it moves and the
+                        pills below do not. Rendered only while working — an
+                        absent claim takes no space (design system §7). */}
+                    {agentState === "working" ? (
+                      <WorkingMark className="shrink-0" />
+                    ) : null}
+                    {!grouped ? <span className="sr-only">Project: {row.repoName}</span> : null}
+                  </header>
                   <SessionMetadata
                     workspace={row.workspace}
                     context={
                       <div className="flex min-w-0 items-center gap-2" data-testid="rail-context">
                         <span className="flex min-w-0 flex-[0_1_auto] items-center gap-1" data-testid="rail-branch">
-                          <BRANCH_GLYPH aria-hidden className="size-3 shrink-0" />
+                          <BRANCH_GLYPH aria-hidden className="size-3.5 shrink-0" />
                           <span className="sr-only">Branch: </span>
                           <LoopingText className="min-w-0">{state.branch}</LoopingText>
                         </span>
                         {attentionMarkLabel && attentionText ? (
-                          <span
-                            className="inline-flex shrink-0 items-center gap-1 text-destructive"
+                          <Badge
+                            variant="outline"
+                            className={cn(RAIL_PILL, railPillAccent("attention"))}
                             data-testid="fleet-row-attention-mark"
                             aria-label={attentionMarkLabel}
                           >
-                            <AttentionIcon aria-hidden className="size-3 shrink-0" />
+                            <AttentionIcon aria-hidden className="shrink-0" />
                             <span>{attentionText}</span>
-                          </span>
+                          </Badge>
                         ) : null}
                         {PhaseIcon && phaseMarkLabel && phaseText ? (
-                          <span
+                          <Badge
+                            variant="outline"
                             className={cn(
-                              "inline-flex shrink-0 items-center gap-1",
-                              phase?.blocked
-                                ? PHASE_MARK_TONE.blocked
-                                : phase?.phase === "done"
-                                  ? PHASE_MARK_TONE.done
-                                  : PHASE_MARK_TONE.progress,
+                              RAIL_PILL,
+                              railPillAccent(
+                                phase?.blocked ? "blocked" : phase?.phase === "handoff" ? "done" : "progress",
+                              ),
                             )}
                             data-testid="fleet-row-phase-mark"
                             aria-label={phaseMarkLabel}
@@ -406,7 +410,7 @@ function WorkspaceRow({
                               ) : null}
                             </span>
                             <span>{phaseText}</span>
-                          </span>
+                          </Badge>
                         ) : null}
                       </div>
                     }
@@ -424,18 +428,28 @@ function WorkspaceRow({
               {updatedIso ? <p>Updated {absoluteTime(updatedIso)}</p> : null}
             </TooltipContent>
           </Tooltip>
+          {/* The left edge carries at most one claim, and selection wins:
+              where you ARE outranks what a row reports. A handed-off row takes
+              the success edge so finished work reads down the column without
+              opening a tooltip; every other state keeps its word in the pills. */}
           {active ? (
             <span
               aria-hidden
               data-testid="fleet-row-marker"
-              className="pointer-events-none absolute top-2 bottom-2 left-0 w-0.5 bg-primary"
+              className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-primary"
+            />
+          ) : phase?.phase === "handoff" && !phase.blocked ? (
+            <span
+              aria-hidden
+              data-testid="fleet-row-done-edge"
+              className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-success"
             />
           ) : null}
           <DropdownMenuTrigger asChild>
             <TooltipIconButton
               tooltip="Workspace options"
               aria-label="Workspace options"
-              className="invisible absolute top-px right-1.5 min-h-[28px] min-w-[28px] [@media(pointer:coarse)]:visible [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11 group-focus-within:visible group-hover:visible"
+              className="invisible absolute top-2.5 right-1.5 min-h-[28px] min-w-[28px] [@media(pointer:coarse)]:visible [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11 group-focus-within:visible group-hover:visible"
               onClick={stopMenuButtonNavigation}
               onPointerDown={stopMenuButtonNavigation}
             >
@@ -501,13 +515,13 @@ function FleetSkeleton(): React.ReactNode {
     >
       {Array.from({ length: 5 }, (_, index) => (
         <CardShell key={index} className="min-w-0">
-          <div className="surface-header flex items-center gap-2 px-2.5 py-1">
-            <Skeleton className="size-5 shrink-0" />
-            <Skeleton className="h-5 w-2/3" />
-          </div>
-          <div className="flex min-w-0 flex-col gap-1 px-2.5 py-2">
-            <Skeleton className="h-4 w-3/4" />
-            <Skeleton className="h-4 w-full" />
+          <div className="flex min-w-0 items-start gap-3 p-3">
+            <Skeleton className="size-10 shrink-0" />
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Skeleton className="h-5 w-2/3" />
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-full" />
+            </div>
           </div>
         </CardShell>
       ))}

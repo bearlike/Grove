@@ -199,13 +199,13 @@ def test_hyperlink_without_a_url_is_plain_text(monkeypatch: pytest.MonkeyPatch) 
 def test_ticket_line_renders_title_status_and_phase(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
     ref = TicketRef(provider="gitea", id="42", title="Fix the thing", status="open")
-    claim = TicketClaim(ticket="gitea:42", phase="verifying")
+    claim = TicketClaim(ticket="gitea:42", phase="verify")
 
     line = _ticket_line(ref, claim)
     assert "gitea#42" in line
     assert "Fix the thing" in line
     assert "[open]" in line
-    assert "verifying" in line
+    assert "verify" in line
 
 
 def test_ticket_line_omits_every_absent_segment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,9 +219,9 @@ def test_ticket_line_omits_every_absent_segment(monkeypatch: pytest.MonkeyPatch)
 
 def test_ticket_line_marks_a_blocked_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
-    claim = TicketClaim(ticket="gitea:42", phase="implementing", blocked=True)
+    claim = TicketClaim(ticket="gitea:42", phase="build", blocked=True)
     line = _ticket_line(TicketRef(provider="gitea", id="42"), claim)
-    assert "implementing" in line
+    assert "build" in line
     assert "blocked" in line
 
 

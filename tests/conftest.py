@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+
+# A CLI refusal is asserted by its TEXT, and Rich splits an option token's
+# leading `-` into its own styled span (`--from` arrives as `-`+`--from` with an
+# escape between), so `"--from" in result.output` is False the moment colour is
+# on. Typer forces colour when `GITHUB_ACTIONS` is set — which Gitea Actions sets
+# too, so both forges failed identically while every developer machine passed.
+#
+# This is an assignment at MODULE scope rather than an autouse `delenv` because
+# `typer.rich_utils.FORCE_TERMINAL` is evaluated once at import; a fixture runs
+# after that and cannot undo it. Verified by mutation: dropping this line
+# reproduces the CI failure under `GITHUB_ACTIONS=true`.
+os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, Final
@@ -459,6 +472,11 @@ def _isolated_agent_hook_paths(
     # WRITE — a test ticket recorded in the developer's live handover log would
     # then suppress a real pickup, silently and permanently.
     monkeypatch.setattr("grove.core.paths.user_handover_path", lambda: base / "handovers.json")
+    # The watch registry is the handover log's twin: every `build_app` lifespan
+    # re-arms whatever `WatchLog()` finds, and a registration is a WRITE — so an
+    # unredirected route test would arm a fixture watch in the developer's live
+    # daemon, which then probes and mails a workspace that never existed.
+    monkeypatch.setattr("grove.core.paths.user_watches_path", lambda: base / "watches.json")
     # The usage cache is the same shape again: `usage.enabled` defaults True and
     # the indexer resolves this through raw `platformdirs`, so any test that
     # builds a `UsageService` without injecting a path would index the

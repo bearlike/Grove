@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import shlex
+import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from dataclasses import replace as _dc_replace
@@ -299,6 +300,66 @@ class _InitRun:
         return cls(rc=1, summary=summary)
 
 
+@dataclass(slots=True)
+class _ReviveBreaker:
+    """Stop retrying an auto-revive that keeps failing for the same workspace.
+
+    ``_revive_for_steer`` is best-effort by design: a failed respawn logs and
+    leaves the steer's own refusal to be raised, which is the better error. The
+    gap is that nothing REMEMBERS the failure, so every subsequent message pays
+    a full respawn — `devcontainer up` included — to fail the same way. Measured
+    on this host: six respawns in seven seconds against a wedged tmux server,
+    each one a fleet-wide scan's worth of work for a workspace that could not
+    come back until a human intervened.
+
+    Deliberately not a general retry policy. It trips after a small number of
+    consecutive failures and reopens on a cooldown, so a workspace whose cause
+    was transient recovers on its own and one whose cause is not stops costing
+    a respawn per keystroke. A SUCCESS clears the count, because the thing being
+    counted is consecutive futility rather than lifetime failures.
+    """
+
+    #: Low, because each failure is expensive and the second one rarely
+    #: succeeds where the first did not.
+    max_failures: int = 3
+    #: Long enough that a wedged runtime is not retried per message, short
+    #: enough that a human fixing the cause is not left waiting.
+    cooldown_seconds: float = 60.0
+    #: Injected so a test can advance time without sleeping and without
+    #: monkeypatching the stdlib clock out from under everything else.
+    clock: Callable[[], float] = time.monotonic
+    _failures: dict[str, int] = field(default_factory=dict)
+    _opened_at: dict[str, float] = field(default_factory=dict)
+
+    def allows(self, workspace_id: str) -> bool:
+        """Whether an auto-revive may run for this workspace right now."""
+        opened = self._opened_at.get(workspace_id)
+        if opened is None:
+            return True
+        if self.clock() - opened < self.cooldown_seconds:
+            return False
+        # Cooldown elapsed: let exactly one attempt through to re-test.
+        self._opened_at.pop(workspace_id, None)
+        self._failures[workspace_id] = self.max_failures - 1
+        return True
+
+    def record_failure(self, workspace_id: str) -> None:
+        count = self._failures.get(workspace_id, 0) + 1
+        self._failures[workspace_id] = count
+        if count >= self.max_failures:
+            self._opened_at[workspace_id] = self.clock()
+            logger.warning(
+                "auto-respawn for {} failed {} times; pausing retries for {:.0f}s",
+                workspace_id,
+                count,
+                self.cooldown_seconds,
+            )
+
+    def record_success(self, workspace_id: str) -> None:
+        self._failures.pop(workspace_id, None)
+        self._opened_at.pop(workspace_id, None)
+
+
 class WorkspaceManager:
     """Orchestrates workspace lifecycle for one repo + one merged config."""
 
@@ -318,6 +379,11 @@ class WorkspaceManager:
         self._repo_root = repo_root
         self._cfg = cfg
         self._store = store
+        # Auto-revive is best-effort, so a failure is silent and the NEXT
+        # message tries again — which turns one unrevivable workspace into a
+        # respawn per steer forever. Measured: six full respawns in seven
+        # seconds against a tmux server that could not answer any of them.
+        self._revive_breaker = _ReviveBreaker()
         # Injected for tests (DI at the I/O boundary); production passes None
         # and the first mewbo launch builds one from cfg.mewbo.
         self._mewbo_client = mewbo_client
@@ -2918,12 +2984,16 @@ class WorkspaceManager:
             or self._native_owner_connected(state)
         ):
             return state
+        if not self._revive_breaker.allows(state.id):
+            return state
         logger.info("workspace {} has no native owner; respawning to steer", state.id)
         try:
             revived = self.respawn(state.id)
         except GroveError as exc:
+            self._revive_breaker.record_failure(state.id)
             logger.warning("auto-respawn for {} failed: {}", state.id, exc)
             return state
+        self._revive_breaker.record_success(state.id)
         self._emit("respawned", state.id, {"reason": "steer_revived"})
         return revived
 

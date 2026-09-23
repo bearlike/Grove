@@ -52,7 +52,12 @@ from grove.core.contracts.tickets import (
     TicketRef,
 )
 from grove.core.errors import TicketProviderError
-from grove.core.tickets.provider import NumberTicketProvider, TicketThread
+from grove.core.tickets.provider import (
+    CommitCheck,
+    CommitChecks,
+    NumberTicketProvider,
+    TicketThread,
+)
 
 
 class GiteaProvider(NumberTicketProvider):
@@ -61,10 +66,12 @@ class GiteaProvider(NumberTicketProvider):
     name: ClassVar[TicketProviderName] = "gitea"
     label: ClassVar[str] = "Gitea"
     builtin_prefixes: ClassVar[tuple[str, ...]] = ("gitea", "gtea")
+    checks_supported: ClassVar[bool] = True
     comments_supported: ClassVar[bool] = True
     assignees_supported: ClassVar[bool] = True
     body_supported: ClassVar[bool] = True
     branch_view_segment: ClassVar[str] = "src/branch"
+    api_prefix: ClassVar[str] = "/api/v1"
     viewer_path: ClassVar[str] = "/api/v1/user"
 
     def __init__(
@@ -133,6 +140,32 @@ class GiteaProvider(NumberTicketProvider):
         if not isinstance(payload, dict):
             raise TicketProviderError(f"gitea returned an unexpected shape for pull {ticket_id}")
         return self._to_ref(payload, kind="pull_request")
+
+    def get_commit_checks(self, owner: str, repo: str, sha: str) -> CommitChecks:
+        """Gitea's commit statuses, normalized without inferring CI semantics."""
+        payload = self._request("GET", f"/api/v1/repos/{owner}/{repo}/commits/{sha}/status")
+        if not isinstance(payload, dict):
+            raise TicketProviderError(f"gitea returned an unexpected shape for commit {sha} status")
+        statuses = payload.get("statuses")
+        if not isinstance(statuses, list):
+            raise TicketProviderError(
+                f"gitea returned an unexpected statuses shape for commit {sha}"
+            )
+        checks = tuple(
+            CommitCheck(
+                name=str(status.get("context") or "unnamed check"),
+                state=str(status.get("status") or "pending").lower(),
+                url=str(status["target_url"]) if status.get("target_url") else None,
+            )
+            for status in statuses
+            if isinstance(status, dict)
+        )
+        running_states = {"pending", "running", "queued", "in_progress"}
+        return CommitChecks(
+            checks=checks,
+            running=any(check.state in running_states for check in checks),
+            url=next((check.url for check in checks if check.url), None),
+        )
 
     def read_thread(self, ticket_id: str) -> TicketThread:
         """The issue plus its whole comment thread — two GETs, one answer."""

@@ -26,15 +26,18 @@ describe("subtle outlined control chrome", () => {
     expect(css).toContain(`${outlinedControl} {\n  box-shadow: none;\n}`);
   });
 
-  it("keeps composer keyboard focus as an inset opaque ring edge", () => {
+  it("gives the composer's focused border a visible ring without an outer frame", () => {
     const composerFocus = css.slice(
       css.indexOf('[data-slot="composer-bar"]:has([data-slot="textarea"]:focus-visible)'),
       css.indexOf("/* Placeholder contrast"),
     );
 
-    expect(composerFocus).toContain("outline: 1px solid var(--ring);");
-    expect(composerFocus).toContain("outline-offset: -1px;");
-    expect(composerFocus).not.toContain("outline: 2px");
-    expect(composerFocus).not.toContain("outline-offset: 2px");
+    expect(composerFocus).toContain("border-color: var(--ring);");
+    expect(composerFocus).not.toContain("outline:");
+  });
+
+  it("drops the resting edge of header-band controls but keeps their focus ring", () => {
+    const header = '.workspace-header :is(button, a)[data-variant="outline"]:not(:focus-visible):not([aria-invalid="true"])';
+    expect(css).toContain(`${header} {\n  border-color: transparent;\n}`);
   });
 });

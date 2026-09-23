@@ -14,9 +14,9 @@ type RadiusMeasurement = {
 
 const EXPECTED_ELEMENTS = 100;
 const APPROVED_RADII = new Set([0, 2.3, 3.45, 5.75]);
-// The composer bar alone sits 20% past the container role (design-system
-// §4.3); the census admits that value for that one slot and nothing else.
-const SLOT_RADII: ReadonlyMap<string, number> = new Map([["composer-bar", 6.9]]);
+// The composer bar alone keeps the vendor's literal `rounded-[24px]`;
+// it is not scaled by this app's 80%-density root like rem-based roles are.
+const SLOT_RADII: ReadonlyMap<string, number> = new Map([["composer-bar", 24]]);
 
 function resolvedRadius(value: string, dimension: number): number {
   if (value.endsWith("%")) return (Number.parseFloat(value) / 100) * dimension;

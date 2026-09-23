@@ -90,7 +90,7 @@ def test_fleet_carries_lifecycle_status_and_phase(runner: CliRunner, project: Pa
     already carries, plus the phase claim only ``grove phase``/``show`` could
     read before this verb existed."""
     ws_id = _create(runner)
-    phased = runner.invoke(app, ["phase", ws_id, "implementing", "--note", "wiring fleet"])
+    phased = runner.invoke(app, ["phase", ws_id, "build", "--note", "wiring fleet"])
     assert phased.exit_code == 0, phased.output
 
     result = runner.invoke(app, ["fleet"])
@@ -103,7 +103,7 @@ def test_fleet_carries_lifecycle_status_and_phase(runner: CliRunner, project: Pa
     # already reports, just read through the richer view here.
     assert row.state.status.value == "active"
     assert row.phase is not None
-    assert row.phase.phase == "implementing"
+    assert row.phase.phase == "build"
     assert row.phase.note == "wiring fleet"
     # ticket_refs rides on the embedded WorkspaceStateView — present (empty),
     # never dropped, so a script can always read the field.

@@ -59,7 +59,7 @@ describe("the live pulse", () => {
   it("does not run once the work is done", () => {
     const html = renderToStaticMarkup(
       <PhaseMeter
-        phase={{ ...FIXTURE_PHASE, phase: "done", index: 5 }}
+        phase={{ ...FIXTURE_PHASE, phase: "handoff", index: 5 }}
         working
       />,
     );
@@ -162,7 +162,7 @@ describe("the track's hue", () => {
 
   it("settles the whole sequence to success on done", () => {
     const html = renderToStaticMarkup(
-      <PhaseMeter phase={{ ...FIXTURE_PHASE, phase: "done", index: 5 }} />,
+      <PhaseMeter phase={{ ...FIXTURE_PHASE, phase: "handoff", index: 5 }} />,
     );
 
     expect(html).toContain("text-success");

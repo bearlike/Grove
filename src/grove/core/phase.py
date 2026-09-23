@@ -68,7 +68,7 @@ against real git in both directions).
 
 * **No staleness verdict.** An agent that dies mid-task leaves its last phase
   standing, and that is correct: a phase is a claim about the TASK, and a task
-  in ``implementing`` for three hours is a long task, not a stale report. Whether
+  in ``build`` for three hours is a long task, not a stale report. Whether
   the agent is still alive is what the other two axes already answer, better —
   ``WorkspaceStatus`` (is the session/container up) and ``AgentActivityState``
   (is it working, waiting, dead — it records a launch that exited). Folding age
@@ -89,7 +89,7 @@ against real git in both directions).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Final, Literal, get_args
@@ -98,12 +98,12 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 TaskPhase = Literal[
-    "scoping",
-    "planning",
-    "implementing",
-    "verifying",
-    "delivering",
-    "done",
+    "scope",
+    "plan",
+    "build",
+    "verify",
+    "deliver",
+    "handoff",
 ]
 """How far through its task the agent says it is.
 
@@ -117,12 +117,33 @@ Deliberately ABSENT: ``error``, which already exists on ``AgentActivityState``.
 "stuck, and here is how far it got" stays expressible.
 """
 
+LEGACY_PHASES: Final[Mapping[str, TaskPhase]] = {
+    "scoping": "scope",
+    "planning": "plan",
+    "implementing": "build",
+    "verifying": "verify",
+    "delivering": "deliver",
+    "done": "handoff",
+}
+"""Preserve reports from pinned older skills and durable history rows.
+
+An installed skill can remain pinned to an older plugin version that writes the
+previous names, and history rows on disk retain those names. Without this map,
+those reports would be silently dropped at the current closed-vocabulary boundary.
+"""
+
+
+def normalize_phase(value: str) -> str:
+    """Keep older writers usable without widening the current wire vocabulary."""
+    return LEGACY_PHASES.get(value, value)
+
+
 PHASE_ORDER: Final[tuple[TaskPhase, ...]] = get_args(TaskPhase)
 """The phases in order, derived from the type so the two cannot drift.
 
 Order is meaningful — clients render progress through it — but Grove never
-enforces monotonicity: an agent that discovers in ``verifying`` that its design
-was wrong is *right* to report ``planning`` again, and a tool that refused the
+enforces monotonicity: an agent that discovers in ``verify`` that its design
+was wrong is *right* to report ``plan`` again, and a tool that refused the
 transition would be punishing the honest report it exists to collect.
 """
 
@@ -183,6 +204,11 @@ class PhaseClaim(BaseModel):
     process. The reason belongs in :attr:`note`.
     """
 
+    @field_validator("phase", mode="before")
+    @classmethod
+    def _normalize_phase(cls, value: object) -> object:
+        return normalize_phase(value) if isinstance(value, str) else value
+
     @field_validator("note", mode="before")
     @classmethod
     def _flatten(cls, v: object) -> str | None:
@@ -218,7 +244,7 @@ class PhaseClaim(BaseModel):
         the single row most needing a human. What separates them is *who* acts
         next, which the flag itself says.
         """
-        return self.phase == "done" or self.blocked
+        return self.phase == "handoff" or self.blocked
 
 
 class TicketClaim(PhaseClaim):

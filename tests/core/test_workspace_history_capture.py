@@ -119,7 +119,7 @@ def test_the_tick_records_the_phase_claim_and_dedupes_across_polls(
     PhaseFile.write(
         Path(created.worktree_path),
         PhaseFile.key_for(created.id),
-        "implementing",
+        "build",
         "wiring the store",
     )
 
@@ -129,7 +129,7 @@ def test_the_tick_records_the_phase_claim_and_dedupes_across_polls(
 
     claims = history.history_for(created.id).progress
     assert [(c.phase, c.note, c.ticket_key) for c in claims] == [
-        ("implementing", "wiring the store", None)
+        ("build", "wiring the store", None)
     ]
 
     # A real transition appends; the previous claim is still there, which is the
@@ -137,12 +137,12 @@ def test_the_tick_records_the_phase_claim_and_dedupes_across_polls(
     PhaseFile.write(
         Path(created.worktree_path),
         PhaseFile.key_for(created.id),
-        "verifying",
+        "verify",
     )
     service.refresh_workspace(str(repo), created.id)
     assert {c.phase for c in history.history_for(created.id).progress} == {
-        "implementing",
-        "verifying",
+        "build",
+        "verify",
     }
 
 

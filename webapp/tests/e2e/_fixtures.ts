@@ -2,6 +2,11 @@ import type {
   AgentSummaryView,
   BranchInfo,
   DashboardSnapshotView,
+  MailboxDirectory,
+  SubagentFleetView,
+  WatchList,
+  WorkspaceActivityView,
+  WorkspaceHistoryView,
   ModelOptionView,
   PhaseView,
   ProvisionProgressView,
@@ -26,6 +31,29 @@ import type {
  * e2e harness too: a daemon-side field change fails `typecheck` here instead of
  * quietly leaving the fake daemon serving a shape the real one stopped sending.
  */
+
+export const FIXTURE_MAILBOX_DIRECTORY: MailboxDirectory = {
+  protocol_version: 2,
+  body_limit_bytes: 262_144,
+  contacts: [],
+};
+
+export const FIXTURE_WATCHES: WatchList = { watches: [] };
+
+export const FIXTURE_SUBAGENT_FLEET: SubagentFleetView = {
+  subagents: [],
+  sessions: [],
+  session_id: "b3b5108d-1cbf-4ccf-91f9-e1e7d515542c",
+  supported: true,
+  error: null,
+};
+
+export const FIXTURE_HISTORY: WorkspaceHistoryView = {
+  name: null,
+  names: [],
+  progress: [],
+  tickets: [],
+};
 
 export const FIXTURE_ACTIVITY: DashboardSnapshotView = {
     "projects": [
@@ -154,7 +182,7 @@ export const FIXTURE_ACTIVITY: DashboardSnapshotView = {
             ],
             "observed_at": "2026-08-10T07:21:26.273444Z",
             "phase": {
-              "phase": "delivering",
+              "phase": "deliver",
               "note": "committing pairing, account menu, and session catalog",
               "updated_at": "2026-08-10T07:03:48.328778Z",
               "index": 4,
@@ -184,6 +212,9 @@ export const FIXTURE_ACTIVITY: DashboardSnapshotView = {
     "total_workspaces": 1,
     "needs_attention": 0
   };
+
+export const FIXTURE_WORKSPACE_ACTIVITY: WorkspaceActivityView =
+  FIXTURE_ACTIVITY.projects[0]!.workspaces[0]!;
 
 export const FIXTURE_WORKSPACES: WorkspaceStateView[] = [
     {
@@ -1453,7 +1484,7 @@ export const FIXTURE_TODO: TodoListView = {
   };
 
 export const FIXTURE_PHASE: PhaseView = {
-    "phase": "delivering",
+    "phase": "deliver",
     "note": "committing pairing, account menu, and session catalog",
     "updated_at": "2026-08-10T07:03:48.328778Z",
     "index": 4,

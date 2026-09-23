@@ -20,14 +20,14 @@ const ROWS: readonly StatusRow[] = [
     title: "Waiting and verifying",
     state: "waiting",
     needsAttention: true,
-    phase: "verifying",
+    phase: "verify",
   },
   {
     id: "status-blocked-implementing",
     title: "Agent blocked while implementing",
     state: "blocked",
     needsAttention: true,
-    phase: "implementing",
+    phase: "build",
   },
   {
     id: "status-error",
@@ -41,14 +41,14 @@ const ROWS: readonly StatusRow[] = [
     title: "Task complete",
     state: "working",
     needsAttention: false,
-    phase: "done",
+    phase: "handoff",
   },
   {
     id: "status-phase-blocked",
     title: "Phase blocked",
     state: "working",
     needsAttention: false,
-    phase: "implementing",
+    phase: "build",
     blocked: true,
     note: "waiting for the release window",
   },
@@ -87,7 +87,7 @@ function snapshotFor(rows: readonly StatusRow[]): DashboardSnapshotView {
           phase: row.phase,
           note: row.note ?? null,
           updated_at: new Date().toISOString(),
-          index: ["scoping", "planning", "implementing", "verifying", "delivering", "done"].indexOf(
+          index: ["scope", "plan", "build", "verify", "deliver", "handoff"].indexOf(
             row.phase,
           ),
           total: 6,
@@ -115,16 +115,20 @@ async function useFleet(page: Page): Promise<void> {
 }
 
 test.describe("fleet status marks", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("grove.onboarding.seen", "true"));
+  });
+
   test("anchors the blocked planning flag to its icon instead of its label", async ({ page }) => {
     const planning = snapshotFor([
-      { id: "planning-blocked", title: "Planning with a dependency", state: "waiting", needsAttention: true, phase: "planning", blocked: true },
-      { id: "planning-ready", title: "Planning normally", state: "working", needsAttention: false, phase: "planning" },
+      { id: "planning-blocked", title: "Planning with a dependency", state: "waiting", needsAttention: true, phase: "plan", blocked: true },
+      { id: "planning-ready", title: "Planning normally", state: "working", needsAttention: false, phase: "plan" },
     ]);
     await page.route("**/api/grove/activity", route => route.fulfill({ json: planning }));
     await page.route("**/api/grove/events", route => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
     await page.goto("/");
     const phase = page.locator('[data-workspace-id="planning-blocked"] [data-testid="fleet-row-phase-mark"]');
-    await expect(phase).toContainText("Planning");
+    await expect(phase).toContainText("Plan");
     const geometry = await phase.evaluate(el => {
       const icons = el.querySelectorAll("svg");
       const main = icons[0].getBoundingClientRect();
@@ -152,7 +156,7 @@ test.describe("fleet status marks", () => {
       );
       await expect(waiting.getByTestId("fleet-row-phase-mark")).toHaveAttribute(
         "aria-label",
-        "Verifying — step 4 of 6",
+        "Verify — step 4 of 6",
       );
 
       const blocked = page.locator('[data-workspace-id="status-blocked-implementing"]');
@@ -162,7 +166,7 @@ test.describe("fleet status marks", () => {
       );
       await expect(blocked.getByTestId("fleet-row-phase-mark")).toHaveAttribute(
         "aria-label",
-        "Implementing — step 3 of 6",
+        "Build — step 3 of 6",
       );
 
       const error = page.locator('[data-workspace-id="status-error"]');
@@ -174,14 +178,14 @@ test.describe("fleet status marks", () => {
 
       const done = page.locator('[data-workspace-id="status-done"]');
       await expect(done.getByTestId("fleet-row-attention-mark")).toHaveCount(0);
-      await expect(done.getByTestId("fleet-row-phase-mark")).toHaveClass(/text-success/);
+      await expect(done.getByTestId("fleet-row-phase-mark")).toHaveClass(/bg-success\/15 text-success/);
 
       const phaseBlocked = page.locator('[data-workspace-id="status-phase-blocked"]');
       await expect(phaseBlocked.getByTestId("fleet-row-phase-mark")).toHaveAttribute(
         "aria-label",
-        "Implementing — blocked: waiting for the release window",
+        "Build — blocked: waiting for the release window",
       );
-      await expect(phaseBlocked.getByTestId("fleet-row-phase-mark")).toHaveClass(/text-warning/);
+      await expect(phaseBlocked.getByTestId("fleet-row-phase-mark")).toHaveClass(/bg-warning\/15 text-warning/);
 
       const noPhase = page.locator('[data-workspace-id="status-no-phase"]');
       await expect(noPhase.getByTestId("fleet-row-attention-mark")).toHaveCount(0);
@@ -189,7 +193,7 @@ test.describe("fleet status marks", () => {
       await waiting.locator("a").hover();
       const details = page.getByRole("tooltip").filter({ hasText: "Waiting and verifying" });
       await expect(details).toContainText("Waiting for you — the agent asked a question");
-      await expect(details).toContainText("Verifying — step 4 of 6");
+      await expect(details).toContainText("Verify — step 4 of 6");
       await page.keyboard.press("Escape");
 
       await page.screenshot({ path: `test-results/status-marks-${theme}.png` });

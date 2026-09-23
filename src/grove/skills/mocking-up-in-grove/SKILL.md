@@ -18,7 +18,7 @@ Read the surface's own guide and its visual contract (`webapp/CLAUDE.md` and
 `docs/design-system.md` for the TUI). Take the census of vendored components
 before deciding anything is missing. Screenshot the current surface with the
 browser tools so the mockup can be compared against something real. Report
-`scoping`, then `planning`, through the phase channel `working-in-grove`
+`scope`, then `plan`, through the phase channel `working-in-grove`
 describes.
 
 ## 2. Draw where nothing tracks it

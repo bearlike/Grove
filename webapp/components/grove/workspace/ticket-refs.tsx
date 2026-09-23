@@ -62,7 +62,7 @@ const BOUNDED_ROWS = 6;
  *
  * TWO CLAIMS PER ROW, AND THE POINT IS THAT THEY CAN DISAGREE. The tracker says
  * what the ticket IS (`open`, `merged`) and the agent says how far GROVE has got
- * on it — an issue that still reads `open` while Grove reports `delivering` is
+ * on it — an issue that still reads `open` while Grove reports `deliver` is
  * the ordinary shape of a task in flight, and a reader who can only see one half
  * cannot tell that from a workspace that has stalled. `phase` is threaded in
  * rather than fetched: the Info tab already holds both halves, so the join is a
@@ -116,7 +116,7 @@ export function TicketRefsCard({
     // even across the correction that would move a three-part key.
     //
     // `?? null` is the whole "not reported" state. A ticket the agent has not
-    // claimed gets no mark — never `scoping`, never an unfilled step zero —
+    // claimed gets no mark — never `scope`, never an unfilled step zero —
     // which is exactly how the fleet already draws a workspace that has
     // reported nothing.
     phase: claims.get(ticketPhaseKey(ref)) ?? null,
@@ -402,7 +402,7 @@ export function TicketRow({
             <PhaseBadge phase={phase} ticket={ticket} />
           </span>
           {/* NOT REPORTED IS A STATE, and it is stated. A ticket the agent has
-              said nothing about must never inherit `scoping` — the absence is
+              said nothing about must never inherit `scope` — the absence is
               the fact, and printing it is what stops a blank column reading as
               a rendering fault. */}
           <span className="text-xs tabular-nums text-content-tertiary">

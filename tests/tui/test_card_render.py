@@ -538,7 +538,7 @@ def test_render_card_init_failed_badge_styled_bold_error() -> None:
 # agent is doing right now) ─────────────────────────────────────────────────
 
 
-def _phase(phase: str = "verifying", **overrides: object) -> PhaseReport:
+def _phase(phase: str = "verify", **overrides: object) -> PhaseReport:
     base: dict[str, object] = {"phase": phase, "note": None, "updated_at": _NOW}
     base.update(overrides)
     return PhaseReport(**base)  # type: ignore[arg-type]
@@ -547,11 +547,11 @@ def _phase(phase: str = "verifying", **overrides: object) -> PhaseReport:
 def test_render_card_phase_shows_glyph_label_and_progress() -> None:
     """A reported phase renders `<glyph> <label> N/M` on line 2, between the
     agent-activity segment and the status label."""
-    report = _phase("verifying")
+    report = _phase("verify")
     text = _render_card(
         _state(), dark=True, now=_NOW, agent_state=AgentActivityState.WORKING, phase=report
     )
-    segment = f"{phase_glyph('verifying')} {phase_label('verifying')} 4/{len(PHASE_ORDER)}"
+    segment = f"{phase_glyph('verify')} {phase_label('verify')} 4/{len(PHASE_ORDER)}"
     assert segment in text.plain
     line2 = text.plain.splitlines()[1]
     working = AgentActivityState.WORKING
@@ -560,10 +560,10 @@ def test_render_card_phase_shows_glyph_label_and_progress() -> None:
 
 
 def test_render_card_phase_span_is_bold_and_phase_colored() -> None:
-    report = _phase("scoping")
+    report = _phase("scope")
     text = _render_card(_state(), dark=True, now=_NOW, phase=report)
-    segment = f"{phase_glyph('scoping')} {phase_label('scoping')} 1/{len(PHASE_ORDER)}"
-    hex_ = phase_color("scoping", dark=True).lower()
+    segment = f"{phase_glyph('scope')} {phase_label('scope')} 1/{len(PHASE_ORDER)}"
+    hex_ = phase_color("scope", dark=True).lower()
     found = False
     for start, end, style in text.spans:
         if text.plain[start:end] == segment:
@@ -581,11 +581,9 @@ def test_render_card_blocked_phase_appends_the_flag_beside_the_phase() -> None:
     """`blocked=True` is a FLAG riding beside the phase segment, not a
     replacement — the phase glyph/label/progress must still render untouched,
     with `BLOCKED_GLYPH` appended after it in `blocked_color`."""
-    report = _phase("implementing", blocked=True)
+    report = _phase("build", blocked=True)
     text = _render_card(_state(), dark=True, now=_NOW, phase=report)
-    unblocked_segment = (
-        f"{phase_glyph('implementing')} {phase_label('implementing')} 3/{len(PHASE_ORDER)}"
-    )
+    unblocked_segment = f"{phase_glyph('build')} {phase_label('build')} 3/{len(PHASE_ORDER)}"
     assert unblocked_segment in text.plain
     assert f"{unblocked_segment} {BLOCKED_GLYPH}" in text.plain
     hex_ = blocked_color(dark=True).lower()
@@ -605,7 +603,7 @@ def test_render_card_blocked_phase_appends_the_flag_beside_the_phase() -> None:
 def test_render_card_unblocked_phase_omits_the_flag() -> None:
     """Absence is the default: an unreported-blocked claim renders byte-
     identical to before `blocked` existed, and the glyph never appears."""
-    report = _phase("implementing", blocked=False)
+    report = _phase("build", blocked=False)
     text = _render_card(_state(), dark=True, now=_NOW, phase=report)
     assert BLOCKED_GLYPH not in text.plain
 

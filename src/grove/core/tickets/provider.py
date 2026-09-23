@@ -64,6 +64,7 @@ from loguru import logger
 
 from grove.core.contracts.tickets import (
     TicketComment,
+    TicketKind,
     TicketProviderName,
     TicketReactionKind,
     TicketRef,
@@ -76,6 +77,50 @@ from grove.core.errors import (
     TicketPullRequestsUnsupported,
 )
 from grove.core.workspace import slug
+
+
+@dataclass(frozen=True, slots=True)
+class CommitCheck:
+    """One named CI check normalized from a forge's commit response."""
+
+    name: str
+    state: str
+    url: str | None = None
+
+    @property
+    def passed(self) -> bool:
+        """Whether this concluded check is a success-like result."""
+        return self.state in {"success", "neutral", "skipped"}
+
+
+@dataclass(frozen=True, slots=True)
+class CommitChecks:
+    """All checks observed for one commit, including whether any remains live."""
+
+    checks: tuple[CommitCheck, ...]
+    running: bool
+    url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TicketState:
+    """One ticket as a person would notice it changing: its ref, body and comment count.
+
+    Everything comes from ONE read of the issue or pull request, because both
+    numeric forges put the description and the comment count on that payload.
+    That single GET is what lets a ticket be checked every minute without
+    listing its comments each time: the thread is fetched only when the count
+    goes up.
+
+    ``body`` and ``comment_count`` are ``None`` for a tracker that does not
+    report them (Linear, today). ``None`` means "cannot tell" and is never
+    treated as empty, so a tracker that does not report comments can never
+    look like one whose comments all vanished.
+    """
+
+    ref: TicketRef
+    body: str | None
+    comment_count: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +166,11 @@ class TicketProvider(Protocol):
     @property
     def host(self) -> str | None:
         """The browser host this tracker serves, for matching a pasted URL."""
+        ...
+
+    @property
+    def checks_supported(self) -> bool:
+        """True when this provider can read commit CI state."""
         ...
 
     @property
@@ -268,6 +318,20 @@ class TicketProvider(Protocol):
         """
         ...
 
+    def read_state(self, ticket_id: str, kind: TicketKind) -> TicketState:
+        """The ticket's ref, description and comment count in one read. Network I/O.
+
+        ``kind`` selects the namespace so that a merged pull request reads as
+        ``merged``, never ``closed``. This is the read the shared
+        :class:`~grove.core.tickets.reads.TicketReads` cache holds, so every
+        consumer that wants a ticket's current state goes through it.
+        """
+        ...
+
+    def get_commit_checks(self, owner: str, repo: str, sha: str) -> CommitChecks:
+        """Read the normalized state of all CI checks for one immutable commit."""
+        ...
+
     def list_comments(self, ticket_id: str) -> list[TicketComment]:
         """Every comment on the ticket thread, in provider order. Network I/O.
 
@@ -317,6 +381,9 @@ class HttpTicketProvider(ABC):
 
     name: ClassVar[TicketProviderName]
     label: ClassVar[str]
+
+    checks_supported: ClassVar[bool] = False
+    """Declared by providers that implement :meth:`get_commit_checks`."""
 
     comments_supported: ClassVar[bool] = False
     """Declared by the subclasses that override the four comment methods below.
@@ -471,11 +538,35 @@ class HttpTicketProvider(ABC):
             f"{self.name} provider does not implement get_pull_request"
         )
 
+    def get_commit_checks(
+        self,
+        owner: str,
+        repo: str,
+        sha: str,
+    ) -> CommitChecks:
+        """Base default: this tracker does not expose commit checks."""
+        _ = owner, repo, sha
+        raise TicketProviderError(f"{self.name} provider does not implement get_commit_checks")
+
     # ─── comment I/O: NotImplementedError-style base default ───────────────
     #
     # Not @abstractmethod: only Gitea/GitHub override these. A provider that
     # doesn't (Linear) inherits the raise below untouched rather than needing
     # its own four-method stub.
+
+    def read_state(self, ticket_id: str, kind: TicketKind) -> TicketState:
+        """Base default: the ticket read alone, with body and comments unreported.
+
+        A tracker without a single-payload read still has ``get_ticket`` (or
+        ``get_pull_request``), so its title and state can be watched. The two
+        fields it cannot answer stay ``None`` rather than empty.
+        """
+        ref = (
+            self.get_pull_request(ticket_id)
+            if kind == "pull_request"
+            else self.get_ticket(ticket_id)
+        )
+        return TicketState(ref=ref, body=None, comment_count=None)
 
     def list_comments(self, ticket_id: str) -> list[TicketComment]:  # noqa: ARG002
         raise self._comments_unsupported("list_comments")
@@ -627,6 +718,11 @@ class NumberTicketProvider(HttpTicketProvider):
     class. Empty means the tracker has no branch view and ``branch_url`` answers
     ``None``."""
 
+    api_prefix: ClassVar[str] = ""
+    """The path in front of ``/repos/...`` (``/api/v1`` on Gitea, nothing on
+    GitHub). This is the only difference in how the two forges address an issue
+    or pull request, so :meth:`read_state` is written once here."""
+
     viewer_path: ClassVar[str] = ""
     """Where this forge reports the authenticated account (``/api/v1/user`` on
     Gitea, ``/user`` on GitHub). Shared here for the same reason the commit path
@@ -675,6 +771,29 @@ class NumberTicketProvider(HttpTicketProvider):
         stem = slug(title) if title else "ws"
         return f"{self._branch_prefix}{ticket_id}-{stem}"
 
+    def read_state(self, ticket_id: str, kind: TicketKind) -> TicketState:
+        """One GET on the issue or pull request, normalized with the subclass's ``_to_ref``."""
+        owner, repo = self._scoped("read a ticket's state")
+        namespace = "pulls" if kind == "pull_request" else "issues"
+        path = f"{self.api_prefix}/repos/{owner}/{repo}/{namespace}/{ticket_id}"
+        payload = self._request("GET", path)
+        if not isinstance(payload, dict):
+            raise TicketProviderError(f"{self.name} returned an unexpected shape for {ticket_id}")
+        count = payload.get("comments")
+        return TicketState(
+            ref=self._to_ref(payload, kind=kind),
+            body=str(payload.get("body") or ""),
+            comment_count=count if isinstance(count, int) else None,
+        )
+
+    @abstractmethod
+    def _scoped(self, op: str) -> tuple[str, str]:
+        """(owner, repo) for a per-repo endpoint; raises when either is unset."""
+
+    @abstractmethod
+    def _to_ref(self, issue: dict[str, Any], *, kind: TicketKind | None = None) -> TicketRef:
+        """Normalize one forge payload to the neutral ref. Shape only."""
+
     def viewer_login(self) -> str:
         """Who this token is, read from the forge itself. Network I/O."""
         if not self.viewer_path:
@@ -717,8 +836,11 @@ class NumberTicketProvider(HttpTicketProvider):
 
 
 __all__ = [
+    "CommitCheck",
+    "CommitChecks",
     "HttpTicketProvider",
     "NumberTicketProvider",
     "TicketProvider",
+    "TicketState",
     "TicketThread",
 ]

@@ -9,6 +9,11 @@
     "item": "badge",
     "source": "assistant-ui"
   },
+  "components/assistant-ui/composer-trigger-popover.tsx": {
+    "sha256": "592d5681d4fe197174d54a0fc7243ef64155f0d2c7bd878117a04f6d050fad81",
+    "item": "composer-trigger-popover",
+    "source": "assistant-ui"
+  },
   "components/assistant-ui/diff-viewer.tsx": {
     "sha256": "07d2d4f7797789bf83a1f21d1e9468b500ae05c7764901531c35c1b5d3c98df7",
     "item": "diff-viewer",
@@ -167,6 +172,11 @@
   "components/elements/context-breakdown.tsx": {
     "sha256": "868779d25e24fc230fa0cfafc590949ab7ae70cda7d0d9c687ea40f01047db79",
     "item": "elements-context-breakdown",
+    "source": "assistant-ui"
+  },
+  "components/elements/context-display.tsx": {
+    "sha256": "339633ba00f49461eaab2eb55a90ed58c84ecef7d5837da42223d00333f2f025",
+    "item": "elements-context-display",
     "source": "assistant-ui"
   },
   "components/elements/cost-meter.tsx": {

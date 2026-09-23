@@ -30,6 +30,7 @@ from grove.core.issueops import (
 )
 from grove.core.issueops.publisher import SessionLink, _FlushJob
 from grove.core.phase import PhaseReport, TaskPhase, TicketClaim
+from grove.core.tickets.provider import TicketState
 from grove.core.workspace import CommitSummary, WorkspaceState, WorkspaceStatus
 
 T0 = datetime(2026, 7, 9, 21, 38, 0, tzinfo=UTC)
@@ -104,7 +105,7 @@ def _claim(
 
 
 def _report(
-    phase: TaskPhase = "implementing",
+    phase: TaskPhase = "build",
     *,
     note: str | None = None,
     blocked: bool = False,
@@ -226,6 +227,15 @@ class _FakeProvider:
 
     def get_pull_request(self, ticket_id: str) -> TicketRef:
         return self._enriched("pull_request", ticket_id, f"{self.base_url}/pulls/{ticket_id}")
+
+    def read_state(self, ticket_id: str, kind: str) -> TicketState:
+        """The one read production makes, routed to the namespace ``kind`` names."""
+        ref = (
+            self.get_pull_request(ticket_id)
+            if kind == "pull_request"
+            else self.get_ticket(ticket_id)
+        )
+        return TicketState(ref=ref, body=None, comment_count=None)
 
     def _enriched(self, kind: str, ticket_id: str, url: str) -> TicketRef:
         self.reads.append((kind, ticket_id))
@@ -360,7 +370,7 @@ def test_the_checklist_collapses_under_a_fixed_title_and_a_table_row() -> None:
     job of a heading in a comment a reader has seen on ten other tickets. The
     count is the summary table's ``Checklist`` row instead, so the overview
     stays visible while the items sit one click away. ``in_progress`` is not
-    "done" — a forge task list has two states only."""
+    "handoff" — a forge task list has two states only."""
     todo = TodoList(
         items=(
             TodoItem(content="write the parser", status="completed"),
@@ -411,7 +421,7 @@ def test_the_section_titles_are_fixed_and_reproducible() -> None:
         _snapshot(
             todo=todo,
             current_task="rebasing onto main",
-            phase=PhaseReport(phase="verifying", note="running make lint", updated_at=T0),
+            phase=PhaseReport(phase="verify", note="running make lint", updated_at=T0),
             tickets=(TicketRef(provider="gitea", id="42", url="https://g/i/42", status="open"),),
         )
     )
@@ -436,7 +446,7 @@ def test_bounded_sections_stay_open_and_unbounded_ones_collapse() -> None:
         _snapshot(
             todo=todo,
             current_task="rebasing onto main",
-            phase=PhaseReport(phase="verifying", note=None, updated_at=T0),
+            phase=PhaseReport(phase="verify", note=None, updated_at=T0),
             tickets=(TicketRef(provider="gitea", id="42"),),
         )
     )
@@ -626,33 +636,33 @@ def _diagram(body: str) -> str:
 
 def test_render_draws_a_horizontal_flowchart_of_every_phase() -> None:
     """The status report: six nodes in ``PHASE_ORDER``, left to right."""
-    report = PhaseReport(phase="verifying", note=None, updated_at=T0)
+    report = PhaseReport(phase="verify", note=None, updated_at=T0)
     chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
     assert chart.startswith("flowchart LR")
-    for label in ("Scoping", "Planning", "Implementing", "Verifying", "Delivering", "Done"):
+    for label in ("Scope", "Plan", "Build", "Verify", "Deliver", "Handoff"):
         assert f'"{label}"' in chart
     assert "p0 --> p1 --> p2 --> p3 --> p4 --> p5" in chart
 
 
-def test_render_colours_done_current_and_remaining_from_the_phase_palette() -> None:
+def test_render_colours_completed_current_and_remaining_from_the_phase_palette() -> None:
     """Completed / current / remaining each take the palette member that already
     means it — no invented hexes, so a block reads like the TUI and webapp badge."""
-    report = PhaseReport(phase="implementing", note=None, updated_at=T0)
+    report = PhaseReport(phase="build", note=None, updated_at=T0)
     chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
-    assert f"classDef done fill:{DARK_PHASE_HEX['done']}" in chart
-    assert f"classDef now fill:{DARK_PHASE_HEX['implementing']}" in chart
-    assert f"classDef todo fill:{DARK_PHASE_HEX['scoping']}" in chart
-    # The phases before the current one are done, the current one is now, the rest remain.
-    assert '"Scoping"]:::done' in chart and '"Planning"]:::done' in chart
-    assert '"Implementing"]:::now' in chart
-    assert '"Verifying"]:::todo' in chart and '"Done"]:::todo' in chart
+    assert f"classDef handoff fill:{DARK_PHASE_HEX['handoff']}" in chart
+    assert f"classDef now fill:{DARK_PHASE_HEX['build']}" in chart
+    assert f"classDef todo fill:{DARK_PHASE_HEX['scope']}" in chart
+    # Earlier nodes use the completion colour; the current and later nodes stay distinct.
+    assert '"Scope"]:::handoff' in chart and '"Plan"]:::handoff' in chart
+    assert '"Build"]:::now' in chart
+    assert '"Verify"]:::todo' in chart and '"Handoff"]:::todo' in chart
 
 
 def test_every_diagram_node_carries_an_explicit_fill_and_label_colour() -> None:
     """What makes the chart theme-independent: an unfilled node would inherit the
     forge's page background (white in light mode, near-black in dark) and no one
     label colour could stay legible on both."""
-    report = PhaseReport(phase="scoping", note=None, updated_at=T0)
+    report = PhaseReport(phase="scope", note=None, updated_at=T0)
     chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
     class_defs = [line for line in chart.splitlines() if line.strip().startswith("classDef")]
     assert len(class_defs) == 3
@@ -660,11 +670,11 @@ def test_every_diagram_node_carries_an_explicit_fill_and_label_colour() -> None:
 
 
 def test_the_current_phase_stays_distinct_where_its_fill_collides() -> None:
-    """``scoping`` current and ``scoping`` remaining share a fill by construction
+    """``scope`` current and ``scope`` remaining share a fill by construction
     (the ramp's palest anchor means both "not yet producing" and "not started").
     A thick dark ring — not a fourth colour — is what separates the current node
     there, and it survives a reader who cannot tell the hues apart at all."""
-    for phase in ("scoping", "done"):
+    for phase in ("scope", "handoff"):
         report = PhaseReport(phase=phase, note=None, updated_at=T0)  # type: ignore[arg-type]
         chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
         now_def = next(line for line in chart.splitlines() if "classDef now" in line)
@@ -680,16 +690,16 @@ def test_the_current_phase_keeps_a_colour_of_its_own_at_the_final_phase() -> Non
     The fill is still a palette member (the ramp's deepest live entry), the ink
     does not move with it — white would reach only 3.4:1 there, against 5.6:1
     for the one dark ink — and the ring stays on top."""
-    report = PhaseReport(phase="done", note=None, updated_at=T0)
+    report = PhaseReport(phase="handoff", note=None, updated_at=T0)
     chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
     now_def = next(line for line in chart.splitlines() if "classDef now" in line)
-    done_def = next(line for line in chart.splitlines() if "classDef done" in line)
+    handoff_def = next(line for line in chart.splitlines() if "classDef handoff" in line)
 
-    assert f"fill:{DARK_PHASE_HEX['delivering']}" in now_def
-    assert f"fill:{DARK_PHASE_HEX['done']}" in done_def
+    assert f"fill:{DARK_PHASE_HEX['deliver']}" in now_def
+    assert f"fill:{DARK_PHASE_HEX['handoff']}" in handoff_def
     assert "stroke-width:3px" in now_def  # the ring survives the new fill
     assert now_def.endswith("color:#111111")  # one dark ink, no per-class exception
-    assert '"Done"]:::now' in chart
+    assert '"Handoff"]:::now' in chart
 
 
 def test_the_progress_section_is_never_collapsed() -> None:
@@ -697,16 +707,16 @@ def test_the_progress_section_is_never_collapsed() -> None:
     open in EVERY body — live and terminal alike. Asserted on its own rather
     than only inside the bounded/unbounded test, because the regression this
     guards against is a one-character edit in a shared helper."""
-    report = PhaseReport(phase="verifying", note="running make lint", updated_at=T0)
+    report = PhaseReport(phase="verify", note="running make lint", updated_at=T0)
     for terminal in (False, True):
         body = TicketStatusPublisher.render(_snapshot(phase=report, terminal=terminal))
         assert "<details open>\n<summary>🧭 Progress</summary>" in body
 
 
 def test_render_puts_the_agents_note_on_the_current_node() -> None:
-    report = PhaseReport(phase="verifying", note="running make lint", updated_at=T0)
+    report = PhaseReport(phase="verify", note="running make lint", updated_at=T0)
     chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
-    assert '"Verifying<br>running make lint"]:::now' in chart
+    assert '"Verify<br>running make lint"]:::now' in chart
 
 
 def test_render_escapes_a_note_that_would_otherwise_break_the_diagram() -> None:
@@ -715,7 +725,7 @@ def test_render_escapes_a_note_that_would_otherwise_break_the_diagram() -> None:
     Gitea render). Every breaking character leaves the label as an entity code,
     and the raw glyph never survives into the mermaid source."""
     note = 'say "hi" [a] (b) {c} <d> #e | f `g`\nsecond line'
-    report = PhaseReport(phase="planning", note=note, updated_at=T0)
+    report = PhaseReport(phase="plan", note=note, updated_at=T0)
     chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
     node = next(line for line in chart.splitlines() if ":::now" in line)
     # Only the agent's note is escaped; the ``<br>`` Grove itself emits is markup.
@@ -729,7 +739,7 @@ def test_a_long_note_is_truncated_before_it_is_escaped() -> None:
     """Truncating afterwards could slice an entity code in half and leave a
     literal ``#12`` on screen; it also bounds the widest node, which sets the
     whole horizontal chart's width."""
-    report = PhaseReport(phase="planning", note='"' * 200, updated_at=T0)
+    report = PhaseReport(phase="plan", note='"' * 200, updated_at=T0)
     chart = _diagram(TicketStatusPublisher.render(_snapshot(phase=report)))
     node = next(line for line in chart.splitlines() if ":::now" in line)
     label = node.partition("<br>")[2].rpartition('"]')[0]
@@ -760,10 +770,10 @@ def test_the_plain_text_phase_caption_rides_beside_the_diagram() -> None:
     agent's note is prose that can run to 200 characters, and a table cell that
     long wrecks the column, so the note renders under the diagram instead."""
     note = "x" * 120
-    report = PhaseReport(phase="verifying", note=note, updated_at=T0)
+    report = PhaseReport(phase="verify", note=note, updated_at=T0)
     body = TicketStatusPublisher.render(_snapshot(phase=report))
     assert "```mermaid" in body
-    assert "| 🧭 **Phase** | ●●●●○○ Verifying · 4 of 6 |" in body
+    assert "| 🧭 **Phase** | ●●●●○○ Verify · 4 of 6 |" in body
 
 
 def test_the_agents_note_renders_exactly_once_as_a_blockquote_under_the_diagram() -> None:
@@ -776,7 +786,7 @@ def test_the_agents_note_renders_exactly_once_as_a_blockquote_under_the_diagram(
     a "helpful" future edit re-adding it to the row would leave every render
     saying the same sentence twice, which no single-``in`` assertion can see."""
     note = "the parser rewrite is nearly through its second pass, " + "x" * 120
-    report = PhaseReport(phase="verifying", note=note, updated_at=T0)
+    report = PhaseReport(phase="verify", note=note, updated_at=T0)
     body = TicketStatusPublisher.render(_snapshot(phase=report))
     # Uncut, and exactly once — the diagram's copy is capped, so the blockquote
     # is the only place the whole note ever appears.
@@ -794,26 +804,26 @@ def test_each_target_renders_its_own_tickets_claim() -> None:
     """The premise of the whole per-ticket axis, at the render seam.
 
     One workspace routinely carries an issue and the pull request that closes
-    it, and one shared phase cannot say the issue is delivering while the PR is
+    it, and one shared phase cannot say the issue is deliver while the PR is
     blocked on a review. The body is otherwise identical on both threads — the
     agent state, the branch, the checklist all answer for the WORKSPACE — so
     ``focus`` is the one input that makes two bodies out of one snapshot."""
     report = _report(
-        "scoping",  # the workspace's own claim: deliberately unlike either ticket's
+        "scope",  # the workspace's own claim: deliberately unlike either ticket's
         tickets=(
-            _claim("gitea:42", "delivering"),
-            _claim("gitea:43", "verifying", blocked=True, note="needs a review decision"),
+            _claim("gitea:42", "deliver"),
+            _claim("gitea:43", "verify", blocked=True, note="needs a review decision"),
         ),
     )
     issue = TicketStatusPublisher.render(_snapshot(phase=report), focus="gitea:42")
     pull = TicketStatusPublisher.render(_snapshot(phase=report), focus="gitea:43")
 
-    assert "| 🧭 **Phase** | ●●●●●○ Delivering · 5 of 6 |" in issue
-    assert "| 🧭 **Phase** | ●●●●○○ ⛔ Verifying, blocked · 4 of 6 |" in pull
+    assert "| 🧭 **Phase** | ●●●●●○ Deliver · 5 of 6 |" in issue
+    assert "| 🧭 **Phase** | ●●●●○○ ⛔ Verify, blocked · 4 of 6 |" in pull
     assert issue != pull
     # Neither thread inherits the workspace's own claim while it has one of its own.
-    assert "Scoping · 1 of 6" not in issue
-    assert "Scoping · 1 of 6" not in pull
+    assert "Scope · 1 of 6" not in issue
+    assert "Scope · 1 of 6" not in pull
 
 
 def test_a_ticket_with_no_claim_of_its_own_inherits_the_workspaces() -> None:
@@ -823,57 +833,55 @@ def test_a_ticket_with_no_claim_of_its_own_inherits_the_workspaces() -> None:
     the ordinary case; withholding that claim from the two it did not name
     individually would make per-ticket reporting a DOWNGRADE for everyone who
     never opts in."""
-    report = _report(
-        "implementing", note="wiring the parser", tickets=(_claim("gitea:42", "delivering"),)
-    )
+    report = _report("build", note="wiring the parser", tickets=(_claim("gitea:42", "deliver"),))
     body = TicketStatusPublisher.render(_snapshot(phase=report), focus="gitea:99")
-    assert "| 🧭 **Phase** | ●●●○○○ Implementing · 3 of 6 |" in body
+    assert "| 🧭 **Phase** | ●●●○○○ Build · 3 of 6 |" in body
     assert "> wiring the parser" in body
     # And with no focus at all — every non-ticket caller — it is the same claim.
     assert TicketStatusPublisher.render(_snapshot(phase=report)) == body
 
 
-def test_a_ticket_nobody_reported_on_reads_as_unreported_never_as_scoping() -> None:
+def test_a_ticket_nobody_reported_on_reads_as_unreported_never_as_scope() -> None:
     """The distinction the whole axis rests on, applied per ticket.
 
-    "Has not reported" is a fleet-health fact about the AGENT; "is scoping" is
+    "Has not reported" is a fleet-health fact about the AGENT; "is scope" is
     progress on the task. Defaulting the first to the second would destroy the
     difference on the one surface a human triages from — and it would do it
-    silently, because ``scoping`` renders perfectly well. Pinned as a PAIR, so
+    silently, because ``scope`` renders perfectly well. Pinned as a PAIR, so
     the assertion can only pass while the two really do render differently."""
     unreported = TicketStatusPublisher.render(_snapshot(phase=None), focus="gitea:42")
     assert "**Phase**" not in unreported
     assert "```mermaid" not in unreported
     assert "Progress" not in unreported
-    assert "Scoping" not in unreported
+    assert "Scope" not in unreported
 
     seeded = TicketStatusPublisher.render(
-        _snapshot(phase=_report("scoping", tickets=(_claim("gitea:42", "scoping"),))),
+        _snapshot(phase=_report("scope", tickets=(_claim("gitea:42", "scope"),))),
         focus="gitea:42",
     )
-    assert "| 🧭 **Phase** | ●○○○○○ Scoping · 1 of 6 |" in seeded
+    assert "| 🧭 **Phase** | ●○○○○○ Scope · 1 of 6 |" in seeded
 
 
 def test_blocked_renders_beside_the_phase_and_never_instead_of_it() -> None:
     """A flag orthogonal to the position, so both facts have to survive.
 
-    ``scoping, blocked`` is a ticket nobody can even start; ``verifying,
+    ``scope, blocked`` is a ticket nobody can even start; ``verify,
     blocked`` is work that is substantially done and wants one decision. A
     render that replaced the phase name with the word "blocked" would throw away
     the more actionable half AND leave the "4 of 6" beside it contradicted. The
     reason rides the note, which is the one place with room to print it whole."""
-    report = _report("verifying", note="the API contract is ambiguous", blocked=True)
+    report = _report("verify", note="the API contract is ambiguous", blocked=True)
     body = TicketStatusPublisher.render(_snapshot(phase=report))
 
-    assert "| 🧭 **Phase** | ●●●●○○ ⛔ Verifying, blocked · 4 of 6 |" in body
-    assert '"⛔ Verifying<br>the API contract is ambiguous"]:::now' in _diagram(body)
+    assert "| 🧭 **Phase** | ●●●●○○ ⛔ Verify, blocked · 4 of 6 |" in body
+    assert '"⛔ Verify<br>the API contract is ambiguous"]:::now' in _diagram(body)
     assert "> ⛔ **Blocked** — the API contract is ambiguous" in body
 
     # Blocked with nothing to say still says it — the flag is the signal, the
     # note is the explanation, and a missing explanation must not hide the flag.
-    silent = TicketStatusPublisher.render(_snapshot(phase=_report("scoping", blocked=True)))
+    silent = TicketStatusPublisher.render(_snapshot(phase=_report("scope", blocked=True)))
     assert "> ⛔ **Blocked**" in silent
-    assert "●○○○○○ ⛔ Scoping, blocked · 1 of 6" in silent
+    assert "●○○○○○ ⛔ Scope, blocked · 1 of 6" in silent
 
 
 def test_blocked_does_not_repaint_the_diagram() -> None:
@@ -881,12 +889,10 @@ def test_blocked_does_not_repaint_the_diagram() -> None:
     is orthogonal to that, so it takes the glyph the comment already uses for
     the concept and leaves every fill alone; a colour would say "this phase"
     where the fact is "this phase, stuck"."""
-    plain = _diagram(TicketStatusPublisher.render(_snapshot(phase=_report("verifying"))))
-    stuck = _diagram(
-        TicketStatusPublisher.render(_snapshot(phase=_report("verifying", blocked=True)))
-    )
+    plain = _diagram(TicketStatusPublisher.render(_snapshot(phase=_report("verify"))))
+    stuck = _diagram(TicketStatusPublisher.render(_snapshot(phase=_report("verify", blocked=True))))
     assert _class_defs(plain) == _class_defs(stuck)
-    assert '"Verifying"]:::now' in plain and '"⛔ Verifying"]:::now' in stuck
+    assert '"Verify"]:::now' in plain and '"⛔ Verify"]:::now' in stuck
 
 
 def _class_defs(chart: str) -> list[str]:
@@ -900,10 +906,10 @@ def test_dispatch_gives_each_thread_the_phase_of_the_ticket_it_lands_on() -> Non
     pick no claim at all and read as an agent that never reported."""
     provider = _FakeProvider()
     report = _report(
-        "implementing",
+        "build",
         tickets=(
-            _claim("gitea:42", "verifying"),
-            _claim("gitea:43", "delivering", blocked=True),
+            _claim("gitea:42", "verify"),
+            _claim("gitea:43", "deliver", blocked=True),
         ),
     )
     pub = _publisher(provider, window=5.0, phase=report)
@@ -911,8 +917,8 @@ def test_dispatch_gives_each_thread_the_phase_of_the_ticket_it_lands_on() -> Non
     pub.flush_pending(now=T0 + timedelta(seconds=5))
 
     bodies = dict(provider.posts)
-    assert "●●●●○○ Verifying · 4 of 6" in bodies["42"]
-    assert "●●●●●○ ⛔ Delivering, blocked · 5 of 6" in bodies["43"]
+    assert "●●●●○○ Verify · 4 of 6" in bodies["42"]
+    assert "●●●●●○ ⛔ Deliver, blocked · 5 of 6" in bodies["43"]
     assert bodies["42"] != bodies["43"]
     # Everything that answers for the WORKSPACE still reads the same on both.
     for shared in ("| 🌿 **Branch** |", "| 🤖 **Agent** |", "- ticket 42 — #42"):
@@ -1002,7 +1008,7 @@ def test_the_tracking_block_renders_only_what_exists() -> None:
 def test_the_terminal_summary_keeps_the_diagram_and_the_tracking_block() -> None:
     """A reader landing on the final comment still wants the shape of the work and
     the links out of it."""
-    report = PhaseReport(phase="delivering", note=None, updated_at=T0)
+    report = PhaseReport(phase="deliver", note=None, updated_at=T0)
     tickets = (TicketRef(provider="gitea", id="42", kind="issue", url="https://g/i/42"),)
     body = TicketStatusPublisher.render(_snapshot(terminal=True, phase=report, tickets=tickets))
     assert "```mermaid" in body
@@ -1621,7 +1627,7 @@ def test_a_phase_only_change_schedules_a_patch() -> None:
     moved = _row(
         task="one",
         tool_calls=1,
-        phase=PhaseReport(phase="verifying", note="running make lint", updated_at=T0),
+        phase=PhaseReport(phase="verify", note="running make lint", updated_at=T0),
     )
     pub.observe(_delta(moved))
     pub.flush_pending(now=T0 + timedelta(seconds=20))
@@ -1638,7 +1644,7 @@ def test_rewriting_an_identical_phase_does_not_patch() -> None:
     first = _row(
         task="one",
         tool_calls=1,
-        phase=PhaseReport(phase="verifying", note="running make lint", updated_at=T0),
+        phase=PhaseReport(phase="verify", note="running make lint", updated_at=T0),
     )
     pub.observe(_delta(first))
     pub.flush_pending(now=T0 + timedelta(seconds=5))
@@ -1648,7 +1654,7 @@ def test_rewriting_an_identical_phase_does_not_patch() -> None:
         task="one",
         tool_calls=1,
         phase=PhaseReport(
-            phase="verifying",
+            phase="verify",
             note="running make lint",
             updated_at=T0 + timedelta(minutes=9),
         ),
@@ -1682,7 +1688,7 @@ def test_a_per_ticket_claim_change_alone_schedules_a_patch() -> None:
                 task="steady",
                 tool_calls=1,
                 refs=refs,
-                phase=_report("implementing", tickets=(_claim("gitea:43", "implementing"),)),
+                phase=_report("build", tickets=(_claim("gitea:43", "build"),)),
             )
         )
     )
@@ -1695,7 +1701,7 @@ def test_a_per_ticket_claim_change_alone_schedules_a_patch() -> None:
                 task="steady",
                 tool_calls=1,
                 refs=refs,
-                phase=_report("implementing", tickets=(_claim("gitea:43", "verifying"),)),
+                phase=_report("build", tickets=(_claim("gitea:43", "verify"),)),
             )
         )
     )
@@ -1710,8 +1716,8 @@ def test_flipping_a_tickets_blocked_flag_alone_schedules_a_patch() -> None:
     expensive."""
     provider = _FakeProvider()
     pub = _publisher(provider, window=5.0)
-    stuck = _claim("gitea:42", "verifying", blocked=True)
-    fine = _claim("gitea:42", "verifying")
+    stuck = _claim("gitea:42", "verify", blocked=True)
+    fine = _claim("gitea:42", "verify")
     pub.observe(_delta(_row(task="steady", tool_calls=1, phase=_report(tickets=(fine,)))))
     pub.flush_pending(now=T0 + timedelta(seconds=5))
     assert len(provider.posts) == 1 and provider.edits == []
@@ -1728,13 +1734,13 @@ def test_rewriting_identical_per_ticket_claims_does_not_patch() -> None:
     tick — a new mtime, a different mapping order — is still clean."""
     provider = _FakeProvider()
     pub = _publisher(provider, window=5.0)
-    claims = (_claim("gitea:42", "verifying"), _claim("gitea:43", "delivering"))
+    claims = (_claim("gitea:42", "verify"), _claim("gitea:43", "deliver"))
     pub.observe(_delta(_row(task="steady", tool_calls=1, phase=_report(tickets=claims))))
     pub.flush_pending(now=T0 + timedelta(seconds=5))
     assert len(provider.posts) == 1
 
     later = PhaseReport(
-        phase="implementing",
+        phase="build",
         updated_at=T0 + timedelta(minutes=9),  # the file was rewritten, identically
         tickets=claims,
     )

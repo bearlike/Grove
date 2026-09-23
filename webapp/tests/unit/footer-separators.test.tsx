@@ -62,7 +62,7 @@ function render(overrides: Partial<Parameters<typeof StatusFooter>[0]> = {}): st
         context={CONTEXT}
         counts={{ working: 2, idle: 1, blocked: 1 }}
         accounts={ACCOUNTS}
-        system={{ version: "0.0.9", startedAt: "2026-09-19T08:00:00Z", updateAvailable: false, latestVersion: null }}
+        system={{ version: "0.0.9", startedAt: "2026-09-19T08:00:00Z", updateAvailable: false, latestVersion: null, restartRequired: false }}
         connected
         progress={{ fraction: 0.6, reported: 8, tickets: 11 }}
         attention={2}

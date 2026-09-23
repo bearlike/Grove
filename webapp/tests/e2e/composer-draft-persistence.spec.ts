@@ -53,7 +53,7 @@ test("workspace drafts restore text and attachment intent, then clear only after
   const input = await composer(page);
   await input.fill("Draft survives a workspace round trip");
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Add Attachment", exact: true }).click();
+  await page.getByRole("button", { name: "Add attachment", exact: true }).click();
   await (await chooser).setFiles({
     name: DRAFT_FILE,
     mimeType: "text/plain",
@@ -143,7 +143,7 @@ test("re-adding a restored attachment dismisses its reminder immediately, and a 
   await page.goto(`/w/${PRIMARY_WORKSPACE_ID}`);
   await showTranscript(page);
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Add Attachment", exact: true }).click();
+  await page.getByRole("button", { name: "Add attachment", exact: true }).click();
   await (await chooser).setFiles({
     name: DRAFT_FILE,
     mimeType: "text/plain",
@@ -159,7 +159,7 @@ test("re-adding a restored attachment dismisses its reminder immediately, and a 
   await expect(page.getByTestId("composer-pending-re-add")).toContainText(DRAFT_FILE);
 
   const readd = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Add Attachment", exact: true }).click();
+  await page.getByRole("button", { name: "Add attachment", exact: true }).click();
   await (await readd).setFiles({
     name: DRAFT_FILE,
     mimeType: "text/plain",
@@ -188,7 +188,7 @@ test("re-adding a restored attachment dismisses its reminder immediately, and a 
   );
   await page.route("**/api/grove/workspaces/*/message", (route) => route.fulfill({ status: 204 }));
   const finalAdd = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Add Attachment", exact: true }).click();
+  await page.getByRole("button", { name: "Add attachment", exact: true }).click();
   await (await finalAdd).setFiles({
     name: DRAFT_FILE,
     mimeType: "text/plain",
@@ -212,7 +212,7 @@ test("re-adding through a same-runtime remount (the expand dialog) never shows a
   await page.goto(`/w/${PRIMARY_WORKSPACE_ID}`);
   await showTranscript(page);
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Add Attachment", exact: true }).click();
+  await page.getByRole("button", { name: "Add attachment", exact: true }).click();
   await (await chooser).setFiles({
     name: DRAFT_FILE,
     mimeType: "text/plain",
@@ -231,7 +231,7 @@ test("re-adding through a same-runtime remount (the expand dialog) never shows a
   await showTranscript(page);
   await expect(page.getByTestId("composer-pending-re-add")).toContainText(DRAFT_FILE);
   const readd = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Add Attachment", exact: true }).click();
+  await page.getByRole("button", { name: "Add attachment", exact: true }).click();
   await (await readd).setFiles({
     name: DRAFT_FILE,
     mimeType: "text/plain",

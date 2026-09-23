@@ -55,23 +55,23 @@ them is the mistake the design exists to prevent.
 Phase is the axis you could not get before. An agent reads `working` both while
 it is still reading the ticket and while it is pushing the branch, and those two
 call for opposite responses from you. Only the agent can tell them apart, which
-is why this axis is pushed rather than observed. The six phases run `scoping`,
-`planning`, `implementing`, `verifying`, `delivering`, `done`.
+is why this axis is pushed rather than observed. The six phases run `scope`,
+`plan`, `build`, `verify`, `deliver`, `handoff`.
 
 Four things about phase are easy to get wrong.
 
-- **A missing phase is not `scoping`.** A workspace that never reported carries
-  no phase at all. That is a fact about the agent, where `scoping` is a fact
+- **A missing phase is not `scope`.** A workspace that never reported carries
+  no phase at all. That is a fact about the agent, where `scope` is a fact
   about the task, so render them differently.
-- **Backwards is a correct report.** An agent that discovers in `verifying` that
-  its design was wrong should say `planning` again. Grove never enforces forward
+- **Backwards is a correct report.** An agent that discovers in `verify` that
+  its design was wrong should say `plan` again. Grove never enforces forward
   motion, and an honest reversal is worth more than a phase that only climbs.
 - **There is still no `error` phase — that lives on the activity axis.** An
   agent can flag `blocked: true` beside a phase instead, meaning it has no way
   to finish that piece of work; it still names the phase it actually reached.
   This is not the activity axis's own `blocked`, which means waiting on a human
   right now and clears the moment they answer.
-- **Grove renders no staleness verdict.** Three hours in `implementing` is a
+- **Grove renders no staleness verdict.** Three hours in `build` is a
   long task, not a stale report. Whether the agent is alive is what the other
   two axes answer. The timestamp is the file's own mtime, so hold your own
   policy if you want one.
@@ -124,9 +124,14 @@ Five things worth knowing before you document or automate this.
   rather than duplicating the row.
 - **Grove never detects your pull request from the branch.** Branch names yield
   issue refs only. A pull request enters the list solely by explicit attach.
-- **Attach stores a link and fetches nothing.** Title, status and assignee are
-  fetched on demand and never persisted, which is what keeps attach fast and
-  safe offline.
+- **Attach stores a link and fetches nothing at that moment.** Title, status and
+  assignee are fetched on demand and never persisted, which is what keeps attach
+  fast and safe offline.
+- **Attaching subscribes the workspace to the ticket.** While the workspace runs,
+  Grove mails its agent when a person changes the title, state, draft flag or
+  description, or adds a comment. Each ticket is read at most once a minute, and
+  Grove's own status comment never triggers a message. Detaching, pausing or
+  killing stops it. You never register or cancel these yourself.
 - **A merged pull request reads `merged` and never `closed`.** The issues
   endpoint calls a merged PR closed, which is true and useless, so Grove reads
   the pulls namespace and normalizes. This is how you learn work landed.
@@ -157,14 +162,14 @@ one who can report a phase. Two consequences for you as the orchestrator:
 - **Tell a workspace to report, and to keep its todo list honest**, in the prompt
   that starts it. An agent that never writes a phase publishes a comment with no
   progress in it, and Grove will not invent one — a missing phase renders as
-  nothing rather than as `scoping`. This is the single most common reason a
+  nothing rather than as `scope`. This is the single most common reason a
   status comment looks empty.
 - **Attach every ticket the workspace owns, up front.** Attaching is also what
-  seeds an entry of its own for that ticket, at `scoping` — so a ticket linked
+  seeds an entry of its own for that ticket, at `scope` — so a ticket linked
   late starts with no history and no phase until the agent's next report.
 
 Each attached ticket now carries its own phase, seeded the moment it is
-attached and updated independently of the workspace's own — an agent verifying
+attached and updated independently of the workspace's own — an agent in verify
 one issue while another sits untouched reports exactly that, rather than one
 shared answer for both. `blocked: true` sits beside a phase, on the workspace's
 own claim or on any one ticket's, and means the agent has no way to finish that
@@ -251,6 +256,7 @@ from here.
 |---|---|
 | Discovery | `grove_list_projects`, `grove_list_workspaces`, `grove_get_workspace`, `grove_list_agents`, `grove_list_sessions` |
 | Watching | `grove_get_fleet_status`, `grove_peek_workspace`, `grove_get_workspace_phase`, `grove_get_workspace_todo`, `grove_attach_instruction` |
+| Waiting | `grove_register_watch`, `grove_list_watches`, `grove_cancel_watch` |
 | Lifecycle | `grove_create_workspace`, `grove_pause_workspace`, `grove_resume_workspace`, `grove_respawn_workspace`, `grove_kill_workspace` |
 | Workspace metadata | `grove_update_workspace` |
 | Steering | `grove_send_workspace_message`, `grove_set_workspace_phase` |

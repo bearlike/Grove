@@ -22,7 +22,7 @@ import {
  * staleness case sitting exactly on the threshold.
  */
 const phaseView = (over: Partial<PhaseView> = {}): PhaseView => ({
-  phase: "implementing",
+  phase: "build",
   note: null,
   blocked: false,
   updated_at: "2026-09-14T12:00:00Z",
@@ -42,7 +42,7 @@ const todo = (over: Partial<TodoProgressView> = {}): TodoProgressView => ({
 
 const entry = (over: Partial<ProgressEntryView> = {}): ProgressEntryView => ({
   recorded_at: "2026-09-14T12:00:00Z",
-  phase: "implementing",
+  phase: "build",
   blocked: false,
   note: null,
   ticket_key: null,
@@ -65,8 +65,8 @@ describe("stepState", () => {
   });
 
   it("reads a step as ahead again once a backward report moves the index back", () => {
-    // Grove keeps only the LATEST claim, so an agent that reports `planning`
-    // after `verifying` is not a fault to flag — the track is a pure function of
+    // Grove keeps only the LATEST claim, so an agent that reports `plan`
+    // after `verify` is not a fault to flag — the track is a pure function of
     // the current index and step 3 simply reads ahead again. Same step, two
     // positions, two answers.
     expect(stepState(3, 4)).toBe("complete");
@@ -76,26 +76,26 @@ describe("stepState", () => {
 
 describe("activeIndex", () => {
   it.each([
-    ["scoping" as const, 0],
-    ["planning" as const, 1],
-    ["implementing" as const, 2],
-    ["verifying" as const, 3],
-    ["delivering" as const, 4],
+    ["scope" as const, 0],
+    ["plan" as const, 1],
+    ["build" as const, 2],
+    ["verify" as const, 3],
+    ["deliver" as const, 4],
   ])("reports %s at its own index so that step is current", (phase, index) => {
     expect(activeIndex(phaseView({ phase, index }))).toBe(index);
   });
 
-  it("puts `done` past the end of the list so no step is current", () => {
+  it("puts `handoff` past the end of the list so no step is current", () => {
     // `index` and `total` are deliberately different here: returning the wire's
-    // own index for `done` would leave step 5 rendering as current on a finished
+    // own index for `handoff` would leave step 5 rendering as current on a finished
     // workspace, which is the one case the branch exists for.
-    const done = phaseView({ phase: "done", index: 5, total: 6 });
+    const done = phaseView({ phase: "handoff", index: 5, total: 6 });
     expect(activeIndex(done)).toBe(6);
     expect(stepState(5, activeIndex(done))).toBe("complete");
   });
 
   it("takes past-the-end from the wire's own total, not from a client constant", () => {
-    expect(activeIndex(phaseView({ phase: "done", index: 3, total: 4 }))).toBe(4);
+    expect(activeIndex(phaseView({ phase: "handoff", index: 3, total: 4 }))).toBe(4);
   });
 });
 
@@ -137,7 +137,7 @@ describe("inPhaseProgress", () => {
 });
 
 describe("phaseEnteredAt", () => {
-  const phase = phaseView({ phase: "implementing" });
+  const phase = phaseView({ phase: "build" });
 
   it("has nothing to report with no timeline at all", () => {
     expect(phaseEnteredAt(phase, null)).toBeNull();
@@ -154,7 +154,7 @@ describe("phaseEnteredAt", () => {
       entry({ recorded_at: "2026-09-14T13:00:00Z", note: "third note" }),
       entry({ recorded_at: "2026-09-14T12:00:00Z", note: "second note" }),
       entry({ recorded_at: "2026-09-14T11:00:00Z", note: "entered here" }),
-      entry({ recorded_at: "2026-09-14T10:00:00Z", phase: "planning" }),
+      entry({ recorded_at: "2026-09-14T10:00:00Z", phase: "plan" }),
       entry({ recorded_at: "2026-09-14T09:00:00Z" }),
     ]);
     expect(entered).toBe("2026-09-14T11:00:00Z");
@@ -166,24 +166,24 @@ describe("phaseEnteredAt", () => {
     // treated as a disagreement, it would truncate the run at 13:00.
     const entered = phaseEnteredAt(phase, [
       entry({ recorded_at: "2026-09-14T14:00:00Z" }),
-      entry({ recorded_at: "2026-09-14T13:30:00Z", phase: "verifying", ticket_key: "gitea:692" }),
+      entry({ recorded_at: "2026-09-14T13:30:00Z", phase: "verify", ticket_key: "gitea:692" }),
       entry({ recorded_at: "2026-09-14T13:00:00Z", ticket_key: "gitea:692" }),
       entry({ recorded_at: "2026-09-14T12:00:00Z" }),
-      entry({ recorded_at: "2026-09-14T11:00:00Z", phase: "planning" }),
+      entry({ recorded_at: "2026-09-14T11:00:00Z", phase: "plan" }),
     ]);
     expect(entered).toBe("2026-09-14T12:00:00Z");
   });
 
   it("reads a backward report as a NEW visit, never reaching back to the earlier one", () => {
-    // The agent held `implementing` this morning, moved to `verifying`, and has
-    // now reported `implementing` again. The clock starts at the recent visit;
+    // The agent held `build` this morning, moved to `verify`, and has
+    // now reported `build` again. The clock starts at the recent visit;
     // reaching past the intervening rows would claim a phase age of most of a
     // day for work that restarted minutes ago.
     const entered = phaseEnteredAt(phase, [
       entry({ recorded_at: "2026-09-14T16:00:00Z" }),
       entry({ recorded_at: "2026-09-14T15:45:00Z" }),
-      entry({ recorded_at: "2026-09-14T15:00:00Z", phase: "verifying" }),
-      entry({ recorded_at: "2026-09-14T14:00:00Z", phase: "verifying" }),
+      entry({ recorded_at: "2026-09-14T15:00:00Z", phase: "verify" }),
+      entry({ recorded_at: "2026-09-14T14:00:00Z", phase: "verify" }),
       entry({ recorded_at: "2026-09-14T08:00:00Z" }),
       entry({ recorded_at: "2026-09-14T07:00:00Z" }),
     ]);
@@ -196,7 +196,7 @@ describe("phaseEnteredAt", () => {
     // does not name this phase would date the phase from another one's visit.
     expect(
       phaseEnteredAt(phase, [
-        entry({ recorded_at: "2026-09-14T16:00:00Z", phase: "verifying" }),
+        entry({ recorded_at: "2026-09-14T16:00:00Z", phase: "verify" }),
         entry({ recorded_at: "2026-09-14T15:00:00Z" }),
       ]),
     ).toBeNull();
@@ -223,8 +223,8 @@ describe("reportIsStale", () => {
     expect(reportIsStale(phase, false, reported + STALE_REPORT_MS * 100)).toBe(false);
   });
 
-  it("never calls a `done` report stale even while the session is working", () => {
-    const done = phaseView({ phase: "done", updated_at: reportedAt });
+  it("never calls a `handoff` report stale even while the session is working", () => {
+    const done = phaseView({ phase: "handoff", updated_at: reportedAt });
     expect(reportIsStale(done, true, reported + STALE_REPORT_MS * 10)).toBe(false);
   });
 
@@ -247,13 +247,13 @@ describe("reportIsStale", () => {
 describe("stepIsLive", () => {
   it.each([
     // working, blocked, phase, live
-    [true, false, "implementing" as const, true],
-    [false, false, "implementing" as const, false],
-    [true, true, "implementing" as const, false],
-    [false, true, "implementing" as const, false],
-    [true, false, "done" as const, false],
-    [true, true, "done" as const, false],
-    [false, false, "done" as const, false],
+    [true, false, "build" as const, true],
+    [false, false, "build" as const, false],
+    [true, true, "build" as const, false],
+    [false, true, "build" as const, false],
+    [true, false, "handoff" as const, false],
+    [true, true, "handoff" as const, false],
+    [false, false, "handoff" as const, false],
   ])(
     "working=%s blocked=%s phase=%s pulses: %s",
     (working, blocked, phase, live) => {

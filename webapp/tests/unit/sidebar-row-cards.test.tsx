@@ -8,11 +8,14 @@ const tree = readFileSync("components/grove/fleet/fleet-tree.tsx", "utf8");
  * pins its static structural contracts without pretending SSR can exercise them.
  */
 describe("compact sidebar workspace cards", () => {
-  it("renders a raised object card with a title band and a separate link", () => {
+  it("renders a raised object card with a leading agent tile and a separate link", () => {
     const row = tree.slice(tree.indexOf("function WorkspaceRow("), tree.indexOf("function FleetSkeleton("));
 
     expect(row).toContain("<CardShell");
-    expect(row).toContain("surface-header");
+    // The tile is the row's identity column; its look is `.rail-agent-tile` at
+    // the theme boundary, so no radius or colour utility enters this file.
+    expect(row).toContain('className="rail-agent-tile flex size-10 shrink-0');
+    expect(row).not.toContain("surface-header");
     expect(row).toContain("<Link");
     expect(row).toContain("href={`/w/${state.id}`}");
     expect(row).toContain("<TooltipIconButton");
@@ -22,16 +25,16 @@ describe("compact sidebar workspace cards", () => {
     expect(row).not.toContain("justify-between");
   });
 
-  it("keeps the header for identity only and reserves the sibling options target", () => {
+  it("keeps the title line for the name only and reserves the sibling options target", () => {
     const row = tree.slice(tree.indexOf("function WorkspaceRow("), tree.indexOf("function FleetSkeleton("));
     const header = row.slice(row.indexOf("<header"), row.indexOf("</header>") + "</header>".length);
 
-    expect(header).toContain("<AgentMark");
+    expect(header).not.toContain("<AgentMark");
     expect(header).toContain("<LoopingText");
     expect(header).not.toContain("fleet-row-attention-mark");
     expect(header).not.toContain("fleet-row-phase-mark");
-    expect(header).toContain("pr-10");
-    expect(row).toContain('className="invisible absolute top-px right-1.5');
+    expect(header).toContain("pr-9");
+    expect(row).toContain('className="invisible absolute top-2.5 right-1.5');
     expect(header).toContain('min-h-[28px]');
     expect(row).toContain('[@media(pointer:coarse)]:visible');
   });
@@ -83,16 +86,43 @@ describe("compact sidebar workspace cards", () => {
     expect(row).toContain("focus-visible:outline-none");
     expect(row).not.toContain("opacity-80");
     expect(row).toContain('"opacity-95 hover:opacity-100 focus-within:opacity-100"');
-    expect(row).toContain('className="flex min-w-0 flex-col gap-1 px-2.5 py-2 text-sm text-content-secondary"');
-    expect(row).not.toContain('active ? "py-2"');
+    expect(row).toContain('className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm text-content-secondary"');
+    expect(row).not.toContain('active ? "p-');
   });
 
-  it("keeps the skeleton in the card's compact two-band shape", () => {
+  it("keeps the skeleton in the card's tile-and-three-lines shape", () => {
     const skeleton = tree.slice(tree.indexOf("function FleetSkeleton("));
 
     expect(skeleton).toContain("<CardShell");
-    expect(skeleton).toContain("surface-header");
+    expect(skeleton).toContain("size-10 shrink-0");
     expect(skeleton).toContain("h-5 w-2/3");
     expect(skeleton).toContain("h-4 w-3/4");
+  });
+
+  it("wears the state claims as soft pills from the one token table", () => {
+    const row = tree.slice(tree.indexOf("function WorkspaceRow("), tree.indexOf("function FleetSkeleton("));
+    const tokens = readFileSync("components/grove/fleet/tokens.ts", "utf8");
+
+    // Both marks are the canonical badge, toned by `railPillAccent`, never a
+    // colour chosen at the call site (design system §6).
+    const attention = row.slice(row.lastIndexOf("<Badge", row.indexOf('data-testid="fleet-row-attention-mark"')));
+    expect(attention.slice(0, 200)).toContain('railPillAccent("attention")');
+    expect(row).toContain('phase?.blocked ? "blocked" : phase?.phase === "handoff" ? "done" : "progress"');
+    for (const id of ["fleet-row-attention-mark", "fleet-row-phase-mark"]) {
+      const at = row.indexOf(`data-testid="${id}"`);
+      expect(at).toBeGreaterThan(-1);
+      const pill = row.slice(row.lastIndexOf("<Badge", at), at);
+      expect(pill).not.toMatch(/text-destructive|text-warning|text-success/);
+    }
+    expect(tokens).toContain("const RAIL_PILL_ACCENT = {");
+  });
+
+  it("gives a handed-off row its edge, and lets selection outrank it", () => {
+    const row = tree.slice(tree.indexOf("function WorkspaceRow("), tree.indexOf("function FleetSkeleton("));
+    const selected = row.indexOf('data-testid="fleet-row-marker"');
+    const done = row.indexOf('data-testid="fleet-row-done-edge"');
+    expect(selected).toBeGreaterThan(-1);
+    expect(done).toBeGreaterThan(selected);
+    expect(row).toContain(') : phase?.phase === "handoff" && !phase.blocked ? (');
   });
 });

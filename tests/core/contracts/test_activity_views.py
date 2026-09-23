@@ -174,6 +174,35 @@ def test_context_unavailable_reason_defaults_for_an_older_daemon_payload() -> No
     )
 
     assert view.activity.context_unavailable_reason is None
+    # Same additive rule for the birth instant: absent is "not measured".
+    assert view.activity.started_at is None
+
+
+def test_activity_view_carries_the_session_birth_beside_its_last_event() -> None:
+    """A subagent card states when a run started as well as when it last moved.
+
+    The two instants are distinct facts, so the fixture makes them differ — an
+    implementation that copied `last_event_at` into both would fail here.
+    """
+    born = datetime(2026, 9, 22, 10, 0, 0, tzinfo=UTC)
+    last = datetime(2026, 9, 22, 10, 7, 30, tzinfo=UTC)
+    view = SessionActivityView.from_session_activity(
+        SessionActivity(
+            session=AgentSession(
+                session_id="child",
+                transcript_path=None,
+                adapter_kind="claude_code",
+                provenance="fs_discovered",
+                parent_session_id="root",
+            ),
+            activity=AgentActivity(
+                state=AgentActivityState.WAITING, started_at=born, last_event_at=last
+            ),
+        )
+    )
+
+    assert view.activity.started_at == born
+    assert view.activity.last_event_at == last
 
 
 def test_session_activity_view_carries_duration_through() -> None:

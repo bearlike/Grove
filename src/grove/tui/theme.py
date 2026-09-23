@@ -172,7 +172,7 @@ _LIGHT_REF_ADD: Final = "#3d7a00"
 # Task-phase palette (light side). The dark side is the canonical cross-client
 # contract in ``grove.core.contracts.phase_palette`` (a pale→deep lime ramp
 # anchored on near-black `$surface`); the light side is TUI-only, same as the
-# agent-state light palette above. A pale-lime *dark*-mode `scoping` hex would
+# agent-state light palette above. A pale-lime *dark*-mode `scope` hex would
 # nearly vanish against light `$background`/`$surface` (cream/tan), so the
 # light ramp stays in the readable lime-500..lime-900 range throughout — the
 # same "readable on cream" adjustment `_LIGHT_STATUS_ACTIVE` makes — and
@@ -355,12 +355,12 @@ AGENT_STATE_HEX: Final[dict[bool, dict[AgentActivityState, str]]] = {
 PHASE_HEX: Final[dict[bool, dict[TaskPhase, str]]] = {
     True: dict(DARK_PHASE_HEX),
     False: {
-        "scoping": _LIGHT_PHASE_SCOPING,
-        "planning": _LIGHT_PHASE_PLANNING,
-        "implementing": _LIGHT_PHASE_IMPLEMENTING,
-        "verifying": _LIGHT_PHASE_VERIFYING,
-        "delivering": _LIGHT_PHASE_DELIVERING,
-        "done": _LIGHT_PHASE_DONE,
+        "scope": _LIGHT_PHASE_SCOPING,
+        "plan": _LIGHT_PHASE_PLANNING,
+        "build": _LIGHT_PHASE_IMPLEMENTING,
+        "verify": _LIGHT_PHASE_VERIFYING,
+        "deliver": _LIGHT_PHASE_DELIVERING,
+        "handoff": _LIGHT_PHASE_DONE,
     },
 }
 

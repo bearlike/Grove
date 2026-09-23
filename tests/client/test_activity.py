@@ -75,7 +75,7 @@ _ACTIVITY_BODY: dict[str, object] = {
                     "recent_commits": [],
                     "observed_at": "2026-07-31T00:00:00Z",
                     "phase": {
-                        "phase": "verifying",
+                        "phase": "verify",
                         "note": "running the gates",
                         "updated_at": "2026-07-31T00:00:00Z",
                         "index": 3,
@@ -181,7 +181,7 @@ async def test_get_activity_carries_the_phase_and_agent_axes() -> None:
 
     row = snapshot.projects[0].workspaces[0]
     assert row.phase is not None
-    assert (row.phase.phase, row.phase.index, row.phase.total) == ("verifying", 3, 6)
+    assert (row.phase.phase, row.phase.index, row.phase.total) == ("verify", 3, 6)
     assert row.todo is not None
     assert (row.todo.completed, row.todo.total) == (3, 4)
     assert row.needs_attention is True
@@ -197,7 +197,7 @@ async def test_get_activity_carries_the_phase_and_agent_axes() -> None:
 # never heard of either field keeps decoding the request.
 
 _PHASE_BODY: dict[str, object] = {
-    "phase": "implementing",
+    "phase": "build",
     "note": "waiting on design review",
     "updated_at": "2026-08-11T00:00:00Z",
     "index": 2,
@@ -214,13 +214,13 @@ async def test_set_phase_omits_blocked_and_ticket_at_their_defaults() -> None:
 
     client = _client_with_handler(httpx.MockTransport(handler))
     try:
-        await client.set_phase("ws-1", "implementing")
+        await client.set_phase("ws-1", "build")
     finally:
         await client.close()
 
     assert captured[0].method == "POST"
     assert captured[0].url.path == "/workspaces/ws-1/phase"
-    assert json.loads(captured[0].content) == {"phase": "implementing"}
+    assert json.loads(captured[0].content) == {"phase": "build"}
 
 
 async def test_set_phase_threads_blocked_and_ticket_when_given() -> None:
@@ -234,7 +234,7 @@ async def test_set_phase_threads_blocked_and_ticket_when_given() -> None:
     try:
         await client.set_phase(
             "ws-1",
-            "implementing",
+            "build",
             "waiting on design review",
             blocked=True,
             ticket="gitea:498",
@@ -243,7 +243,7 @@ async def test_set_phase_threads_blocked_and_ticket_when_given() -> None:
         await client.close()
 
     assert json.loads(captured[0].content) == {
-        "phase": "implementing",
+        "phase": "build",
         "note": "waiting on design review",
         "blocked": True,
         "ticket": "gitea:498",

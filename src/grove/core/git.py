@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar
+from threading import RLock
+from typing import ClassVar, TypeVar, cast
 
 from loguru import logger
 
@@ -35,6 +38,9 @@ from grove.core.workspace import CommitScope, CommitSummary
 
 _DIFFSTAT_INSERTIONS = re.compile(r"(\d+) insertion")
 _DIFFSTAT_DELETIONS = re.compile(r"(\d+) deletion")
+_Comparison = tuple[str, tuple[str, ...]]
+_ComparisonValue = tuple[int, int] | tuple[CommitSummary, ...]
+_T = TypeVar("_T", bound=_ComparisonValue)
 
 
 def _assert_not_flaglike(**values: str | None) -> None:
@@ -79,7 +85,8 @@ class GitRepo:
     state beyond the bound `root`. Errors raised on failure are
     `GitError`; the read-only helpers prefer `check=False` and return
     empty / zeros on failure so the caller (peek loops, branch
-    dropdowns) doesn't break on transient issues.
+    dropdowns) doesn't break on transient issues. Immutable commit comparisons
+    use a bounded, lock-protected OID-keyed cache; worktree reads stay uncached.
     """
 
     #: Wall-clock bound on every git subprocess. Generous rather than
@@ -94,9 +101,13 @@ class GitRepo:
     #: is constructed from a bare path at a dozen call sites, and threading a
     #: cascade value through all of them would buy nothing a constant does not.
     TIMEOUT_SECONDS: ClassVar[float] = 120.0
+    #: Bounded per-repository cache of results determined solely by commit OIDs.
+    COMPARISON_CACHE_MAX_ENTRIES: ClassVar[int] = 256
 
     def __init__(self, root: Path) -> None:
         self._root = root
+        self._comparison_cache: OrderedDict[_Comparison, _ComparisonValue] = OrderedDict()
+        self._comparison_lock = RLock()
 
     # ─── identity ──────────────────────────────────────────────────────────
 
@@ -383,42 +394,51 @@ class GitRepo:
 
         Uses `git rev-list --left-right --count base...branch`, whose output is
         "<behind>\\t<ahead>" by symmetric-difference convention. We swap them so
-        callers read it in the natural order. Resolves "HEAD" against `root`
-        (the parent repo) — slightly stale if the parent has moved on, but that's
-        the closest signal available without bookkeeping at create time.
-        Returns (0, 0) if either ref is missing.
+        callers read it in the natural order. Results are cached only after both
+        names resolve to immutable commit OIDs. Returns (0, 0) if either ref is
+        missing.
         """
-        result = self._run(
-            ["git", "rev-list", "--left-right", "--count", f"{base}...{branch}"],
-            cwd=self._root,
-            check=False,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return (0, 0)
-        parts = result.stdout.strip().split()
-        if len(parts) != 2:
-            return (0, 0)
-        try:
-            behind, ahead = int(parts[0]), int(parts[1])
-        except ValueError:
-            return (0, 0)
-        return (ahead, behind)
+
+        def _read(oids: tuple[str, ...]) -> tuple[int, int] | None:
+            base_oid, branch_oid = oids
+            result = self._run(
+                ["git", "rev-list", "--left-right", "--count", f"{base_oid}...{branch_oid}"],
+                cwd=self._root,
+                check=False,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            parts = result.stdout.strip().split()
+            if len(parts) != 2:
+                return None
+            try:
+                behind, ahead = int(parts[0]), int(parts[1])
+            except ValueError:
+                return None
+            return (ahead, behind)
+
+        return self._cached_comparison("ahead_behind", (base, branch), _read) or (0, 0)
 
     def diff_stats(self, branch: str, base: str) -> tuple[int, int]:
         """Return (added, removed) line counts of `branch` vs `base`."""
-        result = self._run(
-            ["git", "diff", "--shortstat", f"{base}...{branch}"],
-            cwd=self._root,
-            check=False,
-        )
-        if result.returncode != 0:
-            return (0, 0)
-        text = result.stdout
-        added_match = _DIFFSTAT_INSERTIONS.search(text)
-        removed_match = _DIFFSTAT_DELETIONS.search(text)
-        added = int(added_match.group(1)) if added_match else 0
-        removed = int(removed_match.group(1)) if removed_match else 0
-        return (added, removed)
+
+        def _read(oids: tuple[str, ...]) -> tuple[int, int] | None:
+            base_oid, branch_oid = oids
+            result = self._run(
+                ["git", "diff", "--shortstat", f"{base_oid}...{branch_oid}"],
+                cwd=self._root,
+                check=False,
+            )
+            if result.returncode != 0:
+                return None
+            text = result.stdout
+            added_match = _DIFFSTAT_INSERTIONS.search(text)
+            removed_match = _DIFFSTAT_DELETIONS.search(text)
+            added = int(added_match.group(1)) if added_match else 0
+            removed = int(removed_match.group(1)) if removed_match else 0
+            return (added, removed)
+
+        return self._cached_comparison("diff_stats", (base, branch), _read) or (0, 0)
 
     def recent_commits(self, branch: str, *, limit: int = 3) -> tuple[CommitSummary, ...]:
         """Most recent N commits on `branch`, newest first.
@@ -428,7 +448,17 @@ class GitRepo:
         workspace?" use ``branch_commits(branch, base)`` — that filter is
         the comprehensive view a detail screen wants.
         """
-        return self._parse_commit_log(["git", "log", f"-n{limit}", branch], scope=None)
+        return (
+            self._cached_comparison(
+                "recent_commits",
+                (branch,),
+                lambda oids: self._parse_commit_log_or_none(
+                    ["git", "log", f"-n{limit}", oids[0]], scope=None
+                ),
+                parameters=(str(limit),),
+            )
+            or ()
+        )
 
     def branch_commits(
         self,
@@ -511,25 +541,8 @@ class GitRepo:
         `scope` is required and unguessable from `cmd`, so each caller states
         which question its range answered rather than this helper inferring one.
         """
-        fmt = "%h%x09%s%x09%cI"  # short-sha \t subject \t committer-iso-date
-        full = [*cmd, f"--pretty=format:{fmt}", "--"]
-        result = self._run(full, cwd=self._root, check=False)
-        if result.returncode != 0:
-            return ()
-        commits: list[CommitSummary] = []
-        for line in result.stdout.splitlines():
-            sha, _, rest = line.partition("\t")
-            subject, _, when = rest.rpartition("\t")
-            if not sha or not when:
-                continue
-            try:
-                committed_at = datetime.fromisoformat(when)
-            except ValueError:
-                continue
-            commits.append(
-                CommitSummary(sha=sha, subject=subject, committed_at=committed_at, scope=scope)
-            )
-        return tuple(commits)
+        result = self._parse_commit_log_or_none(cmd, scope=scope)
+        return result if result is not None else ()
 
     def list_local_branches(self) -> list[BranchInfo]:
         """Every local branch, annotated with HEAD marker, upstream, and checkout site.
@@ -777,6 +790,126 @@ class GitRepo:
         return entries
 
     # ─── internal ──────────────────────────────────────────────────────────
+
+    def _cached_comparison(
+        self,
+        kind: str,
+        refs: tuple[str, ...],
+        read: Callable[[tuple[str, ...]], _T | None],
+        *,
+        parameters: tuple[str, ...] = (),
+    ) -> _T | None:
+        """Read an OID-keyed immutable comparison once, without retaining failures.
+
+        Names are resolved while the lock is held, then the comparison is read
+        and stored under their full commit OIDs. A moving branch therefore misses
+        the old entry, while two names at the same commits share it. The lock
+        covers the read too: concurrent dashboard refreshes must not turn one
+        cold comparison into N subprocesses.
+        """
+        with self._comparison_lock:
+            oids = self._resolve_commits(refs)
+            if oids is None:
+                return None
+            key: _Comparison = (kind, (*oids, *parameters, *self._comparison_context()))
+            cached = self._comparison_cache.get(key)
+            if cached is not None:
+                self._comparison_cache.move_to_end(key)
+                return cast(_T, cached)
+            value = read(oids)
+            if value is None:
+                return None
+            self._comparison_cache[key] = value
+            self._comparison_cache.move_to_end(key)
+            while len(self._comparison_cache) > self.COMPARISON_CACHE_MAX_ENTRIES:
+                self._comparison_cache.popitem(last=False)
+            return value
+
+    def _resolve_commits(self, refs: tuple[str, ...]) -> tuple[str, ...] | None:
+        """Resolve every ref in one process, or return None without caching a failure."""
+        result = self._run(
+            ["git", "rev-parse", "--quiet", "--revs-only", "--no-flags", *refs],
+            cwd=self._root,
+            check=False,
+        )
+        oids = tuple(line for line in result.stdout.splitlines() if line)
+        return oids if result.returncode == 0 and len(oids) == len(refs) else None
+
+    def _comparison_context(self) -> tuple[str, ...]:
+        """Filesystem facts that can change Git's interpretation of the same OIDs."""
+        common = self._comparison_common_dir()
+        if common is None:
+            return ()
+        return tuple(
+            f"{name}:{signature}"
+            for name, signature in (
+                ("config", self._stat_signature(common / "config")),
+                ("shallow", self._stat_signature(common / "shallow")),
+                ("grafts", self._stat_signature(common / "info" / "grafts")),
+                ("replacements", self._stat_signature(common / "refs" / "replace")),
+            )
+        )
+
+    def _comparison_common_dir(self) -> Path | None:
+        """Find the common Git dir without adding a process to every cache lookup."""
+        dot_git = self._root / ".git"
+        if dot_git.is_dir():
+            return dot_git
+        try:
+            pointer = dot_git.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        prefix = "gitdir: "
+        if not pointer.startswith(prefix):
+            return None
+        git_dir = Path(pointer[len(prefix) :])
+        if not git_dir.is_absolute():
+            git_dir = self._root / git_dir
+        common_dir = git_dir.parent.parent
+        return common_dir if common_dir.is_dir() else None
+
+    @staticmethod
+    def _stat_signature(path: Path) -> str:
+        try:
+            stat = path.stat()
+        except OSError:
+            return "absent"
+        return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+    def _parse_commit_log_or_none(
+        self,
+        cmd: list[str],
+        *,
+        scope: CommitScope | None,
+    ) -> tuple[CommitSummary, ...] | None:
+        """Parse a commit log, preserving command failure for cache admission."""
+        fmt = "%h%x09%s%x09%cI"  # short-sha \t subject \t committer-iso-date
+        result = self._run([*cmd, f"--pretty=format:{fmt}", "--"], cwd=self._root, check=False)
+        if result.returncode != 0:
+            return None
+        return self._commit_summaries(result.stdout, scope=scope)
+
+    @staticmethod
+    def _commit_summaries(
+        output: str,
+        *,
+        scope: CommitScope | None,
+    ) -> tuple[CommitSummary, ...]:
+        """Parse git's tab-delimited log output after a successful invocation."""
+        commits: list[CommitSummary] = []
+        for line in output.splitlines():
+            sha, _, rest = line.partition("\t")
+            subject, _, when = rest.rpartition("\t")
+            if not sha or not when:
+                continue
+            try:
+                committed_at = datetime.fromisoformat(when)
+            except ValueError:
+                continue
+            commits.append(
+                CommitSummary(sha=sha, subject=subject, committed_at=committed_at, scope=scope)
+            )
+        return tuple(commits)
 
     def _worktree_branches(self) -> dict[str, Path]:
         """Map of branch name → worktree path for every checked-out branch.

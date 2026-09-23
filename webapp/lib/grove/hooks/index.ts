@@ -22,6 +22,7 @@ export {
   useDiagramWriter,
   useWorkspaceDiagram,
   useHealth,
+  useMailboxContacts,
   useModels,
   useProvisionProgress,
   useSessionCatalog,
@@ -42,6 +43,7 @@ export {
   useWorkspaceSessions,
   useWorkspaceHistory,
   useWorkspaceTodo,
+  useWorkspaceWatches,
   ticketKey,
 } from "./queries";
 export type { SessionTurnsQuery, TicketResolutions } from "./queries";

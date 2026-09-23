@@ -6,7 +6,7 @@ Grove ties each workspace to the ticket it serves. A branch is the work, the tic
 
 <figure class="ms-shot">
   <div class="ms-shot__frame">
-    <img src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue. A table lists the phase, the checklist, the branch, the latest commit, a workspace link and the update time. Below it a six step diagram runs from Scoping to Done, then collapsed sections for latest activity, checklist and tracking.">
+    <img src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue. A table lists the phase, the checklist, the branch, the latest commit, a workspace link and the update time. Below it a six step diagram runs from Scope to Handoff, then collapsed sections for latest activity, checklist and tracking.">
   </div>
   <figcaption class="ms-shot__body">One comment per ticket, rewritten in place. You read the phase, checklist and latest commit from the tracker itself.</figcaption>
 </figure>
@@ -27,7 +27,7 @@ Grove ties each workspace to the ticket it serves. A branch is the work, the tic
   </div>
   <div class="ms-card">
     <span class="ms-card__title">Detail on demand</span>
-    <span class="ms-card__body">The detail view fetches title, status, assignee and URL on request. No background polling.</span>
+    <span class="ms-card__body">The detail view fetches title, status, assignee and URL on request. The only background read is the change watch below, once a minute per ticket.</span>
   </div>
   <div class="ms-card">
     <span class="ms-card__title">Start from a ticket</span>
@@ -46,13 +46,24 @@ Grove keeps one comment on every ticket a workspace is working, and rewrites it 
 
 [Issue ops](issue-ops.md) covers the body in detail.
 
+## Changes reach the agent
+
+While a workspace runs, Grove watches every ticket attached to it and mails the agent when a person changes one.
+
+- A new title, a close, reopen or merge, a draft marked ready, an edited description, or a new comment arrives as one message listing each change.
+- Attaching starts it and detaching, pausing or killing stops it. There is nothing to register.
+- Grove's own writes never count, so its status comment cannot wake the agent in a loop.
+- Each ticket is read at most once a minute however many workspaces hold it, and the status comment shares that read.
+
+[Watches](features-watches.md#changes-to-your-attached-tickets) covers how it is built on the callback backbone.
+
 ## Several tickets, one workspace
 
 - Each attached ticket gets its own phase claim rather than sharing the workspace's answer.
-- The issue can read `verifying` while its pull request already reads `delivering`, and each comment carries only its own claim.
+- The issue can read `verify` while its pull request already reads `deliver`, and each comment carries only its own claim.
 - [task phase](features-status.md#the-third-axis-task-phase) explains how an agent reports one, and `--ticket` and `--blocked` on [`grove phase`](use-cli.md#grove-phase) set one from outside.
 - One rank rule everywhere. Pull requests above issues, open above draft above settled, then the furthest along its phase first.
-- Rank tracks progress, not recency, so a `done` ticket sits below one still in progress.
+- Rank tracks progress, not recency, so a `handoff` ticket sits below one still in progress.
 
 ## The assignee is the work queue
 
