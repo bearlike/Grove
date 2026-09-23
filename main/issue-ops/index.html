@@ -922,6 +922,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-watches/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M5 3L2 6m20 0l-3-3M6.38 18.7L4 21m13.64-2.33L20 21"/></g></svg>
+
+        
+        Watches & Callbacks
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-telemetry/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1456,7 +1480,7 @@
 Comment `@grove fix the flaky test` on an issue and your own agent picks it up.
 
 &lt;figure class=&#34;ms-shot&#34;&gt;
-  &lt;div class=&#34;ms-shot__frame&#34;&gt;&lt;img loading=&#34;lazy&#34; src=&#34;../img/screenshots/issue-ops-sticky-comment.png&#34; alt=&#34;Grove&#39;s status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done&#34; /&gt;&lt;/div&gt;
+  &lt;div class=&#34;ms-shot__frame&#34;&gt;&lt;img loading=&#34;lazy&#34; src=&#34;../img/screenshots/issue-ops-sticky-comment.png&#34; alt=&#34;Grove&#39;s status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scope to Handoff&#34; /&gt;&lt;/div&gt;
   &lt;figcaption class=&#34;ms-shot__body&#34;&gt;One comment per ticket, rewritten in place as the work moves.&lt;/figcaption&gt;
 &lt;/figure&gt;
 
@@ -1472,17 +1496,17 @@ flowchart LR
   classDef done fill:#96938c,stroke:#96938c,color:#111111
   classDef now fill:#84cc16,stroke:#111111,stroke-width:3px,color:#111111
   classDef todo fill:#e4f7c0,stroke:#e4f7c0,color:#111111
-  p0[&#34;Scoping&#34;]:::done
-  p1[&#34;Planning&#34;]:::done
-  p2[&#34;Implementing&#34;]:::done
-  p3[&#34;Verifying&lt;br&gt;running make lint&#34;]:::now
-  p4[&#34;Delivering&#34;]:::todo
-  p5[&#34;Done&#34;]:::todo
+  p0[&#34;Scope&#34;]:::done
+  p1[&#34;Plan&#34;]:::done
+  p2[&#34;Build&#34;]:::done
+  p3[&#34;Verify&lt;br&gt;running make lint&#34;]:::now
+  p4[&#34;Deliver&#34;]:::todo
+  p5[&#34;Handoff&#34;]:::todo
   p0 --&gt; p1 --&gt; p2 --&gt; p3 --&gt; p4 --&gt; p5
 ```
 
 ```
-**Phase** ●●●●○○ Verifying (4/6) — running make lint
+**Phase** ●●●●○○ Verify (4/6) — running make lint
 
 **Checklist**
 - [x] Reproduce the flaky test
@@ -1791,7 +1815,7 @@ Find the symptom in the left column.
     <h2 id="delegate-work-without-leaving-your-tracker">Delegate work without leaving your tracker</h2>
 <p>Comment <code>@grove fix the flaky test</code> on an issue and your own agent picks it up.</p>
 <figure class="ms-shot">
-  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scoping to Done" /></div>
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue: a table of phase, checklist, branch and commit above a six step progress diagram running from Scope to Handoff" /></div>
   <figcaption class="ms-shot__body">One comment per ticket, rewritten in place as the work moves.</figcaption>
 </figure>
 
@@ -1806,14 +1830,14 @@ Find the symptom in the left column.
   classDef done fill:#96938c,stroke:#96938c,color:#111111
   classDef now fill:#84cc16,stroke:#111111,stroke-width:3px,color:#111111
   classDef todo fill:#e4f7c0,stroke:#e4f7c0,color:#111111
-  p0["Scoping"]:::done
-  p1["Planning"]:::done
-  p2["Implementing"]:::done
-  p3["Verifying&lt;br&gt;running make lint"]:::now
-  p4["Delivering"]:::todo
-  p5["Done"]:::todo
+  p0["Scope"]:::done
+  p1["Plan"]:::done
+  p2["Build"]:::done
+  p3["Verify&lt;br&gt;running make lint"]:::now
+  p4["Deliver"]:::todo
+  p5["Handoff"]:::todo
   p0 --&gt; p1 --&gt; p2 --&gt; p3 --&gt; p4 --&gt; p5</code></pre>
-<div class="language-text codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>**Phase** ●●●●○○ Verifying (4/6) — running make lint
+<div class="language-text codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>**Phase** ●●●●○○ Verify (4/6) — running make lint
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>**Checklist**
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>- [x] Reproduce the flaky test
@@ -1911,7 +1935,7 @@ Find the symptom in the left column.
 <li>The daemon <a href="../use-auth/#the-security-model">binds loopback by design</a>, so register a same host runner.</li>
 <li>Pin the caller to it on the default branch.</li>
 <li><code>GROVE_DAEMON_URL</code> is a variable and <code>GROVE_DAEMON_TOKEN</code> is a secret.</li>
-<li>Use <a href="https://github.com/bearlike/Grove/blob/76c98e6d/actions/issue-ops/action.yml" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>actions/issue-ops/action.yml</span></a>.</li>
+<li>Use <a href="https://github.com/bearlike/Grove/blob/1a5058d8/actions/issue-ops/action.yml" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>actions/issue-ops/action.yml</span></a>.</li>
 </ul>
 <div class="language-yaml codehilite"><span class="filename">.github/workflows/grove-issue-ops.yml</span><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Grove issue-ops</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">on</span><span class="p">:</span>
@@ -2643,6 +2667,30 @@ Find the symptom in the left column.
 
         
         Agent Activity & Sessions
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-watches/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M5 3L2 6m20 0l-3-3M6.38 18.7L4 21m13.64-2.33L20 21"/></g></svg>
+
+        
+        Watches & Callbacks
         
 
         

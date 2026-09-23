@@ -922,6 +922,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-watches/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M5 3L2 6m20 0l-3-3M6.38 18.7L4 21m13.64-2.33L20 21"/></g></svg>
+
+        
+        Watches & Callbacks
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-telemetry/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1457,7 +1481,7 @@ Grove ties each workspace to the ticket it serves. A branch is the work, the tic
 
 &lt;figure class=&#34;ms-shot&#34;&gt;
   &lt;div class=&#34;ms-shot__frame&#34;&gt;
-    &lt;img src=&#34;../img/screenshots/issue-ops-sticky-comment.png&#34; alt=&#34;Grove&#39;s status comment on a tracker issue. A table lists the phase, the checklist, the branch, the latest commit, a workspace link and the update time. Below it a six step diagram runs from Scoping to Done, then collapsed sections for latest activity, checklist and tracking.&#34;&gt;
+    &lt;img src=&#34;../img/screenshots/issue-ops-sticky-comment.png&#34; alt=&#34;Grove&#39;s status comment on a tracker issue. A table lists the phase, the checklist, the branch, the latest commit, a workspace link and the update time. Below it a six step diagram runs from Scope to Handoff, then collapsed sections for latest activity, checklist and tracking.&#34;&gt;
   &lt;/div&gt;
   &lt;figcaption class=&#34;ms-shot__body&#34;&gt;One comment per ticket, rewritten in place. You read the phase, checklist and latest commit from the tracker itself.&lt;/figcaption&gt;
 &lt;/figure&gt;
@@ -1478,7 +1502,7 @@ Grove ties each workspace to the ticket it serves. A branch is the work, the tic
   &lt;/div&gt;
   &lt;div class=&#34;ms-card&#34;&gt;
     &lt;span class=&#34;ms-card__title&#34;&gt;Detail on demand&lt;/span&gt;
-    &lt;span class=&#34;ms-card__body&#34;&gt;The detail view fetches title, status, assignee and URL on request. No background polling.&lt;/span&gt;
+    &lt;span class=&#34;ms-card__body&#34;&gt;The detail view fetches title, status, assignee and URL on request. The only background read is the change watch below, once a minute per ticket.&lt;/span&gt;
   &lt;/div&gt;
   &lt;div class=&#34;ms-card&#34;&gt;
     &lt;span class=&#34;ms-card__title&#34;&gt;Start from a ticket&lt;/span&gt;
@@ -1497,13 +1521,24 @@ Grove keeps one comment on every ticket a workspace is working, and rewrites it 
 
 [Issue ops](issue-ops.md) covers the body in detail.
 
+## Changes reach the agent
+
+While a workspace runs, Grove watches every ticket attached to it and mails the agent when a person changes one.
+
+- A new title, a close, reopen or merge, a draft marked ready, an edited description, or a new comment arrives as one message listing each change.
+- Attaching starts it and detaching, pausing or killing stops it. There is nothing to register.
+- Grove&#39;s own writes never count, so its status comment cannot wake the agent in a loop.
+- Each ticket is read at most once a minute however many workspaces hold it, and the status comment shares that read.
+
+[Watches](features-watches.md#changes-to-your-attached-tickets) covers how it is built on the callback backbone.
+
 ## Several tickets, one workspace
 
 - Each attached ticket gets its own phase claim rather than sharing the workspace&#39;s answer.
-- The issue can read `verifying` while its pull request already reads `delivering`, and each comment carries only its own claim.
+- The issue can read `verify` while its pull request already reads `deliver`, and each comment carries only its own claim.
 - [task phase](features-status.md#the-third-axis-task-phase) explains how an agent reports one, and `--ticket` and `--blocked` on [`grove phase`](use-cli.md#grove-phase) set one from outside.
 - One rank rule everywhere. Pull requests above issues, open above draft above settled, then the furthest along its phase first.
-- Rank tracks progress, not recency, so a `done` ticket sits below one still in progress.
+- Rank tracks progress, not recency, so a `handoff` ticket sits below one still in progress.
 
 ## The assignee is the work queue
 
@@ -1699,7 +1734,7 @@ Responses carry `ticket_refs` for ticket pills.
 <p>Grove ties each workspace to the ticket it serves. A branch is the work, the ticket is why it exists, and the branch name is the source of truth.</p>
 <figure class="ms-shot">
   <div class="ms-shot__frame">
-    <img src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue. A table lists the phase, the checklist, the branch, the latest commit, a workspace link and the update time. Below it a six step diagram runs from Scoping to Done, then collapsed sections for latest activity, checklist and tracking.">
+    <img src="../img/screenshots/issue-ops-sticky-comment.png" alt="Grove's status comment on a tracker issue. A table lists the phase, the checklist, the branch, the latest commit, a workspace link and the update time. Below it a six step diagram runs from Scope to Handoff, then collapsed sections for latest activity, checklist and tracking.">
   </div>
   <figcaption class="ms-shot__body">One comment per ticket, rewritten in place. You read the phase, checklist and latest commit from the tracker itself.</figcaption>
 </figure>
@@ -1719,7 +1754,7 @@ Responses carry `ticket_refs` for ticket pills.
   </div>
   <div class="ms-card">
     <span class="ms-card__title">Detail on demand</span>
-    <span class="ms-card__body">The detail view fetches title, status, assignee and URL on request. No background polling.</span>
+    <span class="ms-card__body">The detail view fetches title, status, assignee and URL on request. The only background read is the change watch below, once a minute per ticket.</span>
   </div>
   <div class="ms-card">
     <span class="ms-card__title">Start from a ticket</span>
@@ -1736,13 +1771,22 @@ Responses carry `ticket_refs` for ticket pills.
 <li>It stops and says so when the workspace ends, keeping the last phase and a transcript link.</li>
 </ul>
 <p><a href="../issue-ops/">Issue ops</a> covers the body in detail.</p>
+<h2 id="changes-reach-the-agent">Changes reach the agent</h2>
+<p>While a workspace runs, Grove watches every ticket attached to it and mails the agent when a person changes one.</p>
+<ul>
+<li>A new title, a close, reopen or merge, a draft marked ready, an edited description, or a new comment arrives as one message listing each change.</li>
+<li>Attaching starts it and detaching, pausing or killing stops it. There is nothing to register.</li>
+<li>Grove's own writes never count, so its status comment cannot wake the agent in a loop.</li>
+<li>Each ticket is read at most once a minute however many workspaces hold it, and the status comment shares that read.</li>
+</ul>
+<p><a href="../features-watches/#changes-to-your-attached-tickets">Watches</a> covers how it is built on the callback backbone.</p>
 <h2 id="several-tickets-one-workspace">Several tickets, one workspace</h2>
 <ul>
 <li>Each attached ticket gets its own phase claim rather than sharing the workspace's answer.</li>
-<li>The issue can read <code>verifying</code> while its pull request already reads <code>delivering</code>, and each comment carries only its own claim.</li>
+<li>The issue can read <code>verify</code> while its pull request already reads <code>deliver</code>, and each comment carries only its own claim.</li>
 <li><a href="../features-status/#the-third-axis-task-phase">task phase</a> explains how an agent reports one, and <code>--ticket</code> and <code>--blocked</code> on <a href="../use-cli/#grove-phase"><code>grove phase</code></a> set one from outside.</li>
 <li>One rank rule everywhere. Pull requests above issues, open above draft above settled, then the furthest along its phase first.</li>
-<li>Rank tracks progress, not recency, so a <code>done</code> ticket sits below one still in progress.</li>
+<li>Rank tracks progress, not recency, so a <code>handoff</code> ticket sits below one still in progress.</li>
 </ul>
 <h2 id="the-assignee-is-the-work-queue">The assignee is the work queue</h2>
 <p>Grove uses the tracker's own assignee field in both directions, off by default.</p>
@@ -2419,6 +2463,30 @@ Responses carry `ticket_refs` for ticket pills.
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-watches/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M5 3L2 6m20 0l-3-3M6.38 18.7L4 21m13.64-2.33L20 21"/></g></svg>
+
+        
+        Watches & Callbacks
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-telemetry/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2967,6 +3035,14 @@ Responses carry `ticket_refs` for ticket pills.
                 data-active="false" data-depth="2"
                 onClick="deferSetActiveTocLink('#working-the-ticket');">
                 Working the ticket
+            </a>
+            
+            
+            <a href="#changes-reach-the-agent"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2"
+                onClick="deferSetActiveTocLink('#changes-reach-the-agent');">
+                Changes reach the agent
             </a>
             
             
