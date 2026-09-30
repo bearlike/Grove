@@ -67,7 +67,7 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
-<link href="../css/plex-serif.css" rel="stylesheet"/>
+<link href="../css/editorial-fonts.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
@@ -98,7 +98,8 @@
 
     
 
-    <script integrity="sha384-FDYE0LZ2rjnYnGta7gXYP/eQrHyFKIFUU54YBXsPM0uOlGEddDH6ZRU2Mb5SwZxr" src="../js/callbacks.js"></script>
+    <script integrity="sha384-Q1MrSG7ZnVSCNkPrtLHrwaFNMRKVd4TDOQgr3oKtpORHLRDoNcfgIb1bInwjA0J1" src="../js/callbacks.js"></script>
+<script defer="" integrity="sha384-ljmRPFWw/c4kKFaKY5DIe8bgppHI9VBBrg7WZa8UPd23U9dEFesxZ1Ng8Hzjq2WB" src="../js/toc.js"></script>
 
     
 
@@ -418,8 +419,6 @@
 <div class="pointer-events-none absolute top-8 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background to-transparent">
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
-</div>
-<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1450,7 +1449,7 @@
 </div>
                         </div>
                     </div>
-                    <div class="h-full w-full">
+                    <div class="ms-docs-column w-full">
                         <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
 
                             <div class="flex min-w-0 flex-1 flex-col">
@@ -1850,6 +1849,31 @@ agent is the operator saying nothing should run it anymore.</p>
     <div class="doc doc-contents ">
 
         <p>Maximum accepted lifecycle operations, including lock waiters and running work.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="grove.core.GroveConfig.macros" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">macros</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">MacroSpec</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Grove commands by name, run as <code>/grove:&lt;name&gt;</code>. A map, so every layer adds or
+replaces commands by name; none ship built in, because which model is fast is a fact
+about your fleet.</p>
 
     </div>
 
@@ -3743,6 +3767,31 @@ real repo root.</p>
 <div class="doc doc-object doc-function">
 
 
+<h3 id="grove.core.WorkspaceManager.run_macro" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">run_macro</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">invocation</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Run the Grove command <code>/grove:&lt;name&gt;</code> declared in <code>cfg.macros</code>.</p>
+<p>The steps go to the native worker as ONE frame and it runs them in
+order, each after the provider reports the previous one finished — the
+owned stream is the only place that completion is observable, so a
+terminal workspace (no completion signal) and a provider whose owner
+cannot report one both refuse rather than fire the steps back to back.
+Dispatch semantics like every steer: returning means the worker has the
+command, not that it ran; progress lands in the workspace's stream pane.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="grove.core.WorkspaceManager.save_diagram_preview" class="doc doc-heading">
             <code class="codehilite language-python"><span class="n">save_diagram_preview</span><span class="p">(</span><span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">request</span><span class="p">:</span> <span class="n">DiagramPreviewUploadRequest</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DiagramPreviewView</span></code>
 
@@ -5239,6 +5288,25 @@ result after sorting.</p>
 parse products (the <code>grove sessions</code> table). It runs AFTER filtering
 and limiting, so the cost is one identity-keyed read per DISPLAYED row
 rather than one per transcript sharing the directory.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="grove.core.SessionExplorer.messages_for" class="doc doc-heading">
+            <code class="codehilite language-python"><span class="n">messages_for</span><span class="p">(</span><span class="n">listing</span><span class="p">:</span> <span class="n">SessionListing</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">AgentMessage</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>The raw message spine for an already-resolved listing — what the
+trace replay reads, under the same config-dir scope as :meth:<code>turns_for</code>.</p>
 
 
     </div>
@@ -7949,27 +8017,8 @@ response can include them in the JSON payload.</p>
 
 </div>
   </div>
-  
-  <script>
-    // toc.html omits the heading that names the page itself — the masthead
-    // subtitle, or the hero's own heading. Observing a heading the rail has no
-    // link for would still make it the "topmost visible heading", and
-    // setActiveTocLink would find nothing to match and blank the rail. Reading
-    // the skip off the rail keeps this in step with whatever toc.html drops.
-    // Deferred because main.html emits the rail after this article, so #toc
-    // does not exist yet while this script is parsed.
-    document.addEventListener('DOMContentLoaded', () => {
-      const tocTargets = new Set(
-        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
-      );
-      document.querySelectorAll('article h2, article h3').forEach((header) => {
-        if (!tocTargets.has('#' + header.id)) return;
-        toc.observer.observe(header);
-      });
-    });
-  </script>
 </article>
-                                <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
+                                <div id="bottom-navigation" class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 shadow-none"
@@ -9062,73 +9111,69 @@ response can include them in the JSON payload.</p>
             
             <a href="#configuration"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#configuration');">
+                data-active="false" data-depth="2">
                 Configuration
             </a>
             
             
             <a href="#grove.core.GroveConfig"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig');">
+                data-active="false" data-depth="2">
                 GroveConfig
             </a>
             
             
             <a href="#grove.core.GroveConfig.activity_admission"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.activity_admission');">
+                data-active="false" data-depth="3">
                 activity_admission
             </a>
             
             <a href="#grove.core.GroveConfig.builtin_agents"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.builtin_agents');">
+                data-active="false" data-depth="3">
                 builtin_agents
             </a>
             
             <a href="#grove.core.GroveConfig.default_brief"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.default_brief');">
+                data-active="false" data-depth="3">
                 default_brief
             </a>
             
             <a href="#grove.core.GroveConfig.default_runtime"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.default_runtime');">
+                data-active="false" data-depth="3">
                 default_runtime
             </a>
             
             <a href="#grove.core.GroveConfig.default_skip_init"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.default_skip_init');">
+                data-active="false" data-depth="3">
                 default_skip_init
             </a>
             
             <a href="#grove.core.GroveConfig.lifecycle_max_pending"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.lifecycle_max_pending');">
+                data-active="false" data-depth="3">
                 lifecycle_max_pending
+            </a>
+            
+            <a href="#grove.core.GroveConfig.macros"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3">
+                macros
             </a>
             
             <a href="#grove.core.GroveConfig.panels"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.panels');">
+                data-active="false" data-depth="3">
                 panels
             </a>
             
             <a href="#grove.core.GroveConfig.projects"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.GroveConfig.projects');">
+                data-active="false" data-depth="3">
                 projects
             </a>
             
@@ -9136,86 +9181,74 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.AgentSpec"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec');">
+                data-active="false" data-depth="2">
                 AgentSpec
             </a>
             
             
             <a href="#grove.core.AgentSpec.command"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.command');">
+                data-active="false" data-depth="3">
                 command
             </a>
             
             <a href="#grove.core.AgentSpec.description"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.description');">
+                data-active="false" data-depth="3">
                 description
             </a>
             
             <a href="#grove.core.AgentSpec.env"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.env');">
+                data-active="false" data-depth="3">
                 env
             </a>
             
             <a href="#grove.core.AgentSpec.env_unset"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.env_unset');">
+                data-active="false" data-depth="3">
                 env_unset
             </a>
             
             <a href="#grove.core.AgentSpec.kind"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.kind');">
+                data-active="false" data-depth="3">
                 kind
             </a>
             
             <a href="#grove.core.AgentSpec.models"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.models');">
+                data-active="false" data-depth="3">
                 models
             </a>
             
             <a href="#grove.core.AgentSpec.name"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.name');">
+                data-active="false" data-depth="3">
                 name
             </a>
             
             <a href="#grove.core.AgentSpec.native"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.native');">
+                data-active="false" data-depth="3">
                 native
             </a>
             
             <a href="#grove.core.AgentSpec.owns_native_session"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.owns_native_session');">
+                data-active="false" data-depth="3">
                 owns_native_session
             </a>
             
             <a href="#grove.core.AgentSpec.tools_offline"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.tools_offline');">
+                data-active="false" data-depth="3">
                 tools_offline
             </a>
             
             <a href="#grove.core.AgentSpec.native_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.AgentSpec.native_for');">
+                data-active="false" data-depth="3">
                 native_for
             </a>
             
@@ -9223,466 +9256,406 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.load_config"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.load_config');">
+                data-active="false" data-depth="2">
                 load_config
             </a>
             
             
             <a href="#lifecycle"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#lifecycle');">
+                data-active="false" data-depth="2">
                 Lifecycle
             </a>
             
             
             <a href="#grove.core.WorkspaceManager"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager');">
+                data-active="false" data-depth="2">
                 WorkspaceManager
             </a>
             
             
             <a href="#grove.core.WorkspaceManager.provides_pane"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.provides_pane');">
+                data-active="false" data-depth="3">
                 provides_pane
             </a>
             
             <a href="#grove.core.WorkspaceManager.ticket_providers"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.ticket_providers');">
+                data-active="false" data-depth="3">
                 ticket_providers
             </a>
             
             <a href="#grove.core.WorkspaceManager.add_attachment"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.add_attachment');">
+                data-active="false" data-depth="3">
                 add_attachment
             </a>
             
             <a href="#grove.core.WorkspaceManager.add_container_agent"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.add_container_agent');">
+                data-active="false" data-depth="3">
                 add_container_agent
             </a>
             
             <a href="#grove.core.WorkspaceManager.agent_exit"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.agent_exit');">
+                data-active="false" data-depth="3">
                 agent_exit
             </a>
             
             <a href="#grove.core.WorkspaceManager.answer_question"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.answer_question');">
+                data-active="false" data-depth="3">
                 answer_question
             </a>
             
             <a href="#grove.core.WorkspaceManager.attach"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.attach');">
+                data-active="false" data-depth="3">
                 attach
             </a>
             
             <a href="#grove.core.WorkspaceManager.attach_link"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.attach_link');">
+                data-active="false" data-depth="3">
                 attach_link
             </a>
             
             <a href="#grove.core.WorkspaceManager.attach_ticket"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.attach_ticket');">
+                data-active="false" data-depth="3">
                 attach_ticket
             </a>
             
             <a href="#grove.core.WorkspaceManager.bind_runtime_liveness"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.bind_runtime_liveness');">
+                data-active="false" data-depth="3">
                 bind_runtime_liveness
             </a>
             
             <a href="#grove.core.WorkspaceManager.can_receive"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.can_receive');">
+                data-active="false" data-depth="3">
                 can_receive
             </a>
             
             <a href="#grove.core.WorkspaceManager.commits"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.commits');">
+                data-active="false" data-depth="3">
                 commits
             </a>
             
             <a href="#grove.core.WorkspaceManager.container_agent_argv"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.container_agent_argv');">
+                data-active="false" data-depth="3">
                 container_agent_argv
             </a>
             
             <a href="#grove.core.WorkspaceManager.container_agents"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.container_agents');">
+                data-active="false" data-depth="3">
                 container_agents
             </a>
             
             <a href="#grove.core.WorkspaceManager.create"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.create');">
+                data-active="false" data-depth="3">
                 create
             </a>
             
             <a href="#grove.core.WorkspaceManager.current_branch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.current_branch');">
+                data-active="false" data-depth="3">
                 current_branch
             </a>
             
             <a href="#grove.core.WorkspaceManager.default_branch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.default_branch');">
+                data-active="false" data-depth="3">
                 default_branch
             </a>
             
             <a href="#grove.core.WorkspaceManager.detach_ticket"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.detach_ticket');">
+                data-active="false" data-depth="3">
                 detach_ticket
             </a>
             
             <a href="#grove.core.WorkspaceManager.effective_kind"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.effective_kind');">
+                data-active="false" data-depth="3">
                 effective_kind
             </a>
             
             <a href="#grove.core.WorkspaceManager.find_by_ticket"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.find_by_ticket');">
+                data-active="false" data-depth="3">
                 find_by_ticket
             </a>
             
             <a href="#grove.core.WorkspaceManager.interrupt"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.interrupt');">
+                data-active="false" data-depth="3">
                 interrupt
             </a>
             
             <a href="#grove.core.WorkspaceManager.invoke_control"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.invoke_control');">
+                data-active="false" data-depth="3">
                 invoke_control
             </a>
             
             <a href="#grove.core.WorkspaceManager.kill"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.kill');">
+                data-active="false" data-depth="3">
                 kill
             </a>
             
             <a href="#grove.core.WorkspaceManager.kill_container_agent"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.kill_container_agent');">
+                data-active="false" data-depth="3">
                 kill_container_agent
             </a>
             
             <a href="#grove.core.WorkspaceManager.latest_task"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.latest_task');">
+                data-active="false" data-depth="3">
                 latest_task
             </a>
             
             <a href="#grove.core.WorkspaceManager.latest_task_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.latest_task_for');">
+                data-active="false" data-depth="3">
                 latest_task_for
             </a>
             
             <a href="#grove.core.WorkspaceManager.latest_todo"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.latest_todo');">
+                data-active="false" data-depth="3">
                 latest_todo
             </a>
             
             <a href="#grove.core.WorkspaceManager.latest_todo_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.latest_todo_for');">
+                data-active="false" data-depth="3">
                 latest_todo_for
             </a>
             
             <a href="#grove.core.WorkspaceManager.list"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.list');">
+                data-active="false" data-depth="3">
                 list
             </a>
             
             <a href="#grove.core.WorkspaceManager.list_local_branches"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.list_local_branches');">
+                data-active="false" data-depth="3">
                 list_local_branches
             </a>
             
             <a href="#grove.core.WorkspaceManager.list_remote_branches"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.list_remote_branches');">
+                data-active="false" data-depth="3">
                 list_remote_branches
             </a>
             
             <a href="#grove.core.WorkspaceManager.open_diagram"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.open_diagram');">
+                data-active="false" data-depth="3">
                 open_diagram
             </a>
             
             <a href="#grove.core.WorkspaceManager.pane_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.pane_for');">
+                data-active="false" data-depth="3">
                 pane_for
             </a>
             
             <a href="#grove.core.WorkspaceManager.pane_target"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.pane_target');">
+                data-active="false" data-depth="3">
                 pane_target
             </a>
             
             <a href="#grove.core.WorkspaceManager.pane_target_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.pane_target_for');">
+                data-active="false" data-depth="3">
                 pane_target_for
             </a>
             
             <a href="#grove.core.WorkspaceManager.peek"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.peek');">
+                data-active="false" data-depth="3">
                 peek
             </a>
             
             <a href="#grove.core.WorkspaceManager.peek_pane"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.peek_pane');">
+                data-active="false" data-depth="3">
                 peek_pane
             </a>
             
             <a href="#grove.core.WorkspaceManager.pending_queue"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.pending_queue');">
+                data-active="false" data-depth="3">
                 pending_queue
             </a>
             
             <a href="#grove.core.WorkspaceManager.pending_queue_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.pending_queue_for');">
+                data-active="false" data-depth="3">
                 pending_queue_for
             </a>
             
             <a href="#grove.core.WorkspaceManager.phase"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.phase');">
+                data-active="false" data-depth="3">
                 phase
             </a>
             
             <a href="#grove.core.WorkspaceManager.phase_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.phase_for');">
+                data-active="false" data-depth="3">
                 phase_for
             </a>
             
             <a href="#grove.core.WorkspaceManager.primary_transcript"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.primary_transcript');">
+                data-active="false" data-depth="3">
                 primary_transcript
             </a>
             
             <a href="#grove.core.WorkspaceManager.provision_progress"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.provision_progress');">
+                data-active="false" data-depth="3">
                 provision_progress
             </a>
             
             <a href="#grove.core.WorkspaceManager.queue_supported"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.queue_supported');">
+                data-active="false" data-depth="3">
                 queue_supported
             </a>
             
             <a href="#grove.core.WorkspaceManager.read_diagram"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.read_diagram');">
+                data-active="false" data-depth="3">
                 read_diagram
             </a>
             
             <a href="#grove.core.WorkspaceManager.read_diagram_preview"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.read_diagram_preview');">
+                data-active="false" data-depth="3">
                 read_diagram_preview
             </a>
             
             <a href="#grove.core.WorkspaceManager.reconciled"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.reconciled');">
+                data-active="false" data-depth="3">
                 reconciled
             </a>
             
             <a href="#grove.core.WorkspaceManager.remap_session"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.remap_session');">
+                data-active="false" data-depth="3">
                 remap_session
             </a>
             
             <a href="#grove.core.WorkspaceManager.respawn"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.respawn');">
+                data-active="false" data-depth="3">
                 respawn
+            </a>
+            
+            <a href="#grove.core.WorkspaceManager.run_macro"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3">
+                run_macro
             </a>
             
             <a href="#grove.core.WorkspaceManager.save_diagram_preview"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.save_diagram_preview');">
+                data-active="false" data-depth="3">
                 save_diagram_preview
             </a>
             
             <a href="#grove.core.WorkspaceManager.send_keys"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.send_keys');">
+                data-active="false" data-depth="3">
                 send_keys
             </a>
             
             <a href="#grove.core.WorkspaceManager.send_message"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.send_message');">
+                data-active="false" data-depth="3">
                 send_message
             </a>
             
             <a href="#grove.core.WorkspaceManager.session_controls"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.session_controls');">
+                data-active="false" data-depth="3">
                 session_controls
             </a>
             
             <a href="#grove.core.WorkspaceManager.set_phase"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.set_phase');">
+                data-active="false" data-depth="3">
                 set_phase
             </a>
             
             <a href="#grove.core.WorkspaceManager.shared_session_id"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.shared_session_id');">
+                data-active="false" data-depth="3">
                 shared_session_id
             </a>
             
             <a href="#grove.core.WorkspaceManager.stop_diagram"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.stop_diagram');">
+                data-active="false" data-depth="3">
                 stop_diagram
             </a>
             
             <a href="#grove.core.WorkspaceManager.subscribe"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.subscribe');">
+                data-active="false" data-depth="3">
                 subscribe
             </a>
             
             <a href="#grove.core.WorkspaceManager.switch_model"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.switch_model');">
+                data-active="false" data-depth="3">
                 switch_model
             </a>
             
             <a href="#grove.core.WorkspaceManager.transcript_config_dir_scope"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.transcript_config_dir_scope');">
+                data-active="false" data-depth="3">
                 transcript_config_dir_scope
             </a>
             
             <a href="#grove.core.WorkspaceManager.transcript_scope"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.transcript_scope');">
+                data-active="false" data-depth="3">
                 transcript_scope
             </a>
             
             <a href="#grove.core.WorkspaceManager.update"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.update');">
+                data-active="false" data-depth="3">
                 update
             </a>
             
             <a href="#grove.core.WorkspaceManager.update_diagram"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.update_diagram');">
+                data-active="false" data-depth="3">
                 update_diagram
             </a>
             
             <a href="#grove.core.WorkspaceManager.working_diff"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceManager.working_diff');">
+                data-active="false" data-depth="3">
                 working_diff
             </a>
             
@@ -9690,89 +9663,77 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.WorkspaceEvent"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceEvent');">
+                data-active="false" data-depth="2">
                 WorkspaceEvent
             </a>
             
             
             <a href="#grove.core.build"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.build');">
+                data-active="false" data-depth="2">
                 build
             </a>
             
             
             <a href="#multi-repo-and-activity"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#multi-repo-and-activity');">
+                data-active="false" data-depth="2">
                 Multi-repo and activity
             </a>
             
             
             <a href="#grove.core.RepoRegistry"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry');">
+                data-active="false" data-depth="2">
                 RepoRegistry
             </a>
             
             
             <a href="#grove.core.RepoRegistry.get"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.get');">
+                data-active="false" data-depth="3">
                 get
             </a>
             
             <a href="#grove.core.RepoRegistry.known_projects"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.known_projects');">
+                data-active="false" data-depth="3">
                 known_projects
             </a>
             
             <a href="#grove.core.RepoRegistry.known_roots"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.known_roots');">
+                data-active="false" data-depth="3">
                 known_roots
             </a>
             
             <a href="#grove.core.RepoRegistry.resolve_share"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.resolve_share');">
+                data-active="false" data-depth="3">
                 resolve_share
             </a>
             
             <a href="#grove.core.RepoRegistry.resolve_workspace"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.resolve_workspace');">
+                data-active="false" data-depth="3">
                 resolve_workspace
             </a>
             
             <a href="#grove.core.RepoRegistry.shared_in"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.shared_in');">
+                data-active="false" data-depth="3">
                 shared_in
             </a>
             
             <a href="#grove.core.RepoRegistry.subscribe_managers"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.subscribe_managers');">
+                data-active="false" data-depth="3">
                 subscribe_managers
             </a>
             
             <a href="#grove.core.RepoRegistry.workspace_states"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.RepoRegistry.workspace_states');">
+                data-active="false" data-depth="3">
                 workspace_states
             </a>
             
@@ -9780,121 +9741,104 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.ActivityService"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService');">
+                data-active="false" data-depth="2">
                 ActivityService
             </a>
             
             
             <a href="#grove.core.ActivityService.apply_reconcile"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.apply_reconcile');">
+                data-active="false" data-depth="3">
                 apply_reconcile
             </a>
             
             <a href="#grove.core.ActivityService.apply_workspace_refresh"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.apply_workspace_refresh');">
+                data-active="false" data-depth="3">
                 apply_workspace_refresh
             </a>
             
             <a href="#grove.core.ActivityService.bootstrap"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.bootstrap');">
+                data-active="false" data-depth="3">
                 bootstrap
             </a>
             
             <a href="#grove.core.ActivityService.close"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.close');">
+                data-active="false" data-depth="3">
                 close
             </a>
             
             <a href="#grove.core.ActivityService.next_seq"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.next_seq');">
+                data-active="false" data-depth="3">
                 next_seq
             </a>
             
             <a href="#grove.core.ActivityService.poll_once"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.poll_once');">
+                data-active="false" data-depth="3">
                 poll_once
             </a>
             
             <a href="#grove.core.ActivityService.prepare_reconcile"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.prepare_reconcile');">
+                data-active="false" data-depth="3">
                 prepare_reconcile
             </a>
             
             <a href="#grove.core.ActivityService.prepare_workspace_refresh"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.prepare_workspace_refresh');">
+                data-active="false" data-depth="3">
                 prepare_workspace_refresh
             </a>
             
             <a href="#grove.core.ActivityService.reconcile"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.reconcile');">
+                data-active="false" data-depth="3">
                 reconcile
             </a>
             
             <a href="#grove.core.ActivityService.refresh_workspace"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.refresh_workspace');">
+                data-active="false" data-depth="3">
                 refresh_workspace
             </a>
             
             <a href="#grove.core.ActivityService.sessions_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.sessions_for');">
+                data-active="false" data-depth="3">
                 sessions_for
             </a>
             
             <a href="#grove.core.ActivityService.snapshot"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.snapshot');">
+                data-active="false" data-depth="3">
                 snapshot
             </a>
             
             <a href="#grove.core.ActivityService.snapshot_with_cursor"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.snapshot_with_cursor');">
+                data-active="false" data-depth="3">
                 snapshot_with_cursor
             </a>
             
             <a href="#grove.core.ActivityService.source_changed"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.source_changed');">
+                data-active="false" data-depth="3">
                 source_changed
             </a>
             
             <a href="#grove.core.ActivityService.subscribe"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.subscribe');">
+                data-active="false" data-depth="3">
                 subscribe
             </a>
             
             <a href="#grove.core.ActivityService.workspace_row"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.ActivityService.workspace_row');">
+                data-active="false" data-depth="3">
                 workspace_row
             </a>
             
@@ -9902,151 +9846,136 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.DashboardSnapshot"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.DashboardSnapshot');">
+                data-active="false" data-depth="2">
                 DashboardSnapshot
             </a>
             
             
             <a href="#sessions"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#sessions');">
+                data-active="false" data-depth="2">
                 Sessions
             </a>
             
             
             <a href="#grove.core.SessionExplorer"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer');">
+                data-active="false" data-depth="2">
                 SessionExplorer
             </a>
             
             
             <a href="#grove.core.SessionExplorer.candidates_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.candidates_for');">
+                data-active="false" data-depth="3">
                 candidates_for
             </a>
             
             <a href="#grove.core.SessionExplorer.enriched"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.enriched');">
+                data-active="false" data-depth="3">
                 enriched
             </a>
             
             <a href="#grove.core.SessionExplorer.fleet_activity"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.fleet_activity');">
+                data-active="false" data-depth="3">
                 fleet_activity
             </a>
             
             <a href="#grove.core.SessionExplorer.for_workspace"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.for_workspace');">
+                data-active="false" data-depth="3">
                 for_workspace
             </a>
             
             <a href="#grove.core.SessionExplorer.from_cwd"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.from_cwd');">
+                data-active="false" data-depth="3">
                 from_cwd
             </a>
             
             <a href="#grove.core.SessionExplorer.list"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.list');">
+                data-active="false" data-depth="3">
                 list
+            </a>
+            
+            <a href="#grove.core.SessionExplorer.messages_for"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="3">
+                messages_for
             </a>
             
             <a href="#grove.core.SessionExplorer.primary_for_workspace"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.primary_for_workspace');">
+                data-active="false" data-depth="3">
                 primary_for_workspace
             </a>
             
             <a href="#grove.core.SessionExplorer.queries_from_messages"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.queries_from_messages');">
+                data-active="false" data-depth="3">
                 queries_from_messages
             </a>
             
             <a href="#grove.core.SessionExplorer.recollect"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.recollect');">
+                data-active="false" data-depth="3">
                 recollect
             </a>
             
             <a href="#grove.core.SessionExplorer.recollect_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.recollect_for');">
+                data-active="false" data-depth="3">
                 recollect_for
             </a>
             
             <a href="#grove.core.SessionExplorer.resolve"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.resolve');">
+                data-active="false" data-depth="3">
                 resolve
             </a>
             
             <a href="#grove.core.SessionExplorer.scan_roots"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.scan_roots');">
+                data-active="false" data-depth="3">
                 scan_roots
             </a>
             
             <a href="#grove.core.SessionExplorer.subagent_turns"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.subagent_turns');">
+                data-active="false" data-depth="3">
                 subagent_turns
             </a>
             
             <a href="#grove.core.SessionExplorer.tool_call"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.tool_call');">
+                data-active="false" data-depth="3">
                 tool_call
             </a>
             
             <a href="#grove.core.SessionExplorer.tool_call_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.tool_call_for');">
+                data-active="false" data-depth="3">
                 tool_call_for
             </a>
             
             <a href="#grove.core.SessionExplorer.transcripts"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.transcripts');">
+                data-active="false" data-depth="3">
                 transcripts
             </a>
             
             <a href="#grove.core.SessionExplorer.turns"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.turns');">
+                data-active="false" data-depth="3">
                 turns
             </a>
             
             <a href="#grove.core.SessionExplorer.turns_for"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.SessionExplorer.turns_for');">
+                data-active="false" data-depth="3">
                 turns_for
             </a>
             
@@ -10054,88 +9983,76 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.SessionListing"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.SessionListing');">
+                data-active="false" data-depth="2">
                 SessionListing
             </a>
             
             
             <a href="#workspace-state"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#workspace-state');">
+                data-active="false" data-depth="2">
                 Workspace state
             </a>
             
             
             <a href="#grove.core.WorkspaceState"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState');">
+                data-active="false" data-depth="2">
                 WorkspaceState
             </a>
             
             
             <a href="#grove.core.WorkspaceState.agent_cwd"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.agent_cwd');">
+                data-active="false" data-depth="3">
                 agent_cwd
             </a>
             
             <a href="#grove.core.WorkspaceState.diff_base"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.diff_base');">
+                data-active="false" data-depth="3">
                 diff_base
             </a>
             
             <a href="#grove.core.WorkspaceState.grove_owns_branch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.grove_owns_branch');">
+                data-active="false" data-depth="3">
                 grove_owns_branch
             </a>
             
             <a href="#grove.core.WorkspaceState.init_env"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.init_env');">
+                data-active="false" data-depth="3">
                 init_env
             </a>
             
             <a href="#grove.core.WorkspaceState.runtime_no_tmux"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.runtime_no_tmux');">
+                data-active="false" data-depth="3">
                 runtime_no_tmux
             </a>
             
             <a href="#grove.core.WorkspaceState.scan_cwds"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.scan_cwds');">
+                data-active="false" data-depth="3">
                 scan_cwds
             </a>
             
             <a href="#grove.core.WorkspaceState.telemetry_session_id"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.telemetry_session_id');">
+                data-active="false" data-depth="3">
                 telemetry_session_id
             </a>
             
             <a href="#grove.core.WorkspaceState.transcript_scan_cwds"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.transcript_scan_cwds');">
+                data-active="false" data-depth="3">
                 transcript_scan_cwds
             </a>
             
             <a href="#grove.core.WorkspaceState.adopts_session"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceState.adopts_session');">
+                data-active="false" data-depth="3">
                 adopts_session
             </a>
             
@@ -10143,39 +10060,34 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.WorkspaceStatus"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceStatus');">
+                data-active="false" data-depth="2">
                 WorkspaceStatus
             </a>
             
             
             <a href="#grove.core.WorkspacePeek"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspacePeek');">
+                data-active="false" data-depth="2">
                 WorkspacePeek
             </a>
             
             
             <a href="#grove.core.Placement"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.Placement');">
+                data-active="false" data-depth="2">
                 Placement
             </a>
             
             
             <a href="#grove.core.Placement.ROOT"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.Placement.ROOT');">
+                data-active="false" data-depth="3">
                 ROOT
             </a>
             
             <a href="#grove.core.Placement.WORKTREE"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.Placement.WORKTREE');">
+                data-active="false" data-depth="3">
                 WORKTREE
             </a>
             
@@ -10183,23 +10095,20 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.BranchProvenance"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.BranchProvenance');">
+                data-active="false" data-depth="2">
                 BranchProvenance
             </a>
             
             
             <a href="#grove.core.BranchProvenance.GROVE_CREATED"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.BranchProvenance.GROVE_CREATED');">
+                data-active="false" data-depth="3">
                 GROVE_CREATED
             </a>
             
             <a href="#grove.core.BranchProvenance.USER_ATTACHED"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.BranchProvenance.USER_ATTACHED');">
+                data-active="false" data-depth="3">
                 USER_ATTACHED
             </a>
             
@@ -10207,72 +10116,63 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.InitStatus"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.InitStatus');">
+                data-active="false" data-depth="2">
                 InitStatus
             </a>
             
             
             <a href="#grove.core.CommitSummary"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.CommitSummary');">
+                data-active="false" data-depth="2">
                 CommitSummary
             </a>
             
             
             <a href="#branch-source-contracts"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#branch-source-contracts');">
+                data-active="false" data-depth="2">
                 Branch-source contracts
             </a>
             
             
             <a href="#grove.core.BranchPlan"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.BranchPlan');">
+                data-active="false" data-depth="2">
                 BranchPlan
             </a>
             
             
             <a href="#grove.core.AutoBranch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.AutoBranch');">
+                data-active="false" data-depth="2">
                 AutoBranch
             </a>
             
             
             <a href="#grove.core.NewNamedBranch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.NewNamedBranch');">
+                data-active="false" data-depth="2">
                 NewNamedBranch
             </a>
             
             
             <a href="#grove.core.ExistingLocalBranch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.ExistingLocalBranch');">
+                data-active="false" data-depth="2">
                 ExistingLocalBranch
             </a>
             
             
             <a href="#grove.core.TrackRemoteBranch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.TrackRemoteBranch');">
+                data-active="false" data-depth="2">
                 TrackRemoteBranch
             </a>
             
             
             <a href="#grove.core.TrackRemoteBranch.effective_local_name"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.TrackRemoteBranch.effective_local_name');">
+                data-active="false" data-depth="3">
                 effective_local_name
             </a>
             
@@ -10280,52 +10180,45 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.RootBranch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.RootBranch');">
+                data-active="false" data-depth="2">
                 RootBranch
             </a>
             
             
             <a href="#grove.core.BranchInfo"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.BranchInfo');">
+                data-active="false" data-depth="2">
                 BranchInfo
             </a>
             
             
             <a href="#grove.core.BranchInfo.checked_out_in"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.BranchInfo.checked_out_in');">
+                data-active="false" data-depth="3">
                 checked_out_in
             </a>
             
             <a href="#grove.core.BranchInfo.is_current"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.BranchInfo.is_current');">
+                data-active="false" data-depth="3">
                 is_current
             </a>
             
             <a href="#grove.core.BranchInfo.kind"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.BranchInfo.kind');">
+                data-active="false" data-depth="3">
                 kind
             </a>
             
             <a href="#grove.core.BranchInfo.name"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.BranchInfo.name');">
+                data-active="false" data-depth="3">
                 name
             </a>
             
             <a href="#grove.core.BranchInfo.upstream"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.BranchInfo.upstream');">
+                data-active="false" data-depth="3">
                 upstream
             </a>
             
@@ -10333,114 +10226,98 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.CreateWorkspaceRequest"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest');">
+                data-active="false" data-depth="2">
                 CreateWorkspaceRequest
             </a>
             
             
             <a href="#grove.core.CreateWorkspaceRequest.agent_name"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.agent_name');">
+                data-active="false" data-depth="3">
                 agent_name
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.attachments"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.attachments');">
+                data-active="false" data-depth="3">
                 attachments
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.branch_plan"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.branch_plan');">
+                data-active="false" data-depth="3">
                 branch_plan
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.brief"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.brief');">
+                data-active="false" data-depth="3">
                 brief
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.description"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.description');">
+                data-active="false" data-depth="3">
                 description
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.initial_prompt"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.initial_prompt');">
+                data-active="false" data-depth="3">
                 initial_prompt
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.model"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.model');">
+                data-active="false" data-depth="3">
                 model
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.native"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.native');">
+                data-active="false" data-depth="3">
                 native
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.project_cwd"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.project_cwd');">
+                data-active="false" data-depth="3">
                 project_cwd
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.repo_root"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.repo_root');">
+                data-active="false" data-depth="3">
                 repo_root
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.resume_session_id"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.resume_session_id');">
+                data-active="false" data-depth="3">
                 resume_session_id
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.runtime"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.runtime');">
+                data-active="false" data-depth="3">
                 runtime
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.skip_init"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.skip_init');">
+                data-active="false" data-depth="3">
                 skip_init
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.ticket"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.ticket');">
+                data-active="false" data-depth="3">
                 ticket
             </a>
             
             <a href="#grove.core.CreateWorkspaceRequest.title"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.CreateWorkspaceRequest.title');">
+                data-active="false" data-depth="3">
                 title
             </a>
             
@@ -10448,37 +10325,32 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.UpdateWorkspaceRequest"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest');">
+                data-active="false" data-depth="2">
                 UpdateWorkspaceRequest
             </a>
             
             
             <a href="#grove.core.UpdateWorkspaceRequest.description"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest.description');">
+                data-active="false" data-depth="3">
                 description
             </a>
             
             <a href="#grove.core.UpdateWorkspaceRequest.share"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest.share');">
+                data-active="false" data-depth="3">
                 share
             </a>
             
             <a href="#grove.core.UpdateWorkspaceRequest.share_session_id"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest.share_session_id');">
+                data-active="false" data-depth="3">
                 share_session_id
             </a>
             
             <a href="#grove.core.UpdateWorkspaceRequest.title"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.UpdateWorkspaceRequest.title');">
+                data-active="false" data-depth="3">
                 title
             </a>
             
@@ -10486,24 +10358,21 @@ response can include them in the JSON payload.</p>
             
             <a href="#wire-views"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#wire-views');">
+                data-active="false" data-depth="2">
                 Wire views
             </a>
             
             
             <a href="#grove.core.WorkspaceStateView"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceStateView');">
+                data-active="false" data-depth="2">
                 WorkspaceStateView
             </a>
             
             
             <a href="#grove.core.WorkspaceStateView.telemetry_session_id"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspaceStateView.telemetry_session_id');">
+                data-active="false" data-depth="3">
                 telemetry_session_id
             </a>
             
@@ -10511,88 +10380,77 @@ response can include them in the JSON payload.</p>
             
             <a href="#grove.core.WorkspacePeekView"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.WorkspacePeekView');">
+                data-active="false" data-depth="2">
                 WorkspacePeekView
             </a>
             
             
             <a href="#grove.core.CommitSummaryView"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.CommitSummaryView');">
+                data-active="false" data-depth="2">
                 CommitSummaryView
             </a>
             
             
             <a href="#grove.core.AttachInstructionView"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.AttachInstructionView');">
+                data-active="false" data-depth="2">
                 AttachInstructionView
             </a>
             
             
             <a href="#errors"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#errors');">
+                data-active="false" data-depth="2">
                 Errors
             </a>
             
             
             <a href="#grove.core.GroveError"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.GroveError');">
+                data-active="false" data-depth="2">
                 GroveError
             </a>
             
             
             <a href="#grove.core.BranchError"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.BranchError');">
+                data-active="false" data-depth="2">
                 BranchError
             </a>
             
             
             <a href="#grove.core.BranchConflict"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.BranchConflict');">
+                data-active="false" data-depth="2">
                 BranchConflict
             </a>
             
             
             <a href="#grove.core.BranchAlreadyCheckedOut"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.BranchAlreadyCheckedOut');">
+                data-active="false" data-depth="2">
                 BranchAlreadyCheckedOut
             </a>
             
             
             <a href="#grove.core.BranchNotFound"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.BranchNotFound');">
+                data-active="false" data-depth="2">
                 BranchNotFound
             </a>
             
             
             <a href="#attach-plumbing"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#attach-plumbing');">
+                data-active="false" data-depth="2">
                 Attach plumbing
             </a>
             
             
             <a href="#grove.core.AttachInstruction"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove.core.AttachInstruction');">
+                data-active="false" data-depth="2">
                 AttachInstruction
             </a>
             
@@ -10667,7 +10525,7 @@ response can include them in the JSON payload.</p>
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.</p>
+      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
       
     </div>
 

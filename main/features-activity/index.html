@@ -67,7 +67,7 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
-<link href="../css/plex-serif.css" rel="stylesheet"/>
+<link href="../css/editorial-fonts.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
@@ -98,7 +98,8 @@
 
     
 
-    <script integrity="sha384-FDYE0LZ2rjnYnGta7gXYP/eQrHyFKIFUU54YBXsPM0uOlGEddDH6ZRU2Mb5SwZxr" src="../js/callbacks.js"></script>
+    <script integrity="sha384-Q1MrSG7ZnVSCNkPrtLHrwaFNMRKVd4TDOQgr3oKtpORHLRDoNcfgIb1bInwjA0J1" src="../js/callbacks.js"></script>
+<script defer="" integrity="sha384-ljmRPFWw/c4kKFaKY5DIe8bgppHI9VBBrg7WZa8UPd23U9dEFesxZ1Ng8Hzjq2WB" src="../js/toc.js"></script>
 
     
 
@@ -418,8 +419,6 @@
 <div class="pointer-events-none absolute top-8 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background to-transparent">
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
-</div>
-<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1450,7 +1449,7 @@
 </div>
                         </div>
                     </div>
-                    <div class="h-full w-full">
+                    <div class="ms-docs-column w-full">
                         <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
 
                             <div class="flex min-w-0 flex-1 flex-col">
@@ -1835,7 +1834,7 @@ Trigger reporting differs by agent. Claude Code records whether a compaction was
 </ul>
 <h3 id="adoption-and-recovery">Adoption and recovery</h3>
 <ul>
-<li>Grove verifies a candidate transcript against the workspace pane before treating it as live, in <a href="https://github.com/bearlike/Grove/blob/1a5058d8/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a> and <a href="https://github.com/bearlike/Grove/blob/1a5058d8/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>manager.py</span></a>.</li>
+<li>Grove verifies a candidate transcript against the workspace pane before treating it as live, in <a href="https://github.com/bearlike/Grove/blob/45159a64/src/grove/core/sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>sessions.py</span></a> and <a href="https://github.com/bearlike/Grove/blob/45159a64/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>manager.py</span></a>.</li>
 <li>Resume repeats that check, and a rejected successor leaves the old pointer stale with a blank transcript.</li>
 <li>Remap it with <code>grove sessions remap WORKSPACE SESSION</code>, the <abbr title="Terminal User Interface">TUI</abbr> <span class="keys"><kbd class="key-x">X</kbd></span> key, or the web picker.</li>
 </ul>
@@ -1865,7 +1864,7 @@ Trigger reporting differs by agent. Claude Code records whether a compaction was
 <li>A running pane refreshes four times a second and the slower git and agent facts on their own tick.</li>
 <li>ACTIVE and IDLE flip on the tmux window's last output at <code>tmux.activity_threshold_seconds</code>, default <code>30</code>.</li>
 <li>A <a href="../features-containers/">container workspace</a> captures the agent pane inside its container with no host attachment open.</li>
-<li><a href="https://github.com/bearlike/Grove/blob/1a5058d8/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>WorkspaceManager.pane_target</span></a> picks the agent pane and falls back when the layout has changed under it.</li>
+<li><a href="https://github.com/bearlike/Grove/blob/45159a64/src/grove/core/manager.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>WorkspaceManager.pane_target</span></a> picks the agent pane and falls back when the layout has changed under it.</li>
 </ul>
 <h2 id="see-also">See also</h2>
 <ul>
@@ -1876,27 +1875,8 @@ Trigger reporting differs by agent. Claude Code records whether a compaction was
 <li><a href="../features-status/#the-third-axis-task-phase">Task phase</a> records stated progress. <a href="../features-status/">Status semantics</a> covers workspace state.</li>
 </ul>
   </div>
-  
-  <script>
-    // toc.html omits the heading that names the page itself — the masthead
-    // subtitle, or the hero's own heading. Observing a heading the rail has no
-    // link for would still make it the "topmost visible heading", and
-    // setActiveTocLink would find nothing to match and blank the rail. Reading
-    // the skip off the rail keeps this in step with whatever toc.html drops.
-    // Deferred because main.html emits the rail after this article, so #toc
-    // does not exist yet while this script is parsed.
-    document.addEventListener('DOMContentLoaded', () => {
-      const tocTargets = new Set(
-        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
-      );
-      document.querySelectorAll('article h2, article h3').forEach((header) => {
-        if (!tocTargets.has('#' + header.id)) return;
-        toc.observer.observe(header);
-      });
-    });
-  </script>
 </article>
-                                <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
+                                <div id="bottom-navigation" class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 shadow-none"
@@ -2989,71 +2969,62 @@ Trigger reporting differs by agent. Claude Code records whether a compaction was
             
             <a href="#watch-the-whole-fleet"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#watch-the-whole-fleet');">
+                data-active="false" data-depth="2">
                 Watch the whole fleet
             </a>
             
             
             <a href="#the-activity-dashboard"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-activity-dashboard');">
+                data-active="false" data-depth="2">
                 The Activity Dashboard
             </a>
             
             
             <a href="#what-grove-watches"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#what-grove-watches');">
+                data-active="false" data-depth="2">
                 What Grove watches
             </a>
             
             
             <a href="#the-peek-rail"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-peek-rail');">
+                data-active="false" data-depth="2">
                 The peek rail
             </a>
             
             
             <a href="#which-agents-grove-can-read"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#which-agents-grove-can-read');">
+                data-active="false" data-depth="2">
                 Which agents Grove can read
             </a>
             
             
             <a href="#the-agents-own-todo-list"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-agents-own-todo-list');">
+                data-active="false" data-depth="2">
                 The agent's own todo list
             </a>
             
             
             <a href="#session-history"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#session-history');">
+                data-active="false" data-depth="2">
                 Session history
             </a>
             
             
             <a href="#adoption-and-recovery"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#adoption-and-recovery');">
+                data-active="false" data-depth="3">
                 Adoption and recovery
             </a>
             
             <a href="#the-session-catalog-every-session-on-this-host"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#the-session-catalog-every-session-on-this-host');">
+                data-active="false" data-depth="3">
                 The Session Catalog: every session on this host
             </a>
             
@@ -3061,24 +3032,21 @@ Trigger reporting differs by agent. Claude Code records whether a compaction was
             
             <a href="#where-the-context-was-compacted"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#where-the-context-was-compacted');">
+                data-active="false" data-depth="2">
                 Where the context was compacted
             </a>
             
             
             <a href="#how-the-rail-keeps-up"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#how-the-rail-keeps-up');">
+                data-active="false" data-depth="2">
                 How the rail keeps up
             </a>
             
             
             <a href="#see-also"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#see-also');">
+                data-active="false" data-depth="2">
                 See also
             </a>
             
@@ -3153,7 +3121,7 @@ Trigger reporting differs by agent. Claude Code records whether a compaction was
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.</p>
+      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
       
     </div>
 

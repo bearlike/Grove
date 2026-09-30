@@ -67,7 +67,7 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
-<link href="../css/plex-serif.css" rel="stylesheet"/>
+<link href="../css/editorial-fonts.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
@@ -98,7 +98,8 @@
 
     
 
-    <script integrity="sha384-FDYE0LZ2rjnYnGta7gXYP/eQrHyFKIFUU54YBXsPM0uOlGEddDH6ZRU2Mb5SwZxr" src="../js/callbacks.js"></script>
+    <script integrity="sha384-Q1MrSG7ZnVSCNkPrtLHrwaFNMRKVd4TDOQgr3oKtpORHLRDoNcfgIb1bInwjA0J1" src="../js/callbacks.js"></script>
+<script defer="" integrity="sha384-ljmRPFWw/c4kKFaKY5DIe8bgppHI9VBBrg7WZa8UPd23U9dEFesxZ1Ng8Hzjq2WB" src="../js/toc.js"></script>
 
     
 
@@ -418,8 +419,6 @@
 <div class="pointer-events-none absolute top-8 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background to-transparent">
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
-</div>
-<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1450,7 +1449,7 @@
 </div>
                         </div>
                     </div>
-                    <div class="h-full w-full">
+                    <div class="ms-docs-column w-full">
                         <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
 
                             <div class="flex min-w-0 flex-1 flex-col">
@@ -1581,6 +1580,7 @@ The transcript ([`thread.tsx`](repo:webapp/components/grove/workspace/thread.tsx
 - A message sent mid turn joins a collapsed queue with a count in its header.
 - A **Watches** card beside the queue lists what the workspace is waiting on: CI, timers, commands, and a standing watch for each attached ticket. Each row says whether it is running, fired, expired, cancelled or undeliverable. See [Watches](features-watches.md).
 - Paste a screenshot, annotate it, and the agent is handed the path. See [Attachments and annotation](features-attachments.md).
+- Type `/` for commands. Your [Grove commands](configure-agents.md#grove-commands) are listed there beside `/compact`, and each one runs its steps in order.
 
 ## The Session Catalog
 
@@ -1604,18 +1604,16 @@ The transcript ([`thread.tsx`](repo:webapp/components/grove/workspace/thread.tsx
 
 ## Running it
 
-The dashboard is two processes. A daemon exposing Grove&#39;s engine over HTTP, and a Next.js app the browser talks to.
+The dashboard is two processes. A daemon exposing Grove&#39;s engine over HTTP, and a Next.js app the browser talks to. The PyPI package ships the app prebuilt, together with the Node.js runtime that serves it.
 
 ```bash
-# Build the web app once (repeat after each upgrade)
-make webapp-build
-
-# Run the two processes
-grove daemon serve     # terminal 1, loopback, port 7421
-cd webapp &amp;&amp; npm run start   # terminal 2, serves the build on 0.0.0.0:3000
+grove daemon serve              # terminal 1, loopback, port 7421
+grove web                       # terminal 2, serves the app on 127.0.0.1:3000
+grove web --host 0.0.0.0        # or reachable from a phone on your LAN
 ```
 
-- Open &lt;http://127.0.0.1:3000&gt;, or `http://&lt;machine-ip&gt;:3000` from a phone once you [pair](use-auth.md) it. `GROVE_DAEMON_URL` in `webapp/.env.local` points at a remote daemon.
+- Open &lt;http://127.0.0.1:3000&gt;, or `http://&lt;machine-ip&gt;:3000` from a phone once you [pair](use-auth.md) it. `grove web --daemon-url` (or `GROVE_DAEMON_URL`) points it at a remote daemon.
+- From a source checkout, `make webapp-bundle` stages the copy `grove web` runs, built on Grove&#39;s own Node. `./reinstall.sh` does that and restarts the service in one step.
 - The browser only calls the web app&#39;s own origin. Next.js proxies each call to the daemon with the paired session&#39;s token, a receptionist carrying each request to the back office. See [Authentication &amp; pairing](use-auth.md) and the [`webapp/` README](https://github.com/bearlike/Grove/tree/current/webapp) for the dev server.
 
 ```mermaid
@@ -1630,13 +1628,12 @@ flowchart TB
 ## Always-on with systemd
 
 ```bash
-make webapp-build                 # npm ci + npm run build
 WITH_WEBAPP=1 make systemd        # write grove-daemon + grove-webapp units
 WITH_WEBAPP=1 make systemd-enable # reload, enable, start now
 loginctl enable-linger &#34;$USER&#34;    # survive logout (remote hosts)
 ```
 
-A daemon hiccup reports unreachable without taking the dashboard down. After pulling new source, `make webapp-build &amp;&amp; systemctl --user restart grove-webapp`. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
+The dashboard unit runs `grove web`, so it serves whatever version is installed on the Node that ships with it. A daemon hiccup reports unreachable without taking the dashboard down. After `uv tool upgrade grove-factory`, restart both units. From a checkout, `./reinstall.sh` rebuilds and restarts everything. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
 
 ## Reaching it from outside the network
 
@@ -1836,7 +1833,7 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
 </div>
 
 <h2 id="starting-a-workspace">Starting a workspace</h2>
-<p>The landing route is a composer, not a dashboard (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/launch/launch-surface.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>launch-surface.tsx</span></a>). Type the task and send it.</p>
+<p>The landing route is a composer, not a dashboard (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/launch/launch-surface.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>launch-surface.tsx</span></a>). Type the task and send it.</p>
 <ul>
 <li>Project, directory, agent, model, runtime and branch fill from the <a href="../features-cascade/">configuration cascade</a> as pills. Touch one to change it.</li>
 <li>The Agent pill carries <strong>Session mode</strong> for Claude Code, Codex and OpenCode, a <a href="../configure-agents/#native-sessions-and-terminal-twins">native session</a> or the terminal.</li>
@@ -1844,22 +1841,22 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
 <li><strong>More options</strong> opens the <a href="#creating-a-workspace">full create form</a>. <strong>Go to fleet</strong> shows everything running.</li>
 </ul>
 <h2 id="the-tour">The tour</h2>
-<p>The first visit opens a guided tour of eighteen stops (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/onboarding/steps.ts" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>onboarding/</span></a>), once per browser.</p>
+<p>The first visit opens a guided tour of eighteen stops (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/onboarding/steps.ts" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>onboarding/</span></a>), once per browser.</p>
 <ul>
 <li>It walks the composer, attachments and annotation with a sample photo, then a fictional <strong>Sample ·</strong> workspace served in your browser, ending on its <strong>Diagram</strong> tab.</li>
 <li>The sample vanishes when the tour closes and nothing it typed is ever sent.</li>
 <li><strong>Take the tour</strong> sits under the composer and in the account menu. <span class="keys"><kbd class="key-arrow-left">Left</kbd></span> and <span class="keys"><kbd class="key-arrow-right">Right</kbd></span> move, <span class="keys"><kbd class="key-escape">Esc</kbd></span> leaves.</li>
 </ul>
 <h2 id="the-rail-and-the-fleet">The rail and the fleet</h2>
-<p>A collapsible rail (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/shell/app-sidebar.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>app-sidebar.tsx</span></a>) runs down every route, and <strong>Fleet</strong> (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/fleet/fleet-dashboard.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>fleet-dashboard.tsx</span></a>) is the same list as a grid of cards.</p>
+<p>A collapsible rail (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/shell/app-sidebar.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>app-sidebar.tsx</span></a>) runs down every route, and <strong>Fleet</strong> (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/fleet/fleet-dashboard.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>fleet-dashboard.tsx</span></a>) is the same list as a grid of cards.</p>
 <ul>
 <li>The rail holds <strong>New workspace</strong>, search, a filter, then every workspace as one flat list by recency, each row an agent mark, title, <code>project · branch</code> and one glyph for what is most urgent. <span class="keys"><kbd class="key-bracket-left">[</kbd></span> hides it.</li>
-<li>The filter (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/fleet/fleet-filter.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>fleet-filter.tsx</span></a>) is shared by rail and grid. <strong>Needs attention</strong>, agent state and project, each with a live count.</li>
-<li>Each card (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/fleet/workspace-card.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>workspace-card.tsx</span></a>) says what this is, what is happening and how much it has done, with an attention badge when it needs you.</li>
+<li>The filter (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/fleet/fleet-filter.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>fleet-filter.tsx</span></a>) is shared by rail and grid. <strong>Needs attention</strong>, agent state and project, each with a live count.</li>
+<li>Each card (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/fleet/workspace-card.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>workspace-card.tsx</span></a>) says what this is, what is happening and how much it has done, with an attention badge when it needs you.</li>
 <li>Below the list sit <strong>Fleet</strong>, <strong>Usage</strong> and the account menu with <strong>Sessions</strong>, <strong>Gallery</strong>, the theme toggle and sign out.</li>
 </ul>
 <h2 id="creating-a-workspace">Creating a workspace</h2>
-<p><strong>New workspace</strong> and <strong>More options</strong> open one form (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/fleet/create-workspace-dialog.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>create-workspace-dialog.tsx</span></a>). Project, title and agent are required, the rest falls through to the cascade.</p>
+<p><strong>New workspace</strong> and <strong>More options</strong> open one form (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/fleet/create-workspace-dialog.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>create-workspace-dialog.tsx</span></a>). Project, title and agent are required, the rest falls through to the cascade.</p>
 <ul>
 <li><strong>Task</strong>, the agent's first message, or blank to type it once the workspace opens.</li>
 <li><strong>Agent</strong>, <strong>Model</strong>, and <strong>Session mode</strong> for Claude Code, Codex and OpenCode.</li>
@@ -1868,7 +1865,7 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
 <li><strong>Ticket</strong>, an issue on Gitea, GitHub or Linear to <a href="../features-ticket-providers/">publish progress to</a>.</li>
 </ul>
 <h2 id="working-in-a-session">Working in a session</h2>
-<p>Three zones. The rail, the transcript, and a work panel (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/workspace/work-panel.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>work-panel.tsx</span></a>) with a tab per question.</p>
+<p>Three zones. The rail, the transcript, and a work panel (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/workspace/work-panel.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>work-panel.tsx</span></a>) with a tab per question.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1904,18 +1901,19 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
 </tbody>
 </table></div>
 <ul>
-<li>The header (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/shell/shell-header.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>shell-header.tsx</span></a>) carries the title, live status, <strong>Interrupt</strong> while it runs, and the pane switcher. Wide windows split, narrow ones open transcript first.</li>
+<li>The header (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/shell/shell-header.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>shell-header.tsx</span></a>) carries the title, live status, <strong>Interrupt</strong> while it runs, and the pane switcher. Wide windows split, narrow ones open transcript first.</li>
 <li><strong>Pause</strong>, <strong>Resume</strong>, <strong>Respawn</strong> and <strong>Kill</strong> live on the Info tab.</li>
 <li>The share link needs no login, reads the transcript read only until it expires or you revoke it, and takes a passcode.</li>
 </ul>
 <h2 id="steering-the-agent">Steering the agent</h2>
-<p>The transcript (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/workspace/thread.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>thread.tsx</span></a>) shows your messages, the agent's replies, and tool calls grouped into collapsible runs.</p>
+<p>The transcript (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/workspace/thread.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>thread.tsx</span></a>) shows your messages, the agent's replies, and tool calls grouped into collapsible runs.</p>
 <ul>
 <li>The composer stays enabled while the agent works. <span class="keys"><kbd class="key-enter">Enter</kbd></span> sends, <span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-enter">Enter</kbd></span> makes a new line, <strong>Interrupt</strong> stops it mid turn.</li>
-<li>A live question is a card in the thread's footer (<a href="https://github.com/bearlike/Grove/blob/1a5058d8/webapp/components/grove/workspace/pending-question.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>pending-question.tsx</span></a>). A single choice sends on tap, anything else shows <strong>Submit</strong>.</li>
+<li>A live question is a card in the thread's footer (<a href="https://github.com/bearlike/Grove/blob/45159a64/webapp/components/grove/workspace/pending-question.tsx" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>pending-question.tsx</span></a>). A single choice sends on tap, anything else shows <strong>Submit</strong>.</li>
 <li>A message sent mid turn joins a collapsed queue with a count in its header.</li>
 <li>A <strong>Watches</strong> card beside the queue lists what the workspace is waiting on: <abbr title="Continuous Integration">CI</abbr>, timers, commands, and a standing watch for each attached ticket. Each row says whether it is running, fired, expired, cancelled or undeliverable. See <a href="../features-watches/">Watches</a>.</li>
 <li>Paste a screenshot, annotate it, and the agent is handed the path. See <a href="../features-attachments/">Attachments and annotation</a>.</li>
+<li>Type <code>/</code> for commands. Your <a href="../configure-agents/#grove-commands">Grove commands</a> are listed there beside <code>/compact</code>, and each one runs its steps in order.</li>
 </ul>
 <h2 id="the-session-catalog">The Session Catalog</h2>
 <p><strong>Sessions</strong>, in the account menu, lists every agent session on the machine, searchable by title, location, agent kind or branch. Open one and the conversation renders read only. <a href="../features-activity/#session-history">Session history</a> covers the same ground in the <abbr title="Terminal User Interface">TUI</abbr> and <abbr title="Command Line Interface">CLI</abbr>.</p>
@@ -1934,16 +1932,14 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
 <li>Subscription windows sit beside the spend, and the same sessions become traces under <a href="../features-telemetry/">telemetry and tracing</a>.</li>
 </ul>
 <h2 id="running-it">Running it</h2>
-<p>The dashboard is two processes. A daemon exposing Grove's engine over HTTP, and a Next.js app the browser talks to.</p>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Build the web app once (repeat after each upgrade)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>make<span class="w"> </span>webapp-build
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Run the two processes</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">     </span><span class="c1"># terminal 1, loopback, port 7421</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nb">cd</span><span class="w"> </span>webapp<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>npm<span class="w"> </span>run<span class="w"> </span>start<span class="w">   </span><span class="c1"># terminal 2, serves the build on 0.0.0.0:3000</span>
+<p>The dashboard is two processes. A daemon exposing Grove's engine over HTTP, and a Next.js app the browser talks to. The PyPI package ships the app prebuilt, together with the Node.js runtime that serves it.</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>grove<span class="w"> </span>daemon<span class="w"> </span>serve<span class="w">              </span><span class="c1"># terminal 1, loopback, port 7421</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove<span class="w"> </span>web<span class="w">                       </span><span class="c1"># terminal 2, serves the app on 127.0.0.1:3000</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>grove<span class="w"> </span>web<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w">        </span><span class="c1"># or reachable from a phone on your LAN</span>
 </span></code></pre></div>
 <ul>
-<li>Open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a>, or <code>http://&lt;machine-ip&gt;:3000</code> from a phone once you <a href="../use-auth/">pair</a> it. <code>GROVE_DAEMON_URL</code> in <code>webapp/.env.local</code> points at a remote daemon.</li>
+<li>Open <a href="http://127.0.0.1:3000">http://127.0.0.1:3000</a>, or <code>http://&lt;machine-ip&gt;:3000</code> from a phone once you <a href="../use-auth/">pair</a> it. <code>grove web --daemon-url</code> (or <code>GROVE_DAEMON_URL</code>) points it at a remote daemon.</li>
+<li>From a source checkout, <code>make webapp-bundle</code> stages the copy <code>grove web</code> runs, built on Grove's own Node. <code>./reinstall.sh</code> does that and restarts the service in one step.</li>
 <li>The browser only calls the web app's own origin. Next.js proxies each call to the daemon with the paired session's token, a receptionist carrying each request to the back office. See <a href="../use-auth/">Authentication &amp; pairing</a> and the <a href="https://github.com/bearlike/Grove/tree/current/webapp"><code>webapp/</code> README</a> for the dev server.</li>
 </ul>
 <pre class="mermaid"><code>flowchart TB
@@ -1953,12 +1949,11 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
     Browser --&gt;|http| Web
     Web --&gt;|"http, /api/grove/* (BFF proxy)"| Daemon</code></pre>
 <h2 id="always-on-with-systemd">Always-on with systemd</h2>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>webapp-build<span class="w">                 </span><span class="c1"># npm ci + npm run build</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd<span class="w">        </span><span class="c1"># write grove-daemon + grove-webapp units</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd-enable<span class="w"> </span><span class="c1"># reload, enable, start now</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>loginctl<span class="w"> </span>enable-linger<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$USER</span><span class="s2">&quot;</span><span class="w">    </span><span class="c1"># survive logout (remote hosts)</span>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd<span class="w">        </span><span class="c1"># write grove-daemon + grove-webapp units</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">WITH_WEBAPP</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>make<span class="w"> </span>systemd-enable<span class="w"> </span><span class="c1"># reload, enable, start now</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>loginctl<span class="w"> </span>enable-linger<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$USER</span><span class="s2">&quot;</span><span class="w">    </span><span class="c1"># survive logout (remote hosts)</span>
 </span></code></pre></div>
-<p>A daemon hiccup reports unreachable without taking the dashboard down. After pulling new source, <code>make webapp-build &amp;&amp; systemctl --user restart grove-webapp</code>. Ports override with <code>DAEMON_PORT=7777 WEBAPP_PORT=3030</code>.</p>
+<p>The dashboard unit runs <code>grove web</code>, so it serves whatever version is installed on the Node that ships with it. A daemon hiccup reports unreachable without taking the dashboard down. After <code>uv tool upgrade grove-factory</code>, restart both units. From a checkout, <code>./reinstall.sh</code> rebuilds and restarts everything. Ports override with <code>DAEMON_PORT=7777 WEBAPP_PORT=3030</code>.</p>
 <h2 id="reaching-it-from-outside-the-network">Reaching it from outside the network</h2>
 <p>The daemon's loopback bind is deliberate, so forward the web app's port instead.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ssh<span class="w"> </span>-N<span class="w"> </span>-L<span class="w"> </span><span class="m">3000</span>:127.0.0.1:3000<span class="w"> </span>you@remote-host
@@ -2003,27 +1998,8 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
 <li><a href="https://github.com/bearlike/Grove/tree/current/webapp"><code>webapp/</code> README</a>: the contributor surface.</li>
 </ul>
   </div>
-  
-  <script>
-    // toc.html omits the heading that names the page itself — the masthead
-    // subtitle, or the hero's own heading. Observing a heading the rail has no
-    // link for would still make it the "topmost visible heading", and
-    // setActiveTocLink would find nothing to match and blank the rail. Reading
-    // the skip off the rail keeps this in step with whatever toc.html drops.
-    // Deferred because main.html emits the rail after this article, so #toc
-    // does not exist yet while this script is parsed.
-    document.addEventListener('DOMContentLoaded', () => {
-      const tocTargets = new Set(
-        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
-      );
-      document.querySelectorAll('article h2, article h3').forEach((header) => {
-        if (!tocTargets.has('#' + header.id)) return;
-        toc.observer.observe(header);
-      });
-    });
-  </script>
 </article>
-                                <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
+                                <div id="bottom-navigation" class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 shadow-none"
@@ -3116,112 +3092,98 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
             
             <a href="#starting-a-workspace"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#starting-a-workspace');">
+                data-active="false" data-depth="2">
                 Starting a workspace
             </a>
             
             
             <a href="#the-tour"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-tour');">
+                data-active="false" data-depth="2">
                 The tour
             </a>
             
             
             <a href="#the-rail-and-the-fleet"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-rail-and-the-fleet');">
+                data-active="false" data-depth="2">
                 The rail and the fleet
             </a>
             
             
             <a href="#creating-a-workspace"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#creating-a-workspace');">
+                data-active="false" data-depth="2">
                 Creating a workspace
             </a>
             
             
             <a href="#working-in-a-session"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#working-in-a-session');">
+                data-active="false" data-depth="2">
                 Working in a session
             </a>
             
             
             <a href="#steering-the-agent"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#steering-the-agent');">
+                data-active="false" data-depth="2">
                 Steering the agent
             </a>
             
             
             <a href="#the-session-catalog"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-session-catalog');">
+                data-active="false" data-depth="2">
                 The Session Catalog
             </a>
             
             
             <a href="#the-gallery"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-gallery');">
+                data-active="false" data-depth="2">
                 The Gallery
             </a>
             
             
             <a href="#the-usage-audit"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-usage-audit');">
+                data-active="false" data-depth="2">
                 The usage audit
             </a>
             
             
             <a href="#running-it"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#running-it');">
+                data-active="false" data-depth="2">
                 Running it
             </a>
             
             
             <a href="#always-on-with-systemd"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#always-on-with-systemd');">
+                data-active="false" data-depth="2">
                 Always-on with systemd
             </a>
             
             
             <a href="#reaching-it-from-outside-the-network"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#reaching-it-from-outside-the-network');">
+                data-active="false" data-depth="2">
                 Reaching it from outside the network
             </a>
             
             
             <a href="#fetching-model-prices"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#fetching-model-prices');">
+                data-active="false" data-depth="2">
                 Fetching model prices
             </a>
             
             
             <a href="#see-also"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#see-also');">
+                data-active="false" data-depth="2">
                 See also
             </a>
             
@@ -3296,7 +3258,7 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.</p>
+      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
       
     </div>
 

@@ -900,6 +900,33 @@
       "title": "LinearTicketConfig",
       "type": "object"
     },
+    "MacroSpec": {
+      "additionalProperties": false,
+      "description": "One Grove command: an ordered list of session controls run as ``/grove:<name>``.\n\nEach step is one slash-command line delivered to the agent, and the next\nstep starts only once the agent reports the previous one finished. That\nordering is the point: firing ``/model``, ``/compact`` and ``/model`` back to\nback lets the switch back land before the compaction runs. ``{model}``\nexpands to the model the session was on when the command started, so a\ncommand can switch away and come back. Runs on native Claude Code\nsessions, the one runtime that reports when each step completes.",
+      "properties": {
+        "description": {
+          "default": "",
+          "description": "One line shown beside the command in the composer's ``/`` menu and the Controls tab.",
+          "title": "Description",
+          "type": "string"
+        },
+        "steps": {
+          "description": "Slash-command lines run in order: ``/model <id>``, ``/compact``, ``/model {model}``.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "title": "MacroSpec",
+      "type": "object"
+    },
     "MewboConfig": {
       "additionalProperties": false,
       "description": "Connection settings for `kind: \"mewbo\"` agents.\n\nThe ``mewbo`` adapter reads these to reach the Mewbo API: a workspace of\nthat kind mints its session on the orchestrator rather than in a local\nprocess, so the connection details are config rather than discovery.",
@@ -1402,6 +1429,22 @@
         "export": {
           "$ref": "#/$defs/TelemetryExportConfig"
         },
+        "feedback_reasons": {
+          "default": [
+            "Unnecessary actions",
+            "Unnecessary testing",
+            "Wasted time",
+            "Ran slow commands without need",
+            "Cluttered the context",
+            "Missed the goal"
+          ],
+          "description": "What a thumbs-down in the webapp may name, recorded as the categorical\n``user-feedback-reason`` score in Langfuse. The defaults name ways a turn\ncost more steps, time or context than its outcome needed. Keep the Langfuse\nscore config's categories in step when you change this list: the daemon\nonly accepts reasons listed here, and Langfuse only renders reasons listed\nthere.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Feedback Reasons",
+          "type": "array"
+        },
         "host_env": {
           "default": "LANGFUSE_HOST",
           "description": "Name of the variable holding the Langfuse host, never the URL itself. Rename it here\nif your secret store exports a different name.",
@@ -1425,6 +1468,21 @@
             "type": "string"
           },
           "title": "Passthrough Kinds",
+          "type": "array"
+        },
+        "positive_feedback_reasons": {
+          "default": [
+            "Reached the goal directly",
+            "No wasted steps",
+            "Tested only what mattered",
+            "Clear explanation",
+            "Stayed in scope"
+          ],
+          "description": "What a thumbs-up in the webapp may name, recorded as the categorical\n``user-feedback-praise`` score in Langfuse. The defaults name what made a\nturn efficient, the mirror image of ``feedback_reasons``. The same rule\napplies: keep the Langfuse score config's categories identical to this\nlist.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Positive Feedback Reasons",
           "type": "array"
         },
         "public_key_env": {
@@ -2312,6 +2370,14 @@
       "exclusiveMinimum": 0,
       "title": "Lifecycle Max Pending",
       "type": "integer"
+    },
+    "macros": {
+      "additionalProperties": {
+        "$ref": "#/$defs/MacroSpec"
+      },
+      "description": "Grove commands by name, run as ``/grove:<name>``. A map, so every layer adds or\nreplaces commands by name; none ship built in, because which model is fast is a fact\nabout your fleet.",
+      "title": "Macros",
+      "type": "object"
     },
     "mewbo": {
       "$ref": "#/$defs/MewboConfig"

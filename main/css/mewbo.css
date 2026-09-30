@@ -34,134 +34,92 @@
   @view-transition { navigation: none; }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Mewbo console color palette — ported here so the docs site shares the
-   same visual identity. Source: apps/mewbo_console/src/index.css.
-   Aesthetic: Anthropic cream (light) / warm carbon (dark) with clay primary.
-   ───────────────────────────────────────────────────────────────────────── */
+/* Page scale. At the browser's 100% the whole site read as zoomed in, so the
+   root is set to 90%: 100% now renders what 90% browser zoom used to, and
+   every browser zoom level lands at 0.9 of itself.
 
+   A PERCENTAGE of the root, not a px value and not CSS `zoom`:
+     · the theme sizes type, spacing, the header height and the sidebar and
+       ToC widths in rem (Tailwind's `--spacing` is 0.25rem), so all of them
+       scale together from this one declaration — measured at 0.90x across
+       the header, rails, prose, code, tabs, callouts and page actions;
+     · it multiplies with the reader's own browser zoom AND their default
+       font-size setting, so an enlarged-text reader keeps their enlargement;
+     · CSS `zoom` would also scale the coordinate space that the page-actions
+       menu, mermaid pan/zoom, the lightbox and hover cards measure with
+       getBoundingClientRect, and would leave their positioning off.
+   A handful of px values (hairlines, 1-2px rings, the footer's reserved
+   height) deliberately stay fixed. */
+html { font-size: 90%; }
+
+/* Editorial paper stock, reconciled with the Mewbo clay accent. Surfaces
+   stay opaque; texture is a background layer, never an overlay on images. */
 :root {
-  --background: hsl(45 28.6% 97.3%);
-  --foreground: hsl(0 0% 4%);
-
-  --card: hsl(0 0% 100%);
-  --card-foreground: hsl(0 0% 4%);
-
-  --popover: hsl(0 0% 100%);
-  --popover-foreground: hsl(0 0% 4%);
-
-  --primary: hsl(14.8 63.1% 59.6%);
-  --primary-foreground: hsl(0 0% 100%);
-
-  /* The clay accent as TEXT, not as a fill.
-     `--primary` is identical in both themes, and it was tuned against the
-     dark carbon surface. Inherited unchanged by light it lands at 2.6-3.0:1
-     on the cream page, so every link, active ToC entry, active sidebar row,
-     focus ring and tab underline failed contrast in light while passing in
-     dark. One token cannot serve both roles: a fill, and legible text on
-     that fill, pull lightness in opposite directions.
-     Measured at 42%: 5.24:1 on the page and 4.60:1 on the active sidebar
-     chip, which is a 12% clay tint and therefore the lightest surface this
-     token ever sits on. That chip is what sets the value: 44% cleared the
-     page but measured 4.30:1 there. */
-  --primary-text: hsl(14.8 63.1% 42%);
-
-  --secondary: hsl(48 25% 92.2%);
-  --secondary-foreground: hsl(60 3% 21%);
-
-  --muted: hsl(48 25% 92.2%);
-  /* 52% measured 3.45:1 on the cream page, under the 4.5:1 body bar — and
-     this token carries inactive ToC entries and footer text, which are read
-     rather than glanced at. 44% measures 4.56:1. */
-  --muted-foreground: hsl(45 3% 44%);
-
-  --accent: hsl(48 25% 92.2%);
-  --accent-foreground: hsl(60 3% 21%);
-
+  --background: #faf9f6;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: var(--foreground);
+  --popover: #ffffff;
+  --popover-foreground: var(--foreground);
+  --nav-background: #f2efea;
+  --primary: #c84b2a;
+  --primary-foreground: #ffffff;
+  --primary-text: #a83b1f;
+  --secondary: #efede8;
+  --secondary-foreground: #292929;
+  --muted: #efede8;
+  --muted-foreground: #55514b;
+  --accent: #e7e3db;
+  --accent-foreground: #292929;
   --destructive: hsl(0 55% 47%);
-  --destructive-foreground: hsl(0 0% 100%);
+  --destructive-foreground: #fff;
+  --border: color-mix(in srgb, var(--foreground) 22%, transparent);
+  --input: #dedbd4;
+  --ring: var(--primary-text);
+  --image-backing: #fff;
+  --sidebar: #edeae4;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #dedad2;
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
 
-  /* Faint warm hairline (~#e9e6dd): a quiet step off the cream page, replacing
-     the old translucent tan that composited to a loud ~#cecCC1. Mirrors how
-     Devin keeps light-mode borders near-invisible (#eff1f5). */
-  --border: hsl(48 16% 89%);
-  --input: hsl(48 25% 92.2%);
-  /* The focus indicator is a non-text UI component: WCAG 1.4.11 wants 3:1
-     against what surrounds it, and the shared clay measured 2.97:1 on the
-     cream page — under the bar by a hair, and a focus ring nobody can see is
-     the one indicator that has to be seen. Matches --primary-text. */
-  --ring: hsl(14.8 63.1% 42%);
-
-  /* Clean white panel behind transparent-PNG media: brighter than the cream
-     page, so framed images read as a raised surface. */
-  --image-backing: hsl(0 0% 100%);
-
-  --sidebar: hsl(45 28.6% 97.3%);
-  --sidebar-foreground: hsl(0 0% 4%);
-  --sidebar-primary: hsl(14.8 63.1% 59.6%);
-  --sidebar-primary-foreground: hsl(0 0% 100%);
-  --sidebar-accent: hsl(48 25% 92.2%);
-  --sidebar-accent-foreground: hsl(60 3% 21%);
-  --sidebar-border: hsl(48 16% 90%);
-  --sidebar-ring: hsl(14.8 63.1% 59.6%);
+  /* Preserve the reference's low-frequency fibres; a smaller tile increases
+     density without averaging the grain into an imperceptible flat tint. */
+  --paper-texture: url("../img/paper.svg");
+  --paper-size: 240px 240px;
+  --paper-shadow: 0 1px 2px -1px rgb(29 29 27 / 0.16), 0 8px 20px -12px rgb(29 29 27 / 0.28);
+  --paper-shadow-raised: 0 2px 4px -2px rgb(29 29 27 / 0.18), 0 12px 24px -12px rgb(29 29 27 / 0.34);
 }
 
 .dark {
-  /* Deep warm carbon. Tuned to sit at ~#161513 — matching Devin/Mintlify's
-     #141414 page surface, far deeper than the old washed #262624. One flat
-     surface for page/header/sidebar; borders (not shade steps) do the
-     separating, so contrast against the near-white foreground stays high. */
-  --background: hsl(40 6% 8%);
-  --foreground: hsl(60 14% 97%);
-
-  /* Dark's surfaces are what `--primary` was tuned against, so text and fill
-     are the same value here. The alias exists in both themes so a call site
-     never branches on which is active. */
-  --primary-text: var(--primary);
-
-  /* Cards & code blocks lift a hair above the page so framed content reads
-     as slightly raised — the only place we keep a shade step. */
-  --card: hsl(40 5% 12%);
-  --card-foreground: hsl(60 14% 97%);
-
-  /* Popovers / the search-&-Ask-AI modal float just above the page. */
-  --popover: hsl(40 5% 11%);
-  --popover-foreground: hsl(60 14% 97%);
-
-  --primary: hsl(14.8 63.1% 59.6%);
-  --primary-foreground: hsl(0 0% 100%);
-
-  --secondary: hsl(40 4% 14%);
-  --secondary-foreground: hsl(55 9% 74%);
-
-  --muted: hsl(40 4% 16%);
-  --muted-foreground: hsl(48 6% 62%);
-
-  --accent: hsl(40 4% 17%);
-  --accent-foreground: hsl(60 14% 97%);
-
+  /* Every surface sits ~30% below its previous channel value (e.g. page
+     #141414 -> #0e0e0e), keeping the stock order page < nav < rail/card <
+     popover so each sheet still separates from the one under it. */
+  --background: #0e0e0e;
+  --foreground: #ffffff;
+  --card: #161616;
+  --popover: #181818;
+  --nav-background: #131313;
+  --primary: #ff8057;
+  --primary-foreground: #0e0e0e;
+  --primary-text: #ff9a78;
+  --secondary: #1e1e1e;
+  --secondary-foreground: #ededed;
+  --muted: #202020;
+  --muted-foreground: #c7c7c7;
+  --accent: #242424;
+  --accent-foreground: var(--foreground);
   --destructive: hsl(0 73% 59%);
-  --destructive-foreground: hsl(0 0% 100%);
-
-  /* Whisper-subtle hairline (~#2c2b29): only ~+18 rgb over the page, the same
-     low-contrast step Devin uses (#26292d over #141414). Solid, not the old
-     translucent light-gray that composited to a loud ~#5d5d54. */
-  --border: hsl(40 5% 17%);
-  --input: hsl(40 5% 15%);
-  --ring: hsl(14.8 63.1% 59.6%);
-
-  /* Deeper-than-page backing for transparent-PNG media so framed images gain
-     depth instead of dissolving into the surface. */
+  --border: color-mix(in srgb, var(--foreground) 18%, transparent);
+  --input: #292929;
   --image-backing: hsl(40 7% 5%);
-
-  --sidebar: hsl(40 6% 8%);
-  --sidebar-foreground: hsl(60 14% 97%);
-  --sidebar-primary: hsl(14.8 63.1% 59.6%);
-  --sidebar-primary-foreground: hsl(0 0% 100%);
-  --sidebar-accent: hsl(40 4% 17%);
-  --sidebar-accent-foreground: hsl(60 14% 97%);
-  --sidebar-border: hsl(40 5% 15%);
-  --sidebar-ring: hsl(14.8 63.1% 59.6%);
+  --sidebar: #161616;
+  --sidebar-accent: #242424;
+  --paper-shadow: 0 1px 2px -1px rgb(0 0 0 / 0.4), 0 8px 20px -12px rgb(0 0 0 / 0.6);
+  --paper-shadow-raised: 0 2px 4px -2px rgb(0 0 0 / 0.45), 0 12px 24px -12px rgb(0 0 0 / 0.7);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -604,6 +562,29 @@ article .admonition > *:last-child,
   --adm-accent: #f85149;
 }
 
+/* Code inside callouts. A callout is a tinted sheet, and code on it has to
+   read as a separate object laid on top — the same chip it is in prose, not
+   a window onto the tint. The chip was transparent with a border tinted to
+   the callout, which measured the SAME colour as the fill around it and left
+   only a faint outline; the border also added 2px of height, so chips on
+   consecutive lines of the callout's tighter leading overlapped.
+
+   The surface is the card stock, opaque, with the page's ink mixed in so it
+   stays a step away from the paper on both themes, and the edge is an inset
+   hairline in the callout's own accent — it identifies the chip with its
+   callout without costing a pixel of line height. Titles keep their accent
+   ink; body chips take the foreground so a command reads as a command. */
+article .admonition code:not(pre code),
+.md-content .admonition code:not(pre code) {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--card));
+  border: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--adm-accent) 28%, transparent);
+}
+article .admonition > p:not(.admonition-title) code:not(pre code),
+.md-content .admonition > p:not(.admonition-title) code:not(pre code) {
+  color: var(--foreground);
+}
+
 
 /* ─────────────────────────────────────────────────────────────────────────
    Search trigger and dialog polish.
@@ -806,10 +787,10 @@ article {
    font sizes, and a `rem` value would be a fixed gap that suffocates small
    type and yawns on large. */
 :root {
-  --leading-body: 1.7;
-  --leading-ui: 1.55;
+  --leading-body: 1.6;
+  --leading-ui: 1.45;
   --leading-compact: 1.45;
-  --leading-tight: 1.25;
+  --leading-tight: 1.15;
 }
 
 /* Continuous prose. `article` itself carries the body rung so anything that
@@ -1510,63 +1491,6 @@ article a:hover,
   color: var(--muted-foreground, currentColor);
 }
 
-/* ── One canvas, separated by hairlines ────────────────────────────────────
-   Every large surface is `--background`. The top bar, the tab rail, both side
-   rails, the article and the footer are one continuous sheet, and what marks
-   the joins is a 1px `--border` hairline. Nothing is tinted and nothing is
-   elevated.
-
-   This replaced a four-level fill scale that gave each region its own colour.
-   The scale was measurably off the palette in both modes rather than merely
-   strong: light painted the top bar `#ffffff`, the only cold neutral on a warm
-   cream page, and dark painted it `#2a2925`, LIGHTER than `--card` and so
-   above the top of the theme's own range. The palette already answers this —
-   `--sidebar` is declared identical to `--background` in both modes, which is
-   the theme stating that the rails are the canvas.
-
-   Two artefacts came from the fills rather than from any rule, which is why
-   neither is visible in the source:
-
-   The rails ran the full page height while the article stopped where its text
-   stopped, so the rail colour filled the ~130px between the last paragraph and
-   the footer as a stripe across the full width. A region can only terminate
-   mid-page if it is painted; unpainted, there is nothing to terminate.
-
-   Each rail met the article on a bare colour change with no line on it, which
-   reads as a smudge rather than an edge. A hairline is an edge or there is
-   nothing; a soft step between two large fills is neither.
-
-   The footer already worked this way and was the only chrome nobody
-   complained about: `background: var(--background)` and one `--border` rule.
-   The rest of the chrome now matches it.
-
-   Hierarchy is carried by the hairlines, by the content column's measure and
-   by the type scale. If a recessed rail is ever wanted back, it is one token
-   consumed in one place, not a scale of four. */
-
-/* The template already puts `bg-background` on the header, the shell and the
-   sidebar. There is deliberately no rule here painting them: overriding that
-   class is what put the chrome off-palette, and the correct value is the one
-   the template already asks for. */
-
-/* The rail divider spans the reading area, not the sidebar's own box.
-
-   It is absolutely positioned inside the sticky sidebar, which is
-   `100svh - 10rem` tall, so `bottom: 0` ended the line 160px above the fold at
-   EVERY scroll position — a hairline stopping in open space, which is the one
-   way to make a boundary read as a smudge rather than an edge. Measured at
-   x=287: `--border` from the header down to y=534, then nothing.
-
-   Height is taken from the viewport instead, less the header and the sidebar's
-   own 0.6rem offset, so the line reaches the bottom of the screen. It is
-   `bottom: auto` because a top and a bottom together resolve against the
-   parent again, which is the box being escaped. */
-.ms-rail-divider {
-  bottom: auto;
-  height: calc(100svh - var(--header-height) - 0.6rem);
-}
-
-
 /* The scrollbar gutter is reserved permanently.
 
    Any overlay that locks scrolling sets `overflow: hidden` on the root, and on
@@ -1893,37 +1817,70 @@ article .ms-shots img,
    mewbo.css is unlayered, so these win over the layered Tailwind utilities
    without !important — except the icon-collapsed `size-8!`/`p-2!` rules, which
    keep !important and so still win in that mode (intended). */
+/* Group spacing is half the template's. The ungrouped top-level pages
+   ("Home") sit in a group the template pads `p-2 pt-6` — 24px above, 8px
+   below — which is halved here by selecting it as the group WITHOUT our
+   class, the only thing that distinguishes it. */
 .mewbo-sidebar-group {
-  margin-top: 0.55rem;
-  padding-top: 0.25rem;
-  padding-bottom: 0.25rem;
+  margin-top: 0.275rem;
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
 }
 .mewbo-sidebar-group:first-of-type { margin-top: 0; }
+[data-slot="sidebar"] [data-sidebar="group"]:not(.mewbo-sidebar-group) {
+  padding-top: 0.75rem;
+  padding-bottom: 0.25rem;
+}
 .mewbo-sidebar-group-label {
   height: auto;
-  margin-bottom: 0.2rem;
-  padding-top: 0.2rem;
-  padding-bottom: 0.2rem;
-  /* A group label names the entries under it, so it cannot be smaller than
-     they are. At 0.7rem it rendered 11.2px against a 12.8px menu entry, which
-     read as a caption on the rail rather than as the heading of a section.
-     It now sits one step above the entries and carries the weight. */
-  font-size: 0.85rem;
-  font-weight: 700;
+  margin-bottom: 0.1rem;
+  padding-top: 0.1rem;
+  padding-bottom: 0.1rem;
+  /* Size and weight come from the rail scale at the end of this file, shared
+     with the ToC heading so the two rails label themselves identically. */
   letter-spacing: -0.005em;
   color: var(--foreground);
 }
-/* Comfortable, full-width rows: padding around the entry text plus a small gap
-   between entries; each row stretches to the group's bounds so the highlight
-   reads as a selected row, not a text run. */
+/* Full-width rows with air BETWEEN them rather than inside them. Halving the
+   old padding outright (3.2px rows, 1.6px apart, a 28.8px pitch) overshot:
+   the entries read as one packed block. The pitch now sits between the two at
+   ~33.6px, and most of the new space is the gap, so each row's highlight stays
+   compact while neighbouring rows visibly separate.
+
+   Inline padding is 4px, half the template's `p-2`, so the hover and active
+   fill hugs the icon and text instead of running 8px past them. The group
+   gains the same 4px (below) so every glyph and label stays on the nav
+   gutter the header's brand and tab rail align to. */
 [data-sidebar="menu"],
-[data-sidebar="menu-sub"] { gap: 0.2rem; }
+[data-sidebar="menu-sub"] { gap: 0.3rem; }
 [data-sidebar="menu-button"] {
   width: 100%;
   max-width: 100%;
-  min-height: 2rem;
-  padding-top: 0.4rem;
-  padding-bottom: 0.4rem;
+  /* The template's `min-h-[30px]` / `min-h-8` floor would hold the row open
+     regardless of the padding, so the row is sized by its text and padding
+     alone. */
+  min-height: 0;
+  padding: 0.25rem;
+}
+[data-slot="sidebar"] [data-sidebar="group"] {
+  padding-inline: 0.75rem;
+}
+/* The label carries the template's `px-2`; it gives back the 4px the group
+   just took so "User Guide" stays on the same line as the icons below it. */
+.mewbo-sidebar-group-label { padding-inline: 0.25rem; }
+/* One pitch for every row. A section trigger lacked the leaf's 1px transparent
+   border (2px shorter), and its collapsible panel carries `py-0.5` even while
+   closed — 4px of dead band under every collapsed section, so the list read
+   as unevenly spaced once the rows were tightened. */
+button[data-sidebar="menu-button"] { border: 1px solid transparent; }
+[data-sidebar="menu-button"][data-state="closed"] + [data-slot="collapsible-content"] {
+  padding-block: 0;
+}
+/* The phone dialog is the whole screen and is operated by a thumb, so it keeps
+   the roomier row. 44px is the touch-target floor the page actions use too. */
+.ms-mobile-nav [data-sidebar="menu-button"] {
+  min-height: 44px;
+  padding: 0.4rem 0.5rem;
 }
 
 /* Soft active leaf — overrides the theme's `data-[active=true]:bg-accent
@@ -1953,7 +1910,23 @@ article .ms-shots img,
 }
 [data-sidebar="menu-button"]:not([data-active="true"]):hover > svg:first-of-type {
   color: var(--foreground);
-  opacity: 1;
+  opacity: 0.85;
+}
+
+/* Idle rows are set in muted ink and hover only lifts them to full ink over a
+   faint wash. The theme's `hover:bg-sidebar-accent` painted a solid block that
+   was the loudest thing on the page whenever the pointer crossed the rail, and
+   the rail is where the pointer rests between reads. The wash is a mix of the
+   ink rather than a fixed colour so it stays equally faint on either stock.
+   Unlayered, so it beats the layered utility without `!important`; the active
+   row keeps its own `!important` tint above. */
+[data-sidebar="menu-button"]:not([data-active="true"]) {
+  color: var(--muted-foreground);
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+[data-sidebar="menu-button"]:not([data-active="true"]):hover {
+  background-color: color-mix(in srgb, var(--foreground) 4%, transparent);
+  color: var(--foreground);
 }
 
 /* Expandable section affordance: quiet chevron at the row's end that
@@ -1964,7 +1937,7 @@ article .ms-shots img,
   opacity: 0.55;
   transition: opacity 0.15s, transform 0.2s ease;
 }
-[data-sidebar="menu-button"]:hover .mewbo-sidebar-chevron { opacity: 0.9; }
+[data-sidebar="menu-button"]:hover .mewbo-sidebar-chevron { opacity: 0.75; }
 
 /* Level-2 indent rail: shadcn already wraps sub-items in
    `ul.ml-3.5.border-l.pl-2.5` — bump the rail's contrast slightly so it
@@ -1984,7 +1957,6 @@ article .ms-shots img,
   flex-direction: column;
   gap: 0.5rem;
   padding: 1rem 1rem 0;
-  font-size: 0.875rem;
 }
 .mewbo-toc__heading {
   position: sticky;
@@ -1993,8 +1965,6 @@ article .ms-shots img,
   height: 1.5rem;
   background: var(--background);
   color: var(--foreground);
-  font-size: 0.8rem;
-  font-weight: 500;
   z-index: 1;
   display: inline-flex;
   align-items: center;
@@ -2013,12 +1983,12 @@ article .ms-shots img,
 }
 .mewbo-toc__link {
   display: block;
-  padding: 0.3rem 0 0.3rem 0.85rem;
+  /* Halved with the sidebar's rows, so both rails keep one rhythm. */
+  padding: 0.15rem 0 0.15rem 0.85rem;
   /* Inset shadow forms the rail. Two adjacent links' shadows touch since
      each runs the full height; no layout shift between idle/active. */
   box-shadow: inset 1px 0 0 var(--border);
   color: var(--muted-foreground);
-  font-size: 0.8rem;
   line-height: var(--leading-ui);
   text-decoration: none;
   transition: color 0.15s ease, box-shadow 0.15s ease;
@@ -2049,12 +2019,6 @@ article .ms-shots img,
      Declared here rather than at :root because it describes the header's own
      control scale, and both controls are descendants. */
   --mewbo-nav-control-h: 2rem;
-  /* A quiet satin sheen, derived entirely from the site's surface palette. */
-  --mewbo-chrome-finish: linear-gradient(180deg,
-    color-mix(in srgb, var(--card) 32.5%, var(--background)) 0%,
-    color-mix(in srgb, var(--muted) 9%, var(--background)) 48%,
-    color-mix(in srgb, var(--muted) 19%, var(--background)) 100%);
-  background-image: var(--mewbo-chrome-finish);
   z-index: 50;
   isolation: isolate;
   box-shadow: 0 3px 6px -3px rgb(0 0 0 / 0.16),
@@ -3375,11 +3339,22 @@ article .mewbo-page-action__hint,
   color: var(--muted-foreground);
 }
 
+/* Touch targets are a physical floor, not part of the type scale, so they are
+   set in px: in rem they would shrink with the 90% page scale to 39.6px, under
+   the 44px a thumb needs. */
 @media (pointer: coarse) {
-  article .mewbo-page-actions > button {
-    min-width: 2.75rem;
-    height: 2.75rem;
+  .mewbo-header { --mewbo-nav-control-h: 44px; }
+  .mewbo-page-actions { --page-actions-size: 44px; }
+  article .mewbo-page-actions > button:is(.mewbo-page-actions__main, .mewbo-page-actions__toggle) {
+    min-width: 44px;
   }
+  #page-header a[data-slot="button"] { width: 44px; height: 44px; }
+  .mewbo-menu-btn, header .mewbo-icon-btn, .ms-mobile-nav__close,
+  #bottom-navigation a[data-slot="button"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .ms-mobile-nav__close { top: 0.375rem; }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -3407,7 +3382,7 @@ body.theme-default { --footer-height: 320px; }
 }
 
 .mewbo-footer {
-  margin-top: 4rem;
+  margin-top: 0;
   border-top: 1px solid var(--border);
   background: var(--background);
   position: relative;
@@ -3690,23 +3665,11 @@ body.theme-default { --footer-height: 320px; }
   body.theme-default { --footer-height: 540px; }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────
-   Prose colour: put body text on the token system
-
-   The upstream `article` rule paints prose with `text-neutral-800` /
-   `dark:text-neutral-300` — a COOL grey scale, while this brand's surfaces
-   are warm (cream in light, carbon in dark). The effect is subtle and
-   persistent: every paragraph sits a few degrees off the chrome around it.
-
-   The upstream INTENT is worth keeping — body text one step recessed from
-   headings gives the page a reading hierarchy. So rather than flattening
-   prose onto `--foreground`, mix the two tokens: the recession survives and
-   the hue now tracks the palette. Headings, in turn, are stated at full
-   strength so the contrast between them is deliberate rather than incidental.
-   ───────────────────────────────────────────────────────────────────────── */
+/* Reading text uses the foreground directly. Additional blending with muted
+   text dims white twice; type size and weight already provide hierarchy. */
 
 :root {
-  --prose-body: color-mix(in oklab, var(--foreground) 82%, var(--muted-foreground));
+  --prose-body: var(--foreground);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -3750,12 +3713,12 @@ body.theme-default { --footer-height: 320px; }
 }
 
 .dark {
-  --diagram-surface: #121110;
-  --diagram-node-bg: #26241f;
+  --diagram-surface: #0d0c0b;
+  --diagram-node-bg: #1b1916;
   --diagram-node-border: #767269;
   --diagram-line: #8d8a80;
   --diagram-label: #f8f8f6;
-  --diagram-cluster: #1c1b18;
+  --diagram-cluster: #141311;
 }
 
 article,
@@ -4392,11 +4355,9 @@ div:has(> #toc) {
 
 /* ── Tab rail: its own plane between header and page ─────────────────── */
 
-/* Share the header's token-derived finish and retain the single hairlines
-   between navigation rows and at the lower edge of the stack. */
+/* One hairline at each join; the paper surface is shared with the header. */
 .ms-header-tabs {
   background: var(--background);
-  background-image: var(--mewbo-chrome-finish);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   position: relative;
@@ -4422,103 +4383,180 @@ article a,
   color: var(--primary-text);
 }
 
-/* ── Display face: IBM Plex Serif ─────────────────────────────────────────
-   Headings and brand lettering are set in a serif against a sans body. The
-   contrast is the point: a heading stops being "the same text, larger" and
-   announces a section on shape alone, before size or weight register.
-
-   WHAT WEARS IT — the things a reader parses as a LABEL rather than as prose:
-   the page title, H1-H3 in the content body, card titles, the brand name
-   beside the logo in both header and footer, and the top-level section names
-   in the header nav and header tabs.
-
-   WHAT DOES NOT, and why the list stops where it does:
-     H4-H6   These sit inside a passage rather than opening one. In practice
-             they run close to body size, where a serif stops reading as
-             deliberate and starts reading as a font bug. H3 is the floor.
-     .doc    mkdocstrings, whose headings are API symbols — a serif
-             `get_config(**kwargs)` is a symbol dressed as prose, and those
-             headings legitimately contain code spans.
-     Hero eyebrow and lede  The text around the hero title, not the title
-             itself. The hero HEADING does take the face (see the rule further
-             down): on a landing page it is the first and largest thing read,
-             and the `<h1>` the document actually has.
-     Sidebar, ToC, top nav, body copy, UI chrome  Navigation furniture and
-             continuous prose both stay on the sans. That includes the header
-             tab rail, which wore the face briefly and made the header read as
-             a masthead rather than a toolbar. The serif is for the few words
-             that NAME a thing, plus the wordmark.
-
-   TOKEN, NOT LITERAL: everything here goes through --font-display so a consumer
-   can repoint the display face in one place. The token is defined in
-   tailwind/fonts.css and carries its own fallback chain, so a build that never
-   loads plex-serif.css still resolves to a real serif.
-
-   The token is named --font-display rather than --font-serif, and is not a
-   repoint of --font-sans, for two separate reasons — both in tailwind/fonts.css
-   where it is defined: mermaid canvas-measures labels with --font-sans, and
-   Tailwind v4 already owns --font-serif for its `font-serif` utility.
-
-   SPECIFICITY: base.css's prose rules are unlayered and reach (0,1,2)
-   (`article .typography h2`), and mewbo.css is linked after base.css, so the
-   matched reach below wins on source order without `!important`.
-
-   Inline code inside a heading needs no rule here: `article code:not(pre
-   code)` in tailwind/article.css reaches (0,2,2) — the `:not(pre code)` buys
-   the extra class-level — so it already outranks this (0,1,2) selector and a
-   code span keeps the mono face on specificity alone. Raising this rule's
-   reach to (0,2,2) or adding `!important` would take the code span with it;
-   `test_code_in_a_heading_keeps_the_mono_face` is what catches that. */
+/* Reading and display faces are independent of the technical UI stack.
+   Instrument Serif only ships at 400: do not synthesize bold display glyphs. */
+article[view-transition-name="page"], .md-content {
+  font-family: var(--font-body);
+  font-size: 1.125rem;
+  font-optical-sizing: auto;
+  line-height: var(--leading-body);
+}
+article table:not(.codehilitetable) { font-size: 1rem; }
 article #page-header h1,
-article .typography :is(h1, h2, h3):not(.ms-hero *, .doc *) {
-  font-family: var(--font-display);
-}
-
-/* Card titles. A card title names the thing the card is about, which is the
-   same job the headings above do — and in a grid of cards it is the only text
-   doing it.
-
-   `.ms-step__title` is the same idea in the numbered lifecycle component: it
-   names a step, and in that grid it is the only text naming anything. It is a
-   SEPARATE class from `.ms-card__title` despite looking like a sibling, which
-   is exactly how it was missed the first time — the `.ms-*` kit has two card
-   families, and styling one by name silently leaves the other behind. */
-.ms-card__title,
-.ms-step__title {
-  font-family: var(--font-display);
-}
-
-/* The hero title IS the page's main heading — on a landing page it is the
-   first and largest thing read, and the `<h1>` the document actually has. The
-   hero was originally excluded wholesale from the display face on the grounds
-   that it is brand composition with its own type treatment, but that reasoning
-   only holds for the text AROUND the title: the eyebrow and the lede stay on
-   the sans, and are not matched here.
-
-   Reach is (0,2,2) to match the hero's own sizing rule above, which is
-   unlayered and would otherwise be equal-specificity-and-later. The
-   `.ms-hero__title` arm covers heroes written as HTML rather than markdown,
-   mirroring that rule's own pair of selectors. */
+article .typography :is(h1, h2, h3):not(.ms-hero *, .doc *),
 article .ms-hero :is(h1, h2, h3, h4, h5, h6),
+article .ms-hero .ms-hero__title,
+.ms-card__title, .ms-step__title,
+.mewbo-brand__name, .mewbo-footer__name {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: -0.015em;
+}
+article .typography h2:not(.doc *, .ms-hero *) { font-size: 2rem; }
+article .typography h3:not(.doc *, .ms-hero *) { font-size: 1.6rem; }
+article .typography > h2:first-child,
+article .ms-hero :is(h1, h2, h3),
 article .ms-hero .ms-hero__title {
+  font-size: clamp(2.35rem, 4vw, 3rem);
+}
+article #page-header h1 { font-size: 1rem; }
+.ms-card__title { font-size: 1.6rem; }
+.ms-step__title { font-size: 1.25rem; }
+.mewbo-brand__name { font-size: 1.4rem; }
+.mewbo-footer__name { font-size: 1.7rem; }
+article .ms-hero__lede, article #summary, .ms-card__body,
+.mewbo-footer__tagline {
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  line-height: 1.5;
+}
+article .ms-hero__lede { font-size: 1.1875rem; }
+
+/* ── Rail scale ──────────────────────────────────────────────────────────
+   The left sidebar and the right ToC are wayfinding, read in a glance while
+   the eye stays on the column between them. They share ONE scale, set a clear
+   step below the 18px body so the prose is the largest reading type on the
+   page:
+
+       entry    0.8125rem body face    a page / heading you can jump to
+       label    0.75rem   sans, 600    "User Guide", "On this page"
+
+   Originally the rails ran 15px entries in full ink (one step from the body,
+   not a clear drop), with the sidebar's group label at 13.6px/700 and the
+   ToC's own heading at 12.8px/500: two rails labelling themselves in two
+   different registers. A first pass at 14px / 13px was measured on the live
+   sites and still did not read as clearly subordinate beside 18px prose, so
+   the scale sits one step lower again: entries are 72% of the body. The
+   labels stay legible at 12px because they are the sans at 600, which has a
+   far larger x-height than the serif entries beside them. The footer's link
+   lists are the same kind of list and take the footer's own size (below).
+
+   The mobile navigation dialog renders this same sidebar as the ONLY thing
+   on screen, with no prose beside it to defer to, and a phone wants a larger
+   tap target — so it keeps the old reading size. */
+[data-sidebar="menu-button"], .mewbo-toc__link,
+.mewbo-footer__col-links a {
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  line-height: var(--leading-ui);
+}
+.mewbo-footer__col-links a { font-size: 0.875rem; }
+/* px, not rem: the phone menu is the one surface that keeps its reading size
+   under the 90% page scale, because nothing sits beside it to defer to. */
+.ms-mobile-nav [data-sidebar="menu-button"] { font-size: 15px; }
+.mewbo-sidebar-group-label, .mewbo-toc__heading {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.ms-header-tabs__item, .mewbo-topnav a {
   font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 400;
 }
 
-/* Brand lettering, header and footer. This is the site's name set as a
-   wordmark, so it takes the display face in both places for one identity.
-   `.mewbo-brand__docs` — the small bordered "Docs" badge beside it — stays on
-   the sans: at 0.525rem a serif is illegible, and it is a status chip rather
-   than part of the wordmark. */
-.mewbo-brand__name,
-.mewbo-footer__name {
+/* Content-tab labels ("uv (recommended)" / "pipx" / "pip") name the section
+   under them, so they are set like every other heading on the page and like
+   the header's own tab rail: the display face at its only real weight. They
+   were Geist 600, which made the one sans-serif heading on a serif page read
+   as a stray control. Size stays at body (`1em`, from tabs.css) — the
+   tab-and-code spacing test pins that a label is not a caption. */
+article .tabbed-set label {
   font-family: var(--font-display);
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: -0.01em;
+  font-size: 1.125em;
 }
 
-/* NOT the top navigation. The inline nav (`theme.topbar_sections`) and the tab
-   rail (`theme.header_tabs`) both wore the display face briefly, on the theory
-   that a section name in the header is the same noun that heads the page it
-   leads to. In use it reads wrong: those tabs are navigation furniture, sat
-   directly under a serif wordmark, and setting both made the whole header
-   look like a masthead rather than a toolbar. Chrome you click stays on the
-   sans; the wordmark above it is the one piece of lettering that does not.
-   `test_top_navigation_stays_on_the_sans` pins this. */
+article :is(button, input, select, textarea, .ms-btn, .ms-chip),
+#page-header, #bottom-navigation, .doc, .ms-hero__eyebrow,
+.ms-mermaid, .ms-diagram-viewer, .mewbo-page-actions__menu,
+article .typography :is(h4, h5, h6) {
+  font-family: var(--font-sans);
+}
+article .typography .doc { font-size: 0.9375rem; }
+article .typography :is(code, pre, kbd) { font-optical-sizing: auto; }
+
+/* Paper is applied to opaque surfaces, not to text or media overlays. Keep
+   one shared tile scale so it is equally perceptible on every sheet. */
+body, #inner-body, .mewbo-footer, .mewbo-toc__heading,
+.ms-card, .ms-step, .ms-flow__panel,
+.ms-mobile-nav__panel, .ms-mobile-nav__close,
+#mewbo-modal, .mewbo-page-actions__menu {
+  background-image: var(--paper-texture);
+  background-size: var(--paper-size);
+}
+.mewbo-header, .ms-header-tabs {
+  background-color: var(--nav-background);
+  background-image: var(--paper-texture);
+  background-size: var(--paper-size);
+}
+.ms-mobile-nav__panel { background-color: var(--sidebar); }
+
+/* Keep footer breathing room inside the reading column so the rail's grid
+   track reaches the footer. Its fill and border share that track, independent
+   of centred-container padding or the sticky navigation's viewport height. */
+.ms-docs-column { padding-bottom: 4rem; }
+@media (min-width: 1024px) {
+  [data-slot="sidebar-wrapper"] { isolation: isolate; }
+  [data-slot="sidebar"] { grid-area: 1 / 1; }
+  .ms-docs-column { grid-area: 1 / 2; }
+  [data-slot="sidebar-wrapper"]::before {
+    content: "";
+    grid-area: 1 / 1;
+    align-self: stretch;
+    margin-inline-start: -100vw;
+    margin-inline-end: calc(2 * var(--spacing));
+    border-inline-end: 1px solid var(--border);
+    z-index: -1;
+    pointer-events: none;
+    background-color: var(--sidebar);
+    background-image: var(--paper-texture);
+    background-size: var(--paper-size);
+  }
+  /* Fade only the navigation, not the paper underneath it. */
+  [data-slot="sidebar"] > .pointer-events-none,
+  [data-slot="sidebar-content"] > .sticky { display: none; }
+  [data-slot="sidebar-content"] {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 1rem, #000 calc(100% - 2.5rem), transparent);
+    mask-image: linear-gradient(to bottom, transparent, #000 1rem, #000 calc(100% - 2.5rem), transparent);
+  }
+}
+.ms-card, .ms-step, .ms-flow__panel { box-shadow: var(--paper-shadow); }
+a.ms-card:hover { box-shadow: var(--paper-shadow-raised); }
+
+#page-header :is(.mewbo-page-actions, a[data-slot="button"]),
+#bottom-navigation a[data-slot="button"],
+.mewbo-nav-search-pill, .mewbo-nav-ask-ai-btn {
+  background-color: var(--card);
+  background-image: var(--paper-texture);
+  background-size: var(--paper-size);
+  box-shadow: var(--paper-shadow);
+}
+#page-header :is(.mewbo-page-actions, a[data-slot="button"]),
+#bottom-navigation a[data-slot="button"] {
+  box-shadow: inset 0 0 0 1px var(--border), var(--paper-shadow);
+}
+:is(#page-header, #bottom-navigation) a[data-slot="button"]:hover {
+  background-color: var(--muted);
+}
+
+/* Selection as ink on paper: the page's foreground laid over the text, and
+   the text knocked out to the page colour — rather than the browser's blue,
+   which is the one hue on the page that belongs to no token. */
+::selection {
+  background: color-mix(in oklab, var(--foreground) 85%, transparent);
+  color: var(--background);
+}

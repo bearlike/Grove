@@ -1,0 +1,227 @@
+# TUI tour
+
+## Screen anatomy
+
+<figure class="ms-shot">
+  <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/tui-list.png" alt="Grove TUI showing four workspaces in mixed states with a live peek rail" /></div>
+  <figcaption class="ms-shot__body">Header, filter bar (toggled with <kbd>/</kbd>), workspace list left, peek rail right, status bar and footer at bottom.</figcaption>
+</figure>
+
+- **Header.** Repo name, count chip.
+- **Filter bar.** Hidden until ++slash++, narrows title, branch, agent.
+  ++esc++ clears.
+- **Workspace list.** Row: status glyph, title, agent, branch, stat strip,
+  state (`▶ working`, `◑ waiting`), and
+  [task phase](features-status.md#the-third-axis-task-phase).
+- **Peek rail.** Summary, then linked tickets, then transcript and terminal
+  tabs, with Stream for a native workspace ([detail](features-activity.md#the-peek-rail)).
+- **Status bar.** Fleet left, workspace right, coloured by state.
+- **Footer.** Global and selection keys.
+
+## Keybindings
+
+Global keys work anytime. Selection keys act on the highlighted row.
+
+| Key | Action |
+|-----|--------|
+| ++n++ | Create a workspace. |
+| ++d++ | Open the [Activity Dashboard](features-activity.md). |
+| ++shift+p++ | Switch project. |
+| ++r++ | Refresh. |
+| ++slash++ | Filter. Type to narrow, ++esc++ clears. |
+| ++question++ | Help modal, key reference. |
+| ++q++ | Quit. |
+
+| Key | Action |
+|-----|--------|
+| ++enter++ / ++a++ | Attach. |
+| ++m++ | Steer without attaching. |
+| ++e++ | Edit title and description. |
+| ++s++ | Browse recorded sessions. |
+| ++x++ | Remap to a live or recovered session, e.g. after `/clear` rotates the id ([`remap_session.py`](repo:src/grove/tui/screens/remap_session.py)). |
+| ++p++ | Pause, removes worktree, keeps branch. |
+| ++shift+r++ | Resume, recreates worktree, restarts tmux. |
+| ++o++ | Respawn an OFFLINE workspace. |
+| ++k++ | Kill, removes worktree and tmux, deletes Grove-created branches. |
+
+PAUSED dims attach and pause, OFFLINE lights respawn, ORPHANED leaves only
+kill ([`list.py`](repo:src/grove/tui/screens/list.py)).
+
+## Activity Dashboard
+
+Press ++d++: every workspace, one tile each, grouped by project.
+
+- Tiles size by urgency: quiet is compact, working, waiting, blocked, or
+  erroring gets a taller tile with a live terminal tail.
+- Each tile: branch, agent, model, diff, ahead-behind, tokens, summary.
+
+| Key | Action |
+|-----|--------|
+| ++l++ | Cycle lens: all, needs attention, active. |
+| ++g++ | Toggle grouping: by project, or flat. |
+| ++r++ | Refresh. |
+| ++d++ / ++esc++ / ++q++ | Back to the list. |
+
+Tile meaning: [activity and sessions](features-activity.md).
+
+## Project switcher
+
+Press ++shift+p++ to hop repositories.
+
+- Lists every repository with its workspace count. Filter holds focus,
+  ++enter++ switches, ++esc++ cancels.
+- A cheap, instant chooser, not a dashboard. ++d++ for live status.
+
+## Steering an agent
+
+Press ++m++, type a follow-up, ++enter++ to steer.
+
+- Delivery follows the agent: local gets it typed into tmux, remote over
+  the remote API.
+- ++m++ lights up only for a running agent, else Grove flashes why.
+
+## The sessions browser
+
+Press ++s++ to browse recorded sessions.
+
+- Each row: state, turn count, model, who started the agent.
+- Highlight a session: its turns fill the right pane, tool calls collapsed
+  into groups.
+
+| Key | Action |
+|-----|--------|
+| ++t++ | Toggle tool detail, collapsed or expanded. |
+| ++r++ | Refresh the session list. |
+| ++esc++ / ++q++ | Back to the list. |
+
+Recorded history reads from disk, not live: transcripts outlive their
+worktrees.
+
+## Modals
+
+### Create
+
+++n++ opens a nine-step modal.
+
+1. **Agent.** Radio list of agents the cascade resolved.
+2. **Native session.** A checkbox for Claude Code, Codex and OpenCode. It starts at the entry's mode and chooses a Grove-owned native session instead of the terminal.
+3. **Runtime.** Host or Container (`container.enabled` default).
+4. **First-turn brief.** Cascade default, On, or Off (`--brief` on
+   [CLI](use-cli.md)).
+5. **Model** (blank = default). Free text like `sonnet`, unvalidated,
+   forwarded verbatim ([`create.py`](repo:src/grove/tui/screens/create.py)).
+6. **Title.** Free text, pre-fills from branch name.
+7. **Branch source.** *Auto*, *New named*, *Existing local*, *Track remote*,
+   or *Root*: [root workspaces](features-workspace-lifecycle.md#root-workspaces),
+   [branch provenance](features-branch-provenance.md).
+8. **Skip init script.** Skips the [init script](configure-init-scripts.md),
+   default checked under *Root*.
+9. **Confirm** with ++enter++, ++esc++ cancels.
+
+### Edit
+
+++e++ edits title and description, metadata only.
+
+### Kill confirmation
+
+++k++ opens a confirm modal with a `branch_provenance` deletion toggle:
+GROVE_CREATED deletes, USER_ATTACHED keeps, either flippable. Remote
+deletion needs `git push --delete`.
+
+### Pause confirmation
+
+++p++ opens a smaller confirm modal naming the retained branch.
+
+### Help
+
+++question++ opens a read-only key reference. Any key dismisses.
+
+### Pairing
+
+A new [web dashboard](use-webapp.md) pairing request pops a modal with a
+device label and code. Approve with ++a++, deny with ++d++. See
+[authentication & pairing](use-auth.md).
+
+## Every screen
+
+One gallery rather than a screenshot under each heading. It walks the tour in
+page order, and the arrows loop.
+
+<div class="swiper ms-shots">
+  <div class="swiper-wrapper">
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-filter.png" alt="Filter bar narrowed to workspaces matching auth">
+        <figcaption>Filter bar (<kbd>/</kbd>): matched substring-style across title, branch and agent.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-dashboard.png" alt="Activity dashboard with one tile per workspace, grouped by project, the busiest tiles taller with a live terminal tail">
+        <figcaption>Activity Dashboard (<kbd>d</kbd>): one tile per workspace, sized by how much it needs you.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-project-switcher.png" alt="Project switcher listing two repositories with workspace counts and a current tag">
+        <figcaption>Project switcher (<kbd>Shift</kbd>+<kbd>P</kbd>): type to narrow, <kbd>↑</kbd> and <kbd>↓</kbd> to move, <kbd>Enter</kbd> to switch, current repo tagged.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-steer.png" alt="Send-message modal with a follow-up typed to a running agent">
+        <figcaption>Steer modal (<kbd>m</kbd>): a quick redirect to a running agent, no attach required.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-sessions.png" alt="Sessions browser with a session list on the left and turn history on the right">
+        <figcaption>Sessions browser (<kbd>s</kbd>): sessions left, the selected session's turns right.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-create-modal.png" alt="Create workspace modal showing branch source variants and agent picker">
+        <figcaption>Create modal (<kbd>n</kbd>): branch source on the left, agent picker, title input.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-edit-modal.png" alt="Edit workspace modal with title and description fields">
+        <figcaption>Edit modal (<kbd>e</kbd>): title and description are metadata, worktree path and session name stay fixed.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-kill-confirm.png" alt="Kill confirm modal">
+        <figcaption>Kill confirm (<kbd>k</kbd>): checkbox default reflects whether Grove created the branch.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-pause-confirm.png" alt="Pause confirm modal">
+        <figcaption>Pause confirm (<kbd>p</kbd>): Grove refuses a dirty worktree, commit or stash first.</figcaption>
+      </figure>
+    </div>
+    <div class="swiper-slide">
+      <figure>
+        <img loading="lazy" src="../img/screenshots/tui-help.png" alt="Help modal">
+        <figcaption>Help modal (<kbd>?</kbd>): pulled from the same <code>DEFAULT_BINDINGS</code> tuple the footer reads.</figcaption>
+      </figure>
+    </div>
+  </div>
+  <div class="swiper-pagination"></div>
+  <div class="swiper-button-prev"></div>
+  <div class="swiper-button-next"></div>
+</div>
+
+## Theme
+
+Grove ships `dark`, `light`, and `auto` (follows the terminal's polarity).
+Overrides land at `${user_config_dir}/grove/themes/<name>.toml`, referenced
+by `ui.theme`.
+
+## Mouse vs keyboard
+
+Both work. Clicking selects a row, hover outlines it, every action has a
+keybinding.

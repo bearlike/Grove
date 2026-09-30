@@ -67,7 +67,7 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
-<link href="../css/plex-serif.css" rel="stylesheet"/>
+<link href="../css/editorial-fonts.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
@@ -98,7 +98,8 @@
 
     
 
-    <script integrity="sha384-FDYE0LZ2rjnYnGta7gXYP/eQrHyFKIFUU54YBXsPM0uOlGEddDH6ZRU2Mb5SwZxr" src="../js/callbacks.js"></script>
+    <script integrity="sha384-Q1MrSG7ZnVSCNkPrtLHrwaFNMRKVd4TDOQgr3oKtpORHLRDoNcfgIb1bInwjA0J1" src="../js/callbacks.js"></script>
+<script defer="" integrity="sha384-ljmRPFWw/c4kKFaKY5DIe8bgppHI9VBBrg7WZa8UPd23U9dEFesxZ1Ng8Hzjq2WB" src="../js/toc.js"></script>
 
     
 
@@ -418,8 +419,6 @@
 <div class="pointer-events-none absolute top-8 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background to-transparent">
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
-</div>
-<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1450,7 +1449,7 @@
 </div>
                         </div>
                     </div>
-                    <div class="h-full w-full">
+                    <div class="ms-docs-column w-full">
                         <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
 
                             <div class="flex min-w-0 flex-1 flex-col">
@@ -1477,7 +1476,7 @@
 
 ## Trace what your agents did
 
-Agents now act on staging and production unattended, and off the shelf harnesses leave no record you can hold them to.
+Every agent turn becomes a trace your team can review. Rate answers in Grove with a thumb and optional reasons or notes. Those annotations stay on the Langfuse trace for human review and automated LLM judge workflows.
 
 &lt;div class=&#34;swiper ms-shots&#34;&gt;
   &lt;div class=&#34;swiper-wrapper&#34;&gt;
@@ -1534,9 +1533,18 @@ A shell command is where an agent touches the machine, so it is the tool call mo
 - To grade them, create an LLM judge evaluator in LangFuse, filter on `grove_tool_category` equal to `shell`, and map its variables to `input` and `output`. Grove records facts and runs no evaluation of its own.
 - The shape refuses to guess. Success is claimed only from a recorded exit code of zero, a cancelled call is not distinguishable from a failed one, a background call&#39;s result is its launch handle, and a payload over 4000 characters says it is `truncated`.
 
+## Rate a turn, and the rating lands on its trace
+
+A person watching an agent knows at once when a turn wasted steps, and that judgement is worth more than any heuristic, so the web app lets them record it where the trace already lives.
+
+- Every turn&#39;s final answer carries Copy, thumbs up and thumbs down. There is no regenerate, because a Grove agent keeps working in its own terminal and a rerun would promise something the daemon cannot do.
+- Either thumb opens a short follow-up asking why, with an optional free-text note. A thumbs down lists what cost the turn time, such as unnecessary actions or testing, slow commands run without need and a cluttered context. A thumbs up lists what made it efficient, such as reaching the goal directly with no wasted steps.
+- The rating becomes Langfuse scores on the very trace that turn exported: a `user-feedback` boolean with the note as its comment, then one `user-feedback-reason` category per complaint or one `user-feedback-praise` category per compliment. Voting again replaces the previous rating, and flipping a vote withdraws the reasons the old verdict gave.
+- The thumbs appear only when Langfuse is configured, so a rating always has somewhere to go. The scores are human annotations, which makes them ground truth for an LLM judge you calibrate later.
+
 ## Turn it on
 
-Telemetry ships in the `telemetry` extra, which `grove-crew[all]` includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.
+Telemetry ships in every `grove-factory` install and stays off until you enable it. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.
 
 ```json
 {
@@ -1572,6 +1580,48 @@ Claude Code and Codex can export OTLP directly, and Grove can be the collector t
 `grove usage backfill --telemetry` replays sessions that predate telemetry.
 
 Exporting old sessions writes off this machine, so it needs the `--telemetry` flag, an explicit `--yes`, and the profiles named in `telemetry.backfill.profiles`. `--dry-run` plans without writing, and without `--telemetry` the command only rebuilds the local projection.
+
+## Registering the feedback rubrics
+
+Langfuse only accepts a human annotation that names the score config it grades against. Create all three configs once per project before anyone rates a turn. Until they exist, a rating fails with a message that names the missing config. With the [Langfuse CLI](https://www.npmjs.com/package/langfuse-cli) and the same credentials Grove exports with:
+
+```bash
+langfuse api score-configs create --name user-feedback --data-type BOOLEAN \
+  --description &#34;Human thumbs up or down on one agent turn&#34;
+
+langfuse api score-configs create --body-json &#39;{
+  &#34;name&#34;: &#34;user-feedback-reason&#34;,
+  &#34;dataType&#34;: &#34;CATEGORICAL&#34;,
+  &#34;description&#34;: &#34;Why a human rated an agent turn down&#34;,
+  &#34;categories&#34;: [
+    {&#34;label&#34;: &#34;Unnecessary actions&#34;, &#34;value&#34;: 0},
+    {&#34;label&#34;: &#34;Unnecessary testing&#34;, &#34;value&#34;: 1},
+    {&#34;label&#34;: &#34;Wasted time&#34;, &#34;value&#34;: 2},
+    {&#34;label&#34;: &#34;Ran slow commands without need&#34;, &#34;value&#34;: 3},
+    {&#34;label&#34;: &#34;Cluttered the context&#34;, &#34;value&#34;: 4},
+    {&#34;label&#34;: &#34;Missed the goal&#34;, &#34;value&#34;: 5}
+  ]
+}&#39;
+langfuse api score-configs create --body-json &#39;{
+  &#34;name&#34;: &#34;user-feedback-praise&#34;,
+  &#34;dataType&#34;: &#34;CATEGORICAL&#34;,
+  &#34;description&#34;: &#34;Why a human rated an agent turn up&#34;,
+  &#34;categories&#34;: [
+    {&#34;label&#34;: &#34;Reached the goal directly&#34;, &#34;value&#34;: 0},
+    {&#34;label&#34;: &#34;No wasted steps&#34;, &#34;value&#34;: 1},
+    {&#34;label&#34;: &#34;Tested only what mattered&#34;, &#34;value&#34;: 2},
+    {&#34;label&#34;: &#34;Clear explanation&#34;, &#34;value&#34;: 3},
+    {&#34;label&#34;: &#34;Stayed in scope&#34;, &#34;value&#34;: 4}
+  ]
+}&#39;
+```
+
+- The names are fixed: `user-feedback` must be `BOOLEAN`, and `user-feedback-reason` and `user-feedback-praise` must be `CATEGORICAL`. Grove finds each config by name when a rating arrives.
+- The category labels must match `telemetry.feedback_reasons` and `telemetry.positive_feedback_reasons` exactly, because the daemon refuses a reason the config does not list. To change a list, set the key and give its Langfuse config the same labels. An archived config counts as missing.
+
+```json
+{ &#34;telemetry&#34;: { &#34;feedback_reasons&#34;: [&#34;Unnecessary actions&#34;, &#34;Wasted time&#34;, &#34;Missed the goal&#34;] } }
+```
 
 ## See also
 
@@ -1685,7 +1735,7 @@ Exporting old sessions writes off this machine, so it needs the `--telemetry` fl
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="trace-what-your-agents-did">Trace what your agents did</h2>
-<p>Agents now act on staging and production unattended, and off the shelf harnesses leave no record you can hold them to.</p>
+<p>Every agent turn becomes a trace your team can review. Rate answers in Grove with a thumb and optional reasons or notes. Those annotations stay on the Langfuse trace for human review and automated LLM judge workflows.</p>
 <div class="swiper ms-shots">
   <div class="swiper-wrapper">
     <div class="swiper-slide">
@@ -1763,8 +1813,16 @@ Exporting old sessions writes off this machine, so it needs the `--telemetry` fl
 <li>To grade them, create an LLM judge evaluator in LangFuse, filter on <code>grove_tool_category</code> equal to <code>shell</code>, and map its variables to <code>input</code> and <code>output</code>. Grove records facts and runs no evaluation of its own.</li>
 <li>The shape refuses to guess. Success is claimed only from a recorded exit code of zero, a cancelled call is not distinguishable from a failed one, a background call's result is its launch handle, and a payload over 4000 characters says it is <code>truncated</code>.</li>
 </ul>
+<h2 id="rate-a-turn-and-the-rating-lands-on-its-trace">Rate a turn, and the rating lands on its trace</h2>
+<p>A person watching an agent knows at once when a turn wasted steps, and that judgement is worth more than any heuristic, so the web app lets them record it where the trace already lives.</p>
+<ul>
+<li>Every turn's final answer carries Copy, thumbs up and thumbs down. There is no regenerate, because a Grove agent keeps working in its own terminal and a rerun would promise something the daemon cannot do.</li>
+<li>Either thumb opens a short follow-up asking why, with an optional free-text note. A thumbs down lists what cost the turn time, such as unnecessary actions or testing, slow commands run without need and a cluttered context. A thumbs up lists what made it efficient, such as reaching the goal directly with no wasted steps.</li>
+<li>The rating becomes Langfuse scores on the very trace that turn exported: a <code>user-feedback</code> boolean with the note as its comment, then one <code>user-feedback-reason</code> category per complaint or one <code>user-feedback-praise</code> category per compliment. Voting again replaces the previous rating, and flipping a vote withdraws the reasons the old verdict gave.</li>
+<li>The thumbs appear only when Langfuse is configured, so a rating always has somewhere to go. The scores are human annotations, which makes them ground truth for an LLM judge you calibrate later.</li>
+</ul>
 <h2 id="turn-it-on">Turn it on</h2>
-<p>Telemetry ships in the <code>telemetry</code> extra, which <code>grove-crew[all]</code> includes. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.</p>
+<p>Telemetry ships in every <code>grove-factory</code> install and stays off until you enable it. Grove reads variable names from config and values from the environment, so no secret is ever written to a config file.</p>
 <div class="language-json codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;telemetry&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
@@ -1793,6 +1851,43 @@ Exporting old sessions writes off this machine, so it needs the `--telemetry` fl
 <h2 id="backfilling-history">Backfilling history</h2>
 <p><code>grove usage backfill --telemetry</code> replays sessions that predate telemetry.</p>
 <p>Exporting old sessions writes off this machine, so it needs the <code>--telemetry</code> flag, an explicit <code>--yes</code>, and the profiles named in <code>telemetry.backfill.profiles</code>. <code>--dry-run</code> plans without writing, and without <code>--telemetry</code> the command only rebuilds the local projection.</p>
+<h2 id="registering-the-feedback-rubrics">Registering the feedback rubrics</h2>
+<p>Langfuse only accepts a human annotation that names the score config it grades against. Create all three configs once per project before anyone rates a turn. Until they exist, a rating fails with a message that names the missing config. With the <a href="https://www.npmjs.com/package/langfuse-cli">Langfuse <abbr title="Command Line Interface">CLI</abbr></a> and the same credentials Grove exports with:</p>
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>langfuse<span class="w"> </span>api<span class="w"> </span>score-configs<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>user-feedback<span class="w"> </span>--data-type<span class="w"> </span>BOOLEAN<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span>--description<span class="w"> </span><span class="s2">&quot;Human thumbs up or down on one agent turn&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>langfuse<span class="w"> </span>api<span class="w"> </span>score-configs<span class="w"> </span>create<span class="w"> </span>--body-json<span class="w"> </span><span class="s1">&#39;{</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="s1">  &quot;name&quot;: &quot;user-feedback-reason&quot;,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="s1">  &quot;dataType&quot;: &quot;CATEGORICAL&quot;,</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="s1">  &quot;description&quot;: &quot;Why a human rated an agent turn down&quot;,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="s1">  &quot;categories&quot;: [</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="s1">    {&quot;label&quot;: &quot;Unnecessary actions&quot;, &quot;value&quot;: 0},</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="s1">    {&quot;label&quot;: &quot;Unnecessary testing&quot;, &quot;value&quot;: 1},</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="s1">    {&quot;label&quot;: &quot;Wasted time&quot;, &quot;value&quot;: 2},</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="s1">    {&quot;label&quot;: &quot;Ran slow commands without need&quot;, &quot;value&quot;: 3},</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="s1">    {&quot;label&quot;: &quot;Cluttered the context&quot;, &quot;value&quot;: 4},</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="s1">    {&quot;label&quot;: &quot;Missed the goal&quot;, &quot;value&quot;: 5}</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="s1">  ]</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="s1">}&#39;</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>langfuse<span class="w"> </span>api<span class="w"> </span>score-configs<span class="w"> </span>create<span class="w"> </span>--body-json<span class="w"> </span><span class="s1">&#39;{</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="s1">  &quot;name&quot;: &quot;user-feedback-praise&quot;,</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="s1">  &quot;dataType&quot;: &quot;CATEGORICAL&quot;,</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="s1">  &quot;description&quot;: &quot;Why a human rated an agent turn up&quot;,</span>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a><span class="s1">  &quot;categories&quot;: [</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="s1">    {&quot;label&quot;: &quot;Reached the goal directly&quot;, &quot;value&quot;: 0},</span>
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="s1">    {&quot;label&quot;: &quot;No wasted steps&quot;, &quot;value&quot;: 1},</span>
+</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="s1">    {&quot;label&quot;: &quot;Tested only what mattered&quot;, &quot;value&quot;: 2},</span>
+</span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="s1">    {&quot;label&quot;: &quot;Clear explanation&quot;, &quot;value&quot;: 3},</span>
+</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="s1">    {&quot;label&quot;: &quot;Stayed in scope&quot;, &quot;value&quot;: 4}</span>
+</span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a><span class="s1">  ]</span>
+</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="s1">}&#39;</span>
+</span></code></pre></div>
+<ul>
+<li>The names are fixed: <code>user-feedback</code> must be <code>BOOLEAN</code>, and <code>user-feedback-reason</code> and <code>user-feedback-praise</code> must be <code>CATEGORICAL</code>. Grove finds each config by name when a rating arrives.</li>
+<li>The category labels must match <code>telemetry.feedback_reasons</code> and <code>telemetry.positive_feedback_reasons</code> exactly, because the daemon refuses a reason the config does not list. To change a list, set the key and give its Langfuse config the same labels. An archived config counts as missing.</li>
+</ul>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;telemetry&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;feedback_reasons&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;Unnecessary actions&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;Wasted time&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;Missed the goal&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</span></code></pre></div>
 <h2 id="see-also">See also</h2>
 <ul>
 <li><a href="../features-activity/">Agent activity and sessions</a>: the live half of the
@@ -1801,27 +1896,8 @@ Exporting old sessions writes off this machine, so it needs the `--telemetry` fl
 <li><a href="../configure-agents/">Agents</a>: declaring an agent's <code>kind</code>.</li>
 </ul>
   </div>
-  
-  <script>
-    // toc.html omits the heading that names the page itself — the masthead
-    // subtitle, or the hero's own heading. Observing a heading the rail has no
-    // link for would still make it the "topmost visible heading", and
-    // setActiveTocLink would find nothing to match and blank the rail. Reading
-    // the skip off the rail keeps this in step with whatever toc.html drops.
-    // Deferred because main.html emits the rail after this article, so #toc
-    // does not exist yet while this script is parsed.
-    document.addEventListener('DOMContentLoaded', () => {
-      const tocTargets = new Set(
-        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
-      );
-      document.querySelectorAll('article h2, article h3').forEach((header) => {
-        if (!tocTargets.has('#' + header.id)) return;
-        toc.observer.observe(header);
-      });
-    });
-  </script>
 </article>
-                                <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
+                                <div id="bottom-navigation" class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 shadow-none"
@@ -2914,56 +2990,63 @@ Exporting old sessions writes off this machine, so it needs the `--telemetry` fl
             
             <a href="#one-session-one-trace"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#one-session-one-trace');">
+                data-active="false" data-depth="2">
                 One session, one trace
             </a>
             
             
             <a href="#what-grove-puts-on-a-span"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#what-grove-puts-on-a-span');">
+                data-active="false" data-depth="2">
                 What Grove puts on a span
             </a>
             
             
             <a href="#shell-calls-in-one-shape-you-can-grade"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#shell-calls-in-one-shape-you-can-grade');">
+                data-active="false" data-depth="2">
                 Shell calls, in one shape you can grade
+            </a>
+            
+            
+            <a href="#rate-a-turn-and-the-rating-lands-on-its-trace"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2">
+                Rate a turn, and the rating lands on its trace
             </a>
             
             
             <a href="#turn-it-on"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#turn-it-on');">
+                data-active="false" data-depth="2">
                 Turn it on
             </a>
             
             
             <a href="#receiving-the-harnesss-own-traces"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#receiving-the-harnesss-own-traces');">
+                data-active="false" data-depth="2">
                 Receiving the harness's own traces
             </a>
             
             
             <a href="#backfilling-history"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#backfilling-history');">
+                data-active="false" data-depth="2">
                 Backfilling history
+            </a>
+            
+            
+            <a href="#registering-the-feedback-rubrics"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2">
+                Registering the feedback rubrics
             </a>
             
             
             <a href="#see-also"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#see-also');">
+                data-active="false" data-depth="2">
                 See also
             </a>
             
@@ -3038,7 +3121,7 @@ Exporting old sessions writes off this machine, so it needs the `--telemetry` fl
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.</p>
+      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
       
     </div>
 

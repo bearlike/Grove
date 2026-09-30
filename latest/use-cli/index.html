@@ -67,7 +67,7 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
-<link href="../css/plex-serif.css" rel="stylesheet"/>
+<link href="../css/editorial-fonts.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
@@ -98,7 +98,8 @@
 
     
 
-    <script integrity="sha384-FDYE0LZ2rjnYnGta7gXYP/eQrHyFKIFUU54YBXsPM0uOlGEddDH6ZRU2Mb5SwZxr" src="../js/callbacks.js"></script>
+    <script integrity="sha384-Q1MrSG7ZnVSCNkPrtLHrwaFNMRKVd4TDOQgr3oKtpORHLRDoNcfgIb1bInwjA0J1" src="../js/callbacks.js"></script>
+<script defer="" integrity="sha384-ljmRPFWw/c4kKFaKY5DIe8bgppHI9VBBrg7WZa8UPd23U9dEFesxZ1Ng8Hzjq2WB" src="../js/toc.js"></script>
 
     
 
@@ -418,8 +419,6 @@
 <div class="pointer-events-none absolute top-8 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background to-transparent">
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
-</div>
-<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1450,7 +1449,7 @@
 </div>
                         </div>
                     </div>
-                    <div class="h-full w-full">
+                    <div class="ms-docs-column w-full">
                         <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
 
                             <div class="flex min-w-0 flex-1 flex-col">
@@ -2108,7 +2107,7 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
 </span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>grove<span class="w"> </span>sessions<span class="w"> </span>recollect<span class="w"> </span>7b3f2c1a<span class="w"> </span>--last<span class="w"> </span><span class="m">3</span><span class="w"> </span>--json
 </span></code></pre></div>
 <h4 id="grove-sessions-remap"><code>grove sessions remap</code></h4>
-<p>Pins the workspace primary session. See <a href="https://github.com/bearlike/Grove/blob/1a5058d8/src/grove/tui/cli_sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>cli_sessions.py</span></a>.</p>
+<p>Pins the workspace primary session. See <a href="https://github.com/bearlike/Grove/blob/45159a64/src/grove/tui/cli_sessions.py" target="_blank" rel="noopener noreferrer" class="md-coderef md-coderef--file"><span class="md-coderef__label"><svg class="md-coderef__icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"></path></svg>cli_sessions.py</span></a>.</p>
 <div class="language-bash codehilite"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>WORKSPACE<span class="w"> </span>SESSION
 </span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
 </span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>grove<span class="w"> </span>sessions<span class="w"> </span>remap<span class="w"> </span>a1b2<span class="w"> </span>cafef00d
@@ -2316,27 +2315,8 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
 <li><a href="../use-auth/">Authentication and pairing</a> and <a href="../use-webapp/">Web dashboard</a>.</li>
 </ul>
   </div>
-  
-  <script>
-    // toc.html omits the heading that names the page itself — the masthead
-    // subtitle, or the hero's own heading. Observing a heading the rail has no
-    // link for would still make it the "topmost visible heading", and
-    // setActiveTocLink would find nothing to match and blank the rail. Reading
-    // the skip off the rail keeps this in step with whatever toc.html drops.
-    // Deferred because main.html emits the rail after this article, so #toc
-    // does not exist yet while this script is parsed.
-    document.addEventListener('DOMContentLoaded', () => {
-      const tocTargets = new Set(
-        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
-      );
-      document.querySelectorAll('article h2, article h3').forEach((header) => {
-        if (!tocTargets.has('#' + header.id)) return;
-        toc.observer.observe(header);
-      });
-    });
-  </script>
 </article>
-                                <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
+                                <div id="bottom-navigation" class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 shadow-none"
@@ -3429,82 +3409,71 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
             
             <a href="#find-the-right-workflow"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#find-the-right-workflow');">
+                data-active="false" data-depth="2">
                 Find the right workflow
             </a>
             
             
             <a href="#the-contract"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#the-contract');">
+                data-active="false" data-depth="2">
                 The contract
             </a>
             
             
             <a href="#grove"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove');">
+                data-active="false" data-depth="2">
                 grove
             </a>
             
             
             <a href="#read-commands"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#read-commands');">
+                data-active="false" data-depth="2">
                 Read commands
             </a>
             
             
             <a href="#grove-ls"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-ls');">
+                data-active="false" data-depth="3">
                 grove ls
             </a>
             
             <a href="#grove-fleet"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-fleet');">
+                data-active="false" data-depth="3">
                 grove fleet
             </a>
             
             <a href="#grove-show"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-show');">
+                data-active="false" data-depth="3">
                 grove show
             </a>
             
             <a href="#grove-edit"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-edit');">
+                data-active="false" data-depth="3">
                 grove edit
             </a>
             
             <a href="#grove-phase"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-phase');">
+                data-active="false" data-depth="3">
                 grove phase
             </a>
             
             <a href="#grove-sessions"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-sessions');">
+                data-active="false" data-depth="3">
                 grove sessions
             </a>
             
             <a href="#grove-sessions-recollect-and-grove-recollect"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-sessions-recollect-and-grove-recollect');">
+                data-active="false" data-depth="3">
                 grove sessions recollect and grove recollect
             </a>
             
@@ -3512,58 +3481,50 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
             
             <a href="#lifecycle-commands"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#lifecycle-commands');">
+                data-active="false" data-depth="2">
                 Lifecycle commands
             </a>
             
             
             <a href="#grove-create"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-create');">
+                data-active="false" data-depth="3">
                 grove create
             </a>
             
             <a href="#steer-pause-resume-respawn-kill-attach-shell"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#steer-pause-resume-respawn-kill-attach-shell');">
+                data-active="false" data-depth="3">
                 Steer, pause, resume, respawn, kill, attach, shell
             </a>
             
             <a href="#grove-agent"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-agent');">
+                data-active="false" data-depth="3">
                 grove agent
             </a>
             
             <a href="#grove-code"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-code');">
+                data-active="false" data-depth="3">
                 grove code
             </a>
             
             <a href="#grove-diagram"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-diagram');">
+                data-active="false" data-depth="3">
                 grove diagram
             </a>
             
             <a href="#grove-tickets"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-tickets');">
+                data-active="false" data-depth="3">
                 grove tickets
             </a>
             
             <a href="#grove-watch"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-watch');">
+                data-active="false" data-depth="3">
                 grove watch
             </a>
             
@@ -3571,31 +3532,27 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
             
             <a href="#using-the-cli-from-an-agent"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#using-the-cli-from-an-agent');">
+                data-active="false" data-depth="2">
                 Using the CLI from an agent
             </a>
             
             
             <a href="#admin-commands"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#admin-commands');">
+                data-active="false" data-depth="2">
                 Admin commands
             </a>
             
             
             <a href="#grove-daemon-serve"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-daemon-serve');">
+                data-active="false" data-depth="3">
                 grove daemon serve
             </a>
             
             <a href="#grove-auth"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#grove-auth');">
+                data-active="false" data-depth="3">
                 grove auth
             </a>
             
@@ -3603,31 +3560,27 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
             
             <a href="#grove_debug1"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#grove_debug1');">
+                data-active="false" data-depth="2">
                 GROVE_DEBUG=1
             </a>
             
             
             <a href="#tab-completion"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#tab-completion');">
+                data-active="false" data-depth="2">
                 Tab completion
             </a>
             
             
             <a href="#what-completes"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#what-completes');">
+                data-active="false" data-depth="3">
                 What completes
             </a>
             
             <a href="#if-nothing-happens-when-you-press-tab"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#if-nothing-happens-when-you-press-tab');">
+                data-active="false" data-depth="3">
                 If nothing happens when you press Tab
             </a>
             
@@ -3635,8 +3588,7 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
             
             <a href="#see-also"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#see-also');">
+                data-active="false" data-depth="2">
                 See also
             </a>
             
@@ -3711,7 +3663,7 @@ time ( env _TYPER_COMPLETE_ARGS=&#34;grove show &#34; _GROVE_COMPLETE=complete_z
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.</p>
+      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
       
     </div>
 

@@ -67,7 +67,7 @@
 
     <link href="../css/base.css" rel="stylesheet"/>
 <link href="../css/geist.css" rel="stylesheet"/>
-<link href="../css/plex-serif.css" rel="stylesheet"/>
+<link href="../css/editorial-fonts.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css" rel="stylesheet"/>
     <link href="https://cdn.jsdelivr.net/npm/viewerjs@1.14.0/dist/viewer.min.css" rel="stylesheet"/>
 <link href="../css/mewbo.css" rel="stylesheet"/>
@@ -98,7 +98,8 @@
 
     
 
-    <script integrity="sha384-FDYE0LZ2rjnYnGta7gXYP/eQrHyFKIFUU54YBXsPM0uOlGEddDH6ZRU2Mb5SwZxr" src="../js/callbacks.js"></script>
+    <script integrity="sha384-Q1MrSG7ZnVSCNkPrtLHrwaFNMRKVd4TDOQgr3oKtpORHLRDoNcfgIb1bInwjA0J1" src="../js/callbacks.js"></script>
+<script defer="" integrity="sha384-ljmRPFWw/c4kKFaKY5DIe8bgppHI9VBBrg7WZa8UPd23U9dEFesxZ1Ng8Hzjq2WB" src="../js/toc.js"></script>
 
     
 
@@ -418,8 +419,6 @@
 <div class="pointer-events-none absolute top-8 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background to-transparent">
 </div>
 <div class="pointer-events-none absolute bottom-0 z-10 h-4 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-t from-background to-transparent">
-</div>
-<div class="ms-rail-divider absolute top-0 right-2 bottom-0 hidden h-full w-px bg-border lg:flex">
 </div>
 <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
@@ -1450,7 +1449,7 @@
 </div>
                         </div>
                     </div>
-                    <div class="h-full w-full">
+                    <div class="ms-docs-column w-full">
                         <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
 
                             <div class="flex min-w-0 flex-1 flex-col">
@@ -1498,6 +1497,7 @@ These fields also read a fixed environment variable, so a deployment can set the
 |---|---|---|---|
 | `builtin_agents` | `boolean` | `true` | Whether Grove&#39;s own agents are offered alongside the ones you declare. Off makes your `agents` list the whole roster. |
 | `lifecycle_max_pending` | `integer` | `64` | Maximum accepted lifecycle operations, including lock waiters and running work. |
+| `macros` | `object` | unset | Grove commands by name, run as ``/grove:&lt;name&gt;``. A map, so every layer adds or replaces commands by name; none ship built in, because which model is fast is a fact about your fleet. |
 | `projects` | `array&lt;string&gt;` | unset | Repo roots kept visible in every picker even with zero workspaces. `~` expands, and a path that is not a git repo is ignored. |
 
 ## `activity_admission`
@@ -1834,8 +1834,10 @@ Langfuse credentials and OpenTelemetry passthrough. The three credential fields 
 | `env_command` | `string \| null` | unset | Host command whose stdout is parsed as dotenv, so a secret never touches disk. Re run at every use and never honored from a committed layer. |
 | `env_file` | `string \| null` | unset | Dotenv file this section&#39;s variables are read from. Repo relative or absolute, `~` expanded. A configured file that is missing is an error at use. |
 | `export` | see below | | Capacity and retry limits for acknowledged span export. |
+| `feedback_reasons` | `array&lt;string&gt;` | `[&#34;Unnecessary actions&#34;, &#34;Unnecessary testing&#34;, &#34;Wasted time&#34;, &#34;Ran slow commands without need&#34;, &#34;Cluttered the context&#34;, &#34;Missed the goal&#34;]` | What a thumbs-down in the webapp may name, recorded as the categorical ``user-feedback-reason`` score in Langfuse. The defaults name ways a turn cost more steps, time or context than its outcome needed. Keep the Langfuse score config&#39;s categories in step when you change this list: the daemon only accepts reasons listed here, and Langfuse only renders reasons listed there. |
 | `host_env` | `string` | `&#34;LANGFUSE_HOST&#34;` | Name of the variable holding the Langfuse host, never the URL itself. Rename it here if your secret store exports a different name. |
 | `passthrough_kinds` | `array&lt;string&gt;` | `[&#34;claude_code&#34;, &#34;codex&#34;]` | Agent kinds that receive the derived telemetry environment at launch. `mewbo` runs server side and `generic` has nothing to instrument, so both are out by default. |
+| `positive_feedback_reasons` | `array&lt;string&gt;` | `[&#34;Reached the goal directly&#34;, &#34;No wasted steps&#34;, &#34;Tested only what mattered&#34;, &#34;Clear explanation&#34;, &#34;Stayed in scope&#34;]` | What a thumbs-up in the webapp may name, recorded as the categorical ``user-feedback-praise`` score in Langfuse. The defaults name what made a turn efficient, the mirror image of ``feedback_reasons``. The same rule applies: keep the Langfuse score config&#39;s categories identical to this list. |
 | `public_key_env` | `string` | `&#34;LANGFUSE_PUBLIC_KEY&#34;` | Name of the variable holding the Langfuse public key. |
 | `receiver` | see below | | The daemon&#39;s own OTLP endpoint for a harness&#39;s native exporter. |
 | `reserved_env` | `array&lt;string&gt;` | `[&#34;OTEL_EXPORTER_OTLP_ENDPOINT&#34;, &#34;OTEL_EXPORTER_OTLP_HEADERS&#34;, &#34;OTEL_EXPORTER_OTLP_PROTOCOL&#34;, &#34;OTEL_EXPORTER_OTLP_TRACES_ENDPOINT&#34;, &#34;OTEL_EXPORTER_OTLP_TRACES_HEADERS&#34;, &#34;OTEL_EXPORTER_OTLP_TRACES_PROTOCOL&#34;, &#34;OTEL_EXPORTER_OTLP_METRICS_ENDPOINT&#34;, &#34;OTEL_EXPORTER_OTLP_METRICS_HEADERS&#34;, &#34;OTEL_EXPORTER_OTLP_METRICS_PROTOCOL&#34;, &#34;OTEL_EXPORTER_OTLP_LOGS_ENDPOINT&#34;, &#34;OTEL_EXPORTER_OTLP_LOGS_HEADERS&#34;, &#34;OTEL_EXPORTER_OTLP_LOGS_PROTOCOL&#34;, &#34;OTEL_TRACES_EXPORTER&#34;, &#34;OTEL_METRICS_EXPORTER&#34;, &#34;OTEL_LOGS_EXPORTER&#34;]` | OTLP exporter variables Grove owns for every agent it launches, so an agent&#39;s own exporter cannot split one session into two traces. A displaced value is logged by name. |
@@ -2213,6 +2215,12 @@ Where worktrees live and how branches are named.
 <td><code>integer</code></td>
 <td><code>64</code></td>
 <td>Maximum accepted lifecycle operations, including lock waiters and running work.</td>
+</tr>
+<tr>
+<td><code>macros</code></td>
+<td><code>object</code></td>
+<td>unset</td>
+<td>Grove commands by name, run as <code>/grove:&lt;name&gt;</code>. A map, so every layer adds or replaces commands by name; none ship built in, because which model is fast is a fact about your fleet.</td>
 </tr>
 <tr>
 <td><code>projects</code></td>
@@ -3412,6 +3420,12 @@ Where worktrees live and how branches are named.
 <td>Capacity and retry limits for acknowledged span export.</td>
 </tr>
 <tr>
+<td><code>feedback_reasons</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>["Unnecessary actions", "Unnecessary testing", "Wasted time", "Ran slow commands without need", "Cluttered the context", "Missed the goal"]</code></td>
+<td>What a thumbs-down in the webapp may name, recorded as the categorical <code>user-feedback-reason</code> score in Langfuse. The defaults name ways a turn cost more steps, time or context than its outcome needed. Keep the Langfuse score config's categories in step when you change this list: the daemon only accepts reasons listed here, and Langfuse only renders reasons listed there.</td>
+</tr>
+<tr>
 <td><code>host_env</code></td>
 <td><code>string</code></td>
 <td><code>"LANGFUSE_HOST"</code></td>
@@ -3422,6 +3436,12 @@ Where worktrees live and how branches are named.
 <td><code>array&lt;string&gt;</code></td>
 <td><code>["claude_code", "codex"]</code></td>
 <td>Agent kinds that receive the derived telemetry environment at launch. <code>mewbo</code> runs server side and <code>generic</code> has nothing to instrument, so both are out by default.</td>
+</tr>
+<tr>
+<td><code>positive_feedback_reasons</code></td>
+<td><code>array&lt;string&gt;</code></td>
+<td><code>["Reached the goal directly", "No wasted steps", "Tested only what mattered", "Clear explanation", "Stayed in scope"]</code></td>
+<td>What a thumbs-up in the webapp may name, recorded as the categorical <code>user-feedback-praise</code> score in Langfuse. The defaults name what made a turn efficient, the mirror image of <code>feedback_reasons</code>. The same rule applies: keep the Langfuse score config's categories identical to this list.</td>
 </tr>
 <tr>
 <td><code>public_key_env</code></td>
@@ -4256,27 +4276,8 @@ Where worktrees live and how branches are named.
 </tbody>
 </table></div>
   </div>
-  
-  <script>
-    // toc.html omits the heading that names the page itself — the masthead
-    // subtitle, or the hero's own heading. Observing a heading the rail has no
-    // link for would still make it the "topmost visible heading", and
-    // setActiveTocLink would find nothing to match and blank the rail. Reading
-    // the skip off the rail keeps this in step with whatever toc.html drops.
-    // Deferred because main.html emits the rail after this article, so #toc
-    // does not exist yet while this script is parsed.
-    document.addEventListener('DOMContentLoaded', () => {
-      const tocTargets = new Set(
-        [...document.querySelectorAll('#toc a')].map((a) => a.getAttribute('href')),
-      );
-      document.querySelectorAll('article h2, article h3').forEach((header) => {
-        if (!tocTargets.has('#' + header.id)) return;
-        toc.observer.observe(header);
-      });
-    });
-  </script>
 </article>
-                                <div class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
+                                <div id="bottom-navigation" class="mx-auto flex flex-wrap h-16 w-full max-w-2xl items-center gap-2 px-4 md:px-0">
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 shadow-none"
@@ -5369,72 +5370,63 @@ Where worktrees live and how branches are named.
             
             <a href="#environment-variable-overrides"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#environment-variable-overrides');">
+                data-active="false" data-depth="2">
                 Environment variable overrides
             </a>
             
             
             <a href="#top-level-fields"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#top-level-fields');">
+                data-active="false" data-depth="2">
                 Top-level fields
             </a>
             
             
             <a href="#activity_admission"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#activity_admission');">
+                data-active="false" data-depth="2">
                 activity_admission
             </a>
             
             
             <a href="#agent_cwds"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#agent_cwds');">
+                data-active="false" data-depth="2">
                 agent_cwds
             </a>
             
             
             <a href="#agents-a-list-one-entry-each"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#agents-a-list-one-entry-each');">
+                data-active="false" data-depth="2">
                 agents (a list, one entry each)
             </a>
             
             
             <a href="#auth"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#auth');">
+                data-active="false" data-depth="2">
                 auth
             </a>
             
             
             <a href="#brief"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#brief');">
+                data-active="false" data-depth="2">
                 brief
             </a>
             
             
             <a href="#channels"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#channels');">
+                data-active="false" data-depth="2">
                 channels
             </a>
             
             
             <a href="#admission"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#admission');">
+                data-active="false" data-depth="3">
                 admission
             </a>
             
@@ -5442,44 +5434,38 @@ Where worktrees live and how branches are named.
             
             <a href="#container"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#container');">
+                data-active="false" data-depth="2">
                 container
             </a>
             
             
             <a href="#agent_config"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#agent_config');">
+                data-active="false" data-depth="3">
                 agent_config
             </a>
             
             <a href="#decor"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#decor');">
+                data-active="false" data-depth="3">
                 decor
             </a>
             
             <a href="#egress"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#egress');">
+                data-active="false" data-depth="3">
                 egress
             </a>
             
             <a href="#resources"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#resources');">
+                data-active="false" data-depth="3">
                 resources
             </a>
             
             <a href="#tmux"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#tmux');">
+                data-active="false" data-depth="3">
                 tmux
             </a>
             
@@ -5487,40 +5473,35 @@ Where worktrees live and how branches are named.
             
             <a href="#defaults"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#defaults');">
+                data-active="false" data-depth="2">
                 defaults
             </a>
             
             
             <a href="#hooks"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#hooks');">
+                data-active="false" data-depth="2">
                 hooks
             </a>
             
             
             <a href="#init_script"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#init_script');">
+                data-active="false" data-depth="2">
                 init_script
             </a>
             
             
             <a href="#issueops"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#issueops');">
+                data-active="false" data-depth="2">
                 issueops
             </a>
             
             
             <a href="#admission_1"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#admission_1');">
+                data-active="false" data-depth="3">
                 admission
             </a>
             
@@ -5528,39 +5509,34 @@ Where worktrees live and how branches are named.
             
             <a href="#mewbo"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#mewbo');">
+                data-active="false" data-depth="2">
                 mewbo
             </a>
             
             
             <a href="#models"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#models');">
+                data-active="false" data-depth="2">
                 models
             </a>
             
             
             <a href="#notifications"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#notifications');">
+                data-active="false" data-depth="2">
                 notifications
             </a>
             
             
             <a href="#gotify"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#gotify');">
+                data-active="false" data-depth="3">
                 gotify
             </a>
             
             <a href="#webhook"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#webhook');">
+                data-active="false" data-depth="3">
                 webhook
             </a>
             
@@ -5568,61 +5544,53 @@ Where worktrees live and how branches are named.
             
             <a href="#panels-a-list-one-entry-each"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#panels-a-list-one-entry-each');">
+                data-active="false" data-depth="2">
                 panels (a list, one entry each)
             </a>
             
             
             <a href="#permission"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#permission');">
+                data-active="false" data-depth="2">
                 permission
             </a>
             
             
             <a href="#proxy"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#proxy');">
+                data-active="false" data-depth="2">
                 proxy
             </a>
             
             
             <a href="#telemetry"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#telemetry');">
+                data-active="false" data-depth="2">
                 telemetry
             </a>
             
             
             <a href="#backfill"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#backfill');">
+                data-active="false" data-depth="3">
                 backfill
             </a>
             
             <a href="#export"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#export');">
+                data-active="false" data-depth="3">
                 export
             </a>
             
             <a href="#exportadmission"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#exportadmission');">
+                data-active="false" data-depth="3">
                 export.admission
             </a>
             
             <a href="#receiver"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#receiver');">
+                data-active="false" data-depth="3">
                 receiver
             </a>
             
@@ -5630,30 +5598,26 @@ Where worktrees live and how branches are named.
             
             <a href="#tickets"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#tickets');">
+                data-active="false" data-depth="2">
                 tickets
             </a>
             
             
             <a href="#gitea"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#gitea');">
+                data-active="false" data-depth="3">
                 gitea
             </a>
             
             <a href="#github"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#github');">
+                data-active="false" data-depth="3">
                 github
             </a>
             
             <a href="#linear"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#linear');">
+                data-active="false" data-depth="3">
                 linear
             </a>
             
@@ -5661,76 +5625,66 @@ Where worktrees live and how branches are named.
             
             <a href="#tls"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#tls');">
+                data-active="false" data-depth="2">
                 tls
             </a>
             
             
             <a href="#tmux_1"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#tmux_1');">
+                data-active="false" data-depth="2">
                 tmux
             </a>
             
             
             <a href="#transcript_cache"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#transcript_cache');">
+                data-active="false" data-depth="2">
                 transcript_cache
             </a>
             
             
             <a href="#ui"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#ui');">
+                data-active="false" data-depth="2">
                 ui
             </a>
             
             
             <a href="#usage"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#usage');">
+                data-active="false" data-depth="2">
                 usage
             </a>
             
             
             <a href="#commands"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#commands');">
+                data-active="false" data-depth="3">
                 commands
             </a>
             
             <a href="#insights"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#insights');">
+                data-active="false" data-depth="3">
                 insights
             </a>
             
             <a href="#pricing"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#pricing');">
+                data-active="false" data-depth="3">
                 pricing
             </a>
             
             <a href="#quota"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#quota');">
+                data-active="false" data-depth="3">
                 quota
             </a>
             
             <a href="#quotagateway"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="3"
-                onClick="deferSetActiveTocLink('#quotagateway');">
+                data-active="false" data-depth="3">
                 quota.gateway
             </a>
             
@@ -5738,8 +5692,7 @@ Where worktrees live and how branches are named.
             
             <a href="#worktree"
                 class="mewbo-toc__link"
-                data-active="false" data-depth="2"
-                onClick="deferSetActiveTocLink('#worktree');">
+                data-active="false" data-depth="2">
                 worktree
             </a>
             
@@ -5814,7 +5767,7 @@ Where worktrees live and how branches are named.
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.</p>
+      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
       
     </div>
 

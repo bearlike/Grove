@@ -3,8 +3,8 @@
 body:has(.grove-landing) > #inner-body > header,
 body:has(.grove-landing) > #inner-body > .ms-header-tabs,
 body:has(.grove-landing) #mewbo-fab { display: none; }
-body:has(.grove-landing) { --header-height: 0px; background: #020a18; }
-body:has(.grove-landing) #inner-body { background: #020a18; }
+body:has(.grove-landing) { --header-height: 0px; background: #050505; }
+body:has(.grove-landing) #inner-body { background: #050505; }
 html:has(.grove-landing) { scrollbar-gutter: auto; overflow: hidden; }
 body:has(.grove-landing) { overflow: hidden; }
 .grove-landing, .grove-landing * { box-sizing: border-box; }
@@ -14,22 +14,154 @@ body:has(.grove-landing) { overflow: hidden; }
   overflow: visible;
 }
 
+/* The floor is the reference's neutral near-black, and the aura's own bottom
+   row, so the field fades into it with no seam. */
 .grove-landing {
-  --factory-midnight: #020a18;
-  --factory-deep: #061327;
-  --factory-clay: #d97757;
-  --factory-ink: #f5f7fb;
-  --factory-muted: #a6b1c5;
+  --factory-night: #050505;
+  --factory-control: #171717;
+  --factory-control-edge: #8a827a;
+  --factory-control-active: #24211e;
+  --factory-control-height: 2rem;
+  --factory-control-font-size: 1.125rem;
+  --factory-ember: #ff7a45;
+  --factory-ink: #fdf6f0;
+  --factory-muted: #cdbcae;
   position: relative;
   height: 100svh;
   min-height: 600px;
   isolation: isolate;
   overflow: hidden;
   color: var(--factory-ink);
-  background:
-    radial-gradient(circle at 72% 54%, rgba(22, 91, 159, 0.24), transparent 30rem),
-    radial-gradient(circle at 99% 1%, rgba(217, 119, 87, 0.14), transparent 26rem),
-    var(--factory-midnight);
+  background: var(--factory-night);
+}
+
+/* Sparse vector lines add depth without lifting the black surround. The
+   scene occludes this layer, so the mesh never paints across a robot's face. */
+.grove-landing__mesh {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.16;
+  /* Two fades intersected: the diagonal into the copy, and the vertical one
+     the SVG used to carry as its own mask (repainted with every animation
+     step there, composited once here). */
+  -webkit-mask-image:
+    linear-gradient(160deg, transparent 3%, #000 32%, #000 85%, transparent),
+    linear-gradient(to bottom, transparent 12%, #000 20%, #000 92%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(160deg, transparent 3%, #000 32%, #000 85%, transparent),
+    linear-gradient(to bottom, transparent 12%, #000 20%, #000 92%, transparent);
+  mask-composite: intersect;
+}
+
+/* A live SVG document responds to motion preferences without relying on an
+   image cache's animation state. Its viewBox slices to the same cover crop. */
+.grove-landing__mesh object {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+}
+
+/* The aura is the reference's own colour field, not an approximation of it:
+   amber and bright orange in the top-left corner reaching furthest down, red
+   through the middle, near-black burgundy across the right, all fading into
+   the neutral floor. Gradients guessed at that and read as flat tan, so
+   aura.png is synthesized from profiles measured on the reference (see
+   tools/landing_aura.py): a 96x40, ~2 KB field the GPU upscales, whose
+   bottom row IS the floor colour, so it has no edge anywhere.
+
+   `lighten` shows the field exactly over the empty page, and over the lit
+   scene it only tints what is darker than the light, so the machine keeps
+   its grey while its shadows pick up the room's temperature.
+
+   Motion is a marquee of sun hues, amber through orange to red and back,
+   travelling left to right in a seamless loop. It is masked by the field's
+   own LUMINANCE, so it is strongest in the hot corner and near-absent over
+   the burgundy, and the resting distribution never changes.
+
+   The strip moves by transform, but under a luminance mask and a `lighten`
+   blend the browser recomposites the whole masked field for every step, and
+   on software rendering that alone held the page near 16 fps. The gradient
+   is so smooth that a 10 Hz step (4 px) reads exactly like continuous motion,
+   and costs a sixth of the recomposites. */
+.grove-landing__aura {
+  position: absolute;
+  /* The reference's field spans its hero card, which ends above its fold;
+     stretched over the full viewport the orange reached the floor. */
+  inset: 0 0 auto 0;
+  height: 78%;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+  mix-blend-mode: lighten;
+  /* The field is 96x40 and must keep that 2.4:1 shape, or its ellipse turns
+     into whatever the box is: stretched to a portrait phone it read as a tall
+     rectangle. Width follows the box height (so a desktop fills as before),
+     floored at the page width and capped at 1.25x it, so a phone shows the
+     amber-to-red transition instead of only the hot corner. Height is auto,
+     and below the field the page floor takes over. */
+  --aura-size: max(100%, min(calc(max(100svh, 600px) * 0.78 * 2.4), 125%)) auto;
+  background: url("../img/landing/aura.png") 0 0 / var(--aura-size) no-repeat;
+  /* The field's last rows sit a hair above the floor; lighten would draw
+     that difference as a hard line where the box ends. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+.grove-landing__aura-drift {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  -webkit-mask: url("../img/landing/aura.png") 0 0 / var(--aura-size) no-repeat;
+  -webkit-mask-source-type: luminance;
+  mask: url("../img/landing/aura.png") 0 0 / var(--aura-size) no-repeat luminance;
+}
+.grove-landing__aura-drift::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -100%;
+  width: 200%;
+  opacity: 0.45;
+  /* The same solar ramp the field uses, mirrored so the loop is seamless:
+     sun white, solar yellow, amber, sun orange, sun red, burgundy and back.
+     Because the mask is the field's luminance, the strip only shows where
+     the field is still hot, so the darkening direction never reverses. */
+  background: linear-gradient(90deg,
+    #ffd98a 0%, #fbb238 12%, #ee8214 24%, #d4520c 36%, #a82a08 44%, #5c0a07 50%,
+    #a82a08 56%, #d4520c 64%, #ee8214 76%, #fbb238 88%, #ffd98a 100%) 0 0 / 50% 100% repeat-x;
+  animation: grove-aura-marquee 36s steps(360) infinite;
+  will-change: transform;
+}
+@keyframes grove-aura-marquee {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(50%, 0, 0); }
+}
+
+/* Very fine film grain over everything, the scene included. One small
+   turbulence tile, rasterised once and tiled; the jitter moves the layer in
+   steps so it is a compositor transform, never a per-frame repaint. It is a
+   plain low-opacity layer, not overlay or soft-light: both scale with the
+   base value, so over this near-black floor they measured as no grain. */
+.grove-landing__grain {
+  position: absolute;
+  inset: -64px;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0.018;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 1'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  animation: grove-grain 0.9s steps(1) infinite;
+}
+@keyframes grove-grain {
+  0% { transform: translate3d(0, 0, 0); }
+  20% { transform: translate3d(-23px, 17px, 0); }
+  40% { transform: translate3d(31px, -9px, 0); }
+  60% { transform: translate3d(-11px, -29px, 0); }
+  80% { transform: translate3d(19px, 27px, 0); }
 }
 
 .grove-landing__header {
@@ -38,13 +170,13 @@ body:has(.grove-landing) { overflow: hidden; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: calc(100% - 10vw);
+  width: calc(100% - 5vw);
   margin: 0 auto;
-  padding: clamp(1.25rem, 2.7vw, 2.5rem) 0;
+  padding: clamp(0.9rem, 1.6vw, 1.5rem) 0;
 }
 
 .grove-landing {
-  font-family: var(--font-sans, Geist, ui-sans-serif, system-ui, sans-serif);
+  font-family: var(--font-sans);
 }
 
 .grove-landing__brand {
@@ -52,24 +184,66 @@ body:has(.grove-landing) { overflow: hidden; }
   align-items: center;
   gap: 0.72rem;
   color: var(--factory-ink);
-  font-size: 1.35rem;
-  font-weight: 650;
-  letter-spacing: -0.045em;
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: -0.015em;
   text-decoration: none;
 }
-.grove-landing__brand img { width: 2rem; height: 2rem; object-fit: contain; }
-.grove-landing__nav { display: flex; align-items: center; gap: 0.3rem; padding: 0.25rem; border: 1px solid #42516a; border-radius: 999px; background: rgba(2, 10, 24, 0.88); backdrop-filter: blur(12px); }
+/* The brand sits in the hottest corner of the aura, where a pale tile and
+   white type would wash out. A tight contact shadow keeps the edge, a wide
+   soft one lifts it off the glow; neither is visible as a shadow. */
+.grove-landing__brand { text-shadow: 0 1px 2px rgba(40, 10, 0, 0.45), 0 2px 14px rgba(60, 16, 0, 0.35); }
+.grove-landing__brand img {
+  width: 1.7rem;
+  height: 1.7rem;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 1.5px rgba(40, 10, 0, 0.5)) drop-shadow(0 3px 10px rgba(60, 16, 0, 0.4));
+}
+.grove-landing__copy h1 { text-shadow: 0 2px 28px rgba(60, 16, 0, 0.3); }
+/* The header and hero share one compact control height and type scale. */
+.grove-landing__nav { display: flex; align-items: center; gap: 0.125rem; }
+/* Match the theme's final .mewbo-topnav rule, not its template utility defaults. */
 .grove-landing__nav a {
-  color: #ccd4e3;
-  border-radius: 999px;
-  padding: 0.55rem 0.88rem;
-  font-size: 0.9rem;
-  font-weight: 520;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--factory-control-height);
   text-decoration: none;
+  white-space: nowrap;
 }
-.grove-landing__nav a:hover { background: rgba(255,255,255,0.1); color: white; }
+/* Landing actions share the navigation's display role, not generic UI sans.
+   Keep typography separate from the boxed surfaces so neither can diverge. */
+.grove-landing__nav-link,
+.grove-landing__button,
+.grove-landing__nav-pill,
+.grove-landing__nav-cta {
+  font-family: var(--font-display);
+  font-size: var(--factory-control-font-size);
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: var(--leading-ui);
+  letter-spacing: normal;
+}
+.grove-landing__nav-link {
+  padding-inline: 0.75rem;
+  color: rgba(253, 246, 240, 0.9);
+  transition: color 150ms ease;
+}
+.grove-landing__nav-link:hover { color: #fff; }
+.grove-landing__nav-pill,
+.grove-landing__nav-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: var(--factory-control-height);
+  padding: 0 0.75rem;
+  margin-left: 0.5rem;
+}
+.grove-landing__nav-pill { padding: 0 0.75rem 0 0; gap: 0.375rem; }
+.grove-landing__nav-pill .grove-landing__button-icon { width: 1.8rem; }
 .grove-landing :is(a, button):focus-visible {
-  outline: 3px solid #84e8ff;
+  outline: 3px solid #ffb27a;
   outline-offset: 4px;
 }
 
@@ -78,6 +252,10 @@ body:has(.grove-landing) { overflow: hidden; }
   align-items: center;
   position: absolute;
   inset: 0;
+  /* The copy centres in the band below the header, not the whole viewport,
+     so the taller install card never climbs into the brand row. */
+  /* The heavier bottom pad lifts the column above centre on desktop. */
+  padding: clamp(3.5rem, 5vw, 5rem) 0 clamp(2rem, 12svh, 9rem);
 }
 .grove-landing__copy {
   position: relative;
@@ -88,7 +266,7 @@ body:has(.grove-landing) { overflow: hidden; }
      container: on a 2K monitor the old 1580px cap parked the copy 490px in
      with an empty band before it, while the visual ran to the page edge. */
   margin-left: 5vw;
-  padding: 0 0 5rem;
+  padding: 0;
 }
 .grove-landing__copy h1 {
   /* The <br> is the only break: "Your team's agents." must fit one line at
@@ -96,72 +274,272 @@ body:has(.grove-landing) { overflow: hidden; }
      its own. That keeps the visual's diagonal from ever meeting a fourth line. */
   max-width: none;
   margin: 0;
-  color: #fbfcff;
-  font-family: var(--font-display, "IBM Plex Serif", ui-serif, Georgia, serif);
-  font-size: clamp(2.6rem, 3.9vw, 4.9rem);
+  color: #fffaf5;
+  font-family: var(--font-display);
+  font-size: clamp(2.35rem, 4vw, 3rem);
   text-wrap: nowrap;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.02;
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+}
+/* A hand-drawn wavy underline, not a rule: it marks the word, it does not
+   read as a link. skip-ink keeps it clear of the descender-free glyphs. */
+.grove-landing__mark {
+  text-decoration: underline wavy var(--factory-ember);
+  text-decoration-thickness: 0.055em;
+  text-underline-offset: 0.2em;
+  text-decoration-skip-ink: none;
 }
 .grove-landing__copy p {
   max-width: 32rem;
   margin: clamp(1.45rem, 2.6svh, 2.6rem) 0 0;
   color: var(--factory-muted);
-  font-size: clamp(1rem, 1.1vw, 1.2rem);
-  font-weight: 430;
-  letter-spacing: -0.018em;
-  /* A taller viewport gets airier body copy; the copy column has the height
-     to spend, and a dense block under a large serif reads as an afterthought.
-     line-height must stay unitless, so this steps rather than scales. */
-  line-height: 1.6;
+  font-family: var(--font-body);
+  font-size: 1.1875rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  line-height: 1.5;
 }
-@media (min-width: 901px) and (min-height: 900px) { .grove-landing__copy p { line-height: 1.72; } }
-@media (min-width: 901px) and (min-height: 1200px) { .grove-landing__copy p { line-height: 1.8; } }
-/* The supported-tool marks. Each PNG is a finished 192px tile carrying its
-   own rounded shell, so the row supplies one square box per mark and nothing
-   else; it never redraws a shell the artwork already has. */
+/* Original brand artwork sits behind identical instrument windows. The
+   frame and glass are shared; the artwork's colours and proportions stay its own. */
 .grove-landing__support {
-  --support-tile: clamp(2.1rem, 2.4vw, 2.75rem);
+  --support-tile: clamp(2.75rem, 3.2vw, 3rem);
   display: flex;
   flex-wrap: wrap;
-  gap: clamp(0.5rem, 0.8vw, 0.8rem);
+  gap: clamp(0.5rem, 0.7vw, 0.7rem);
   margin: clamp(1.2rem, 2.4svh, 2rem) 0 0;
   padding: 0;
   list-style: none;
 }
 .grove-landing__support a {
+  position: relative;
   display: block;
   width: var(--support-tile);
   height: var(--support-tile);
-  border-radius: 22%;
-  opacity: 0.86;
-  transition: opacity 150ms ease, transform 150ms ease;
+  padding: 0;
+  overflow: hidden;
+  border: 2px solid var(--factory-control-edge);
+  border-radius: 0.55rem;
+  background: var(--support-surface, #0c0c0c);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: border-color 150ms ease, background 150ms ease;
 }
-.grove-landing__support a:hover { opacity: 1; transform: translateY(-2px); }
-.grove-landing__support img { display: block; width: 100%; height: 100%; }
-.grove-landing__actions { display: flex; flex-wrap: wrap; gap: 0.72rem; margin-top: clamp(1.6rem, 3svh, 2.8rem); }
+.grove-landing__support a::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 0.45rem;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.1), transparent 55%);
+  pointer-events: none;
+}
+.grove-landing__support a:hover { border-color: #bd9778; }
+.grove-landing__support-window {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: calc(0.55rem - 2px);
+}
+.grove-landing__support img {
+  position: absolute;
+  display: block;
+  /* Overscan only the artwork. The inner window clips the bleed and the
+     separate outer frame keeps its border clear of the image. */
+  inset: -6%;
+  width: 112%;
+  height: 112%;
+  max-width: none;
+  object-fit: cover;
+  border-radius: 0;
+}
+/* Install card: the reader copies a command without leaving the page. The
+   tabs are radios so switching needs no script and stays keyboard native;
+   each panel is a real <pre>, so a selection copies clean commands. */
+.grove-landing__copy { --install-radius: 0.75rem; }
+.grove-landing__install {
+  max-width: 32rem;
+  margin-top: clamp(1.1rem, 2.4svh, 1.8rem);
+  padding: 0.4rem;
+  border: 1px solid rgba(253, 246, 240, 0.15);
+  border-radius: calc(var(--install-radius) + 0.4rem);
+  background: #141210;
+}
+.grove-landing__install > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+/* One enclosure groups the controls and command; only the selected tab
+   gets an accent edge instead of three competing button outlines. */
+.grove-landing__install-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.4rem;
+  border-radius: var(--install-radius);
+  background: var(--factory-control);
+}
+.grove-landing__install-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  min-height: var(--factory-control-height);
+  padding: 0 0.85rem;
+  border: 2px solid transparent;
+  border-radius: var(--install-radius);
+  color: #ddd7d0;
+  background: var(--factory-control);
+  font-family: var(--font-display);
+  font-size: var(--factory-control-font-size);
+  font-weight: 400;
+  font-synthesis: none;
+  line-height: var(--leading-ui);
+  letter-spacing: normal;
+  cursor: pointer;
+  user-select: none;
+  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+.grove-landing__install-tab:hover { color: var(--factory-ink); background-color: var(--factory-control-active); border-color: #897260; }
+#grove-install-uv:checked ~ .grove-landing__install-tabs [for="grove-install-uv"],
+#grove-install-pipx:checked ~ .grove-landing__install-tabs [for="grove-install-pipx"],
+#grove-install-pip:checked ~ .grove-landing__install-tabs [for="grove-install-pip"] {
+  color: var(--factory-ink);
+  border-color: #b89473;
+  background-color: #24201c;
+}
+.grove-landing__install > input:focus-visible ~ .grove-landing__install-tabs .grove-landing__install-tab {
+  outline: none;
+}
+#grove-install-uv:focus-visible ~ .grove-landing__install-tabs [for="grove-install-uv"],
+#grove-install-pipx:focus-visible ~ .grove-landing__install-tabs [for="grove-install-pipx"],
+#grove-install-pip:focus-visible ~ .grove-landing__install-tabs [for="grove-install-pip"] {
+  outline: 3px solid #ffb27a;
+  outline-offset: 2px;
+}
+.grove-landing__install-card { container-type: inline-size; }
+.grove-landing__install-panel {
+  display: none;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 1rem;
+  row-gap: 0.2rem;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--install-radius);
+  background: rgba(253, 246, 240, 0.05);
+  color: var(--factory-ink);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+}
+#grove-install-uv:checked ~ .grove-landing__install-card [data-install="uv"],
+#grove-install-pipx:checked ~ .grove-landing__install-card [data-install="pipx"],
+#grove-install-pip:checked ~ .grove-landing__install-card [data-install="pip"] { display: grid; }
+/* Commands pin to the first column, so hiding a note never pulls the next
+   command up beside the previous one. */
+.grove-landing__install-panel code { grid-column: 1; font: inherit; color: inherit; background: none; padding: 0; }
+.grove-landing__install-note { color: rgba(205, 188, 174, 0.62); }
+.grove-landing__install-panel > .grove-landing__install-note:first-child { grid-column: 1 / -1; }
+.grove-landing__install-tool { color: var(--factory-ember); }
+/* A narrow column keeps the commands whole and drops the side notes. */
+@container (max-width: 25rem) {
+  .grove-landing__install-panel > .grove-landing__install-note:not(:first-child) { display: none; }
+}
+.grove-landing__install-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
+  padding: 0.55rem 0.5rem 0.25rem;
+  color: rgba(205, 188, 174, 0.8);
+  font-family: var(--font-body);
+  font-size: 0.9375rem;
+}
+.grove-landing__install-footer a {
+  color: var(--factory-ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.grove-landing__install-footer a:hover { color: #ffb27a; }
+.grove-landing__actions { display: flex; flex-wrap: wrap; gap: 0.72rem; margin-top: clamp(1.1rem, 2.4svh, 1.8rem); }
 .grove-landing__button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.85rem;
-  padding: 0.72rem 1.08rem;
-  border: 1px solid transparent;
-  border-radius: 0.82rem;
-  font-size: 0.92rem;
-  font-weight: 650;
-  line-height: 1;
+  min-height: var(--factory-control-height);
+  padding: 0 0.7rem 0 0;
+  gap: 0.4rem;
   text-decoration: none;
-  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
 }
-.grove-landing__button svg { width: 1.1em; height: 1.1em; flex: none; margin-right: .5em; }
-.grove-landing__button:hover { transform: translateY(-2px); }
-.grove-landing__button--primary { background: var(--factory-clay); color: #1c0c08; box-shadow: 0 9px 30px rgba(217, 119, 87, 0.22); }
-.grove-landing__button--primary:hover { background: #e88966; }
-.grove-landing__button--secondary { border-color: rgba(191, 209, 234, 0.24); background: rgba(10, 26, 48, 0.78); color: #edf2fa; }
-.grove-landing__button--secondary:hover { border-color: rgba(191, 209, 234, 0.6); background: rgba(30, 52, 81, 0.92); }
-.grove-landing__button--secondary span { margin-right: 0.45rem; color: #a9b7cf; font-size: 1.1rem; }
+.grove-landing__button,
+.grove-landing__nav-pill,
+.grove-landing__nav-cta {
+  position: relative;
+  overflow: hidden;
+  background-clip: border-box;
+  border: 2px solid var(--factory-control-edge);
+  border-radius: 0.4rem;
+  color: var(--factory-ink);
+  background: var(--factory-control);
+  background-image: linear-gradient(rgba(255, 255, 255, 0.035), transparent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+.grove-landing__actions .grove-landing__button { border-radius: var(--install-radius); box-shadow: none; }
+.grove-landing__button-icon {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  flex: none;
+  width: 2.125rem;
+  border-right: 1px solid var(--factory-control-edge);
+  /* The outer control clips this bay to its single continuous curved edge. */
+  border-radius: 0;
+  background: #090909;
+}
+.grove-landing__button-icon svg {
+  display: block;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.grove-landing__nav-pill .grove-landing__button-icon svg { width: 1rem; height: 1rem; }
+.grove-landing__button:hover,
+.grove-landing__nav-pill:hover,
+.grove-landing__nav-cta:hover {
+  background-color: var(--factory-control-active);
+  border-color: #897260;
+}
+.grove-landing__button:active,
+.grove-landing__nav-pill:active,
+.grove-landing__nav-cta:active {
+  background-color: #0f0f0f;
+}
+.grove-landing__button--primary,
+.grove-landing__nav-cta {
+  border-color: #b89473;
+  background-color: #24201c;
+}
+/* The warm edge identifies the primary control without painting its face orange. */
+.grove-landing__button--primary::before,
+.grove-landing__nav-cta::before {
+  content: "";
+  position: absolute;
+  inset: 0.55rem auto 0.55rem 0;
+  width: 2px;
+  border-radius: 1px;
+  background: #edb887;
+  box-shadow: 0 0 7px rgba(237, 184, 135, 0.18);
+  pointer-events: none;
+}
+.grove-landing__button--secondary { color: #ddd7d0; }
 
 .grove-landing__visual {
   position: absolute;
@@ -171,6 +549,10 @@ body:has(.grove-landing) { overflow: hidden; }
   /* The diagonal is the art direction; it starts at the copy's right edge so
      no band of empty background sits between the two halves. */
   clip-path: polygon(26% 0, 100% 0, 100% 100%, 0 100%);
+  /* Feather the set into the copy's background rather than cutting a visible
+     diagonal through the floor and the nearest machine. */
+  -webkit-mask-image: linear-gradient(105deg, transparent 16%, #000 29%);
+  mask-image: linear-gradient(105deg, transparent 16%, #000 29%);
 }
 .grove-factory-scene { position: absolute; inset: 0; }
 .grove-factory-scene__canvas {
@@ -187,24 +569,53 @@ body:has(.grove-landing) { overflow: hidden; }
   .grove-landing { height: 100svh; min-height: 0; display: flex; flex-direction: column; }
   .grove-landing__hero { position: static; inset: auto; }
   .grove-landing__header { width: calc(100% - 2.5rem); padding: 1rem 0 .5rem; flex: none; }
-  .grove-landing__brand { font-size: 1.1rem; }
   .grove-landing__brand img { width: 1.7rem; height: 1.7rem; }
-  .grove-landing__nav a { padding: .45rem .65rem; font-size: .8rem; }
-  .grove-landing__hero { display: flex; flex-direction: column; align-items: stretch; flex: 1; min-height: 0; }
-  .grove-landing__copy { flex: none; width: auto; max-width: none; margin: 0; padding: clamp(.5rem, 2svh, 1.4rem) 1.25rem .75rem; }
-  .grove-landing__copy h1 { max-width: 15ch; font-size: clamp(2rem, min(8.5vw, 5.5svh), 3.8rem); line-height: 1.02; text-wrap: balance; }
-  .grove-landing__copy p { max-width: 38rem; margin-top: .8rem; font-size: clamp(.85rem, 2svh, 1rem); line-height: 1.45; }
-  .grove-landing__support { --support-tile: 1.9rem; gap: .5rem; margin-top: .85rem; }
-  .grove-landing__actions { margin-top: .9rem; gap: .6rem; }
-  .grove-landing__button { min-height: 2.75rem; padding: .7rem .65rem; font-size: .8rem; }
-  .grove-landing__visual { position: relative; inset: auto; flex: 1; min-height: 0; clip-path: none; mask-image: linear-gradient(to bottom, transparent, #000 10%); }
+  .grove-landing__nav .grove-landing__nav-link { display: none; }
+  .grove-landing__nav-cta { padding: 0 .65rem; }
+  /* Copy and scene are one block. The copy sits a comfortable step below the
+     header rather than under it, and the scene rises beneath the buttons
+     (its fade covers the overlap) so no dead band opens between them. */
+  .grove-landing__hero { display: flex; flex-direction: column; align-items: stretch; flex: 1; min-height: 0; padding: 0; }
+  .grove-landing__copy { flex: none; width: auto; max-width: none; margin: 0; padding: clamp(1.5rem, 7svh, 4.5rem) 1.25rem 0; }
+  .grove-landing__copy h1 { max-width: 15ch; font-size: clamp(1.7rem, min(8.5vw, 5.5svh), 3.8rem); line-height: 1.12; text-wrap: balance; }
+  /* Each group gets its own breath: headline, then a readable paragraph,
+     then the marks, then the actions. Packed at under a line apart they read
+     as one block of mixed type. */
+  .grove-landing__copy p { max-width: 38rem; margin-top: clamp(1rem, 2.4svh, 1.4rem); font-size: 1.0625rem; line-height: 1.5; }
+  .grove-landing__support { --support-tile: 2.5rem; gap: .45rem; margin-top: clamp(1.1rem, 2.6svh, 1.5rem); }
+  /* On mobile, installation is a reminder rather than the main task. Keep
+     the first command usable; desktop retains the explanations and extras. */
+  .grove-landing__install { max-width: 22rem; margin-top: 1rem; padding: .25rem; border-radius: calc(var(--install-radius) + .25rem); }
+  .grove-landing__install-tabs { gap: .125rem; margin-bottom: .25rem; }
+  .grove-landing__install-tab { min-width: 0; min-height: 1.5rem; padding: 0 .5rem; font-family: var(--font-mono); font-size: .75rem; }
+  .grove-landing__install-panel { padding: .5rem .625rem; font-size: .6875rem; line-height: 1.5; row-gap: 0; }
+  .grove-landing__install-panel > .grove-landing__install-note,
+  .grove-landing__install-panel > code ~ code,
+  .grove-landing__install-footer { display: none; }
+  .grove-landing__actions { margin-top: clamp(1.2rem, 2.8svh, 1.6rem); gap: .7rem; }
+  .grove-landing__button { padding: 0 .6rem 0 0; gap: .45rem; }
+  .grove-landing__visual { position: relative; z-index: 0; inset: auto; flex: 1; min-height: 0; margin-top: clamp(-3.5rem, -5svh, -1.5rem); clip-path: none; -webkit-mask-image: linear-gradient(to bottom, transparent, #000 14%); mask-image: linear-gradient(to bottom, transparent, #000 14%); }
+}
+@media (max-width: 360px) {
+  .grove-landing { --factory-control-font-size: 1rem; }
+  .grove-landing__brand { gap: .45rem; }
+  .grove-landing__brand img { width: 1.45rem; height: 1.45rem; }
+  .grove-landing__nav-cta { padding-inline: .5rem; }
+  .grove-landing__nav-pill .grove-landing__button-icon { width: 1.8rem; }
+  .grove-landing__actions { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  .grove-landing__button { justify-content: flex-start; gap: .3rem; padding-right: .3rem; }
+  .grove-landing__button-icon { width: 1.75rem; }
 }
 @media (max-width: 900px) and (max-height: 500px) and (orientation: landscape) {
   .grove-landing__hero { flex-direction: row; }
   .grove-landing__copy { width: 52%; padding-top: .5rem; }
   .grove-landing__copy h1 { font-size: 2rem; }
   .grove-landing__copy p { font-size: .8rem; margin-top: .5rem; }
-  .grove-landing__support { display: none; }
+  .grove-landing__support, .grove-landing__install { display: none; }
   .grove-landing__actions { margin-top: .6rem; }
 }
-@media (prefers-reduced-motion: reduce) { .grove-landing__button, .grove-landing__support a { transition: none; } .grove-landing__button:hover, .grove-landing__support a:hover { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .grove-landing__button, .grove-landing__nav-pill, .grove-landing__nav-cta, .grove-landing__support a, .grove-landing__install-tab { transition: none; }
+  .grove-landing__button:hover, .grove-landing__support a:hover { transform: none; }
+  .grove-landing__aura-drift::before, .grove-landing__grain { animation: none; }
+}
