@@ -36,6 +36,15 @@ class DemoConfig:
     status 127" and never plants a live pane, and every ``devcontainer up`` also
     makes the whole capture run minutes slower for no visual difference. Host
     runtime is what every screenshot in the pipeline has always assumed.
+
+    ``native`` is pinned OFF on every stub, for the same reason. The engine's
+    default flipped to a Grove-owned native session, which launches the agent
+    headless and speaks its protocol, and a stub script that prints and sleeps
+    answers no protocol at all. Every such workspace
+    comes up errored and offline: the list shows ``error`` on every card, the
+    dashboard renders no cards, and the sessions browser finds no sessions. The
+    terminal launch is the one the stubs, the tmux pane and the planted
+    transcripts were all written for.
     """
 
     STUBS: Final[dict[str, str]] = {
@@ -44,14 +53,24 @@ class DemoConfig:
         "aider": "stub-aider.sh",
     }
 
-    def __init__(self, world: DemoWorld) -> None:
+    def __init__(self, world: DemoWorld, *, daemon_url: str = "") -> None:
         self._world = world
+        self._daemon_url = daemon_url
 
     def resolve(self) -> GroveConfig:
+        """The demo's config, naming the capture's own daemon when it has one.
+
+        ``hooks.daemon_url`` is the one address a manager's clients reach the
+        daemon at, and the TUI's Activity dashboard reads nothing BUT that
+        daemon's `/events` stream. Left at the default loopback port, a capture
+        run finds no daemon on CI (an empty wall) and the developer's REAL one
+        on a workstation (their fleet, in a committed screenshot).
+        """
         return GroveConfig.model_validate(
             {
                 "tmux": {"session_prefix": "grove-", "activity_threshold_seconds": 3},
                 "container": {"enabled": False},
+                "hooks": {"daemon_url": self._daemon_url},
                 "usage": {
                     "pricing": self._world.pricing.as_config(),
                     "quota": {"profiles": self.quota_profiles()},
@@ -61,17 +80,20 @@ class DemoConfig:
                         "name": "claude",
                         "command": str(_AGENTS_DIR / self.STUBS["claude"]),
                         "kind": "claude_code",
+                        "native": False,
                         "description": "Anthropic Claude Code",
                     },
                     {
                         "name": "codex",
                         "command": str(_AGENTS_DIR / self.STUBS["codex"]),
                         "kind": "codex",
+                        "native": False,
                         "description": "OpenAI Codex CLI",
                     },
                     {
                         "name": "aider",
                         "command": str(_AGENTS_DIR / self.STUBS["aider"]),
+                        "native": False,
                         "description": "Aider AI pair-programmer",
                     },
                     {"name": "shell", "command": "$SHELL", "description": "Plain shell"},

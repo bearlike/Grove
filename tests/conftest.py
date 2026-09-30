@@ -27,7 +27,7 @@ from grove.core import tmux as tmux_mod
 from grove.core.agents.base import AgentVersionProbe
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.codex import CodexAdapter
-from grove.core.config import GroveConfig
+from grove.core.config import DeclaredEnvVars, GroveConfig
 from grove.core.container_infra import ProjectInfra
 from grove.core.container_netfilter import NetfilterPayload
 from grove.core.container_runtime import DockerCli
@@ -138,6 +138,19 @@ def _offline_release_check(monkeypatch: pytest.MonkeyPatch) -> None:
         "grove.core.release.fetch_latest_release_tag",
         lambda repo, *, installed="": None,
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_statusline_quota_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may start the status line's detached quota refresh.
+
+    Any test that drives ``grove-agent-hook --statusline`` renders, and a render
+    with no fresh snapshot spawns a real ``python -m grove.statusline`` child
+    that loads the user's config and can contact a quota provider. A test that
+    means to assert on the spawn injects its own ``spawn`` into
+    ``QuotaSnapshot``, which bypasses this seam.
+    """
+    monkeypatch.setattr("grove.statusline.spawn_refresh", lambda path: None)
 
 
 @pytest.fixture(autouse=True)
@@ -298,6 +311,27 @@ def _no_inherited_phase_file(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_inherited_tmux_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test inherits the DEVELOPER's tmux server through ``$TMUX``.
+
+    tmux addresses the socket named in ``$TMUX`` before it consults
+    ``TMUX_TMPDIR``, so a fixture that isolates a test's server by pointing
+    ``TMUX_TMPDIR`` at a tmp dir isolates NOTHING when the suite runs inside a
+    tmux pane. Every Grove agent runs inside one. On 2026-09-23 an agent ran the
+    suite from its own pane, and ``tests/client/test_client_http.py``'s teardown
+    ``tmux kill-server`` reached the host's real server. It killed every
+    workspace, terminal and native session on the machine, including the agent
+    that ran the tests. CI has no ``$TMUX``, so this bites only on the one kind
+    of machine where it destroys real work.
+
+    ``TMUX_PANE`` goes with it for the same reason: a test must never address a
+    pane it did not create.
+    """
+    for name in ("TMUX", "TMUX_PANE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_inherited_mailbox_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test inherits the DEVELOPER's own mailbox credentials.
 
@@ -314,6 +348,23 @@ def _no_inherited_mailbox_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     means the mailbox branch sets all three itself.
     """
     for name in ("GROVE_MAILBOX_TOKEN", "GROVE_MAILBOX_URL", "GROVE_MAILBOX_SOCKET"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_declared_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test inherits the DEVELOPER's declared per-field overrides.
+
+    A field's ``x-env-var`` (``GROVE_GITEA_BASE_URL`` and friends) is an
+    always-on cascade layer that outranks the config file, so a host that
+    exports one silently overrides every fixture's config. Measured 2026-09-23:
+    a real ``GROVE_GITEA_BASE_URL`` replaced a fixture's
+    ``https://gitea.example.com`` and three ticket-attach tests failed with "no
+    enabled ticket provider owns …". It passes in CI, where nothing exports it.
+    Enumerated from the schema rather than listed, so a newly declared field is
+    covered the day it lands. A test that means the override sets it itself.
+    """
+    for name in DeclaredEnvVars.names(GroveConfig):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -435,6 +486,12 @@ def _isolated_agent_hook_paths(
     # so redirect the root as well as its individually named siblings. Tests
     # requesting `tmp_state_dir` override this accessor with their own state.
     monkeypatch.setattr("grove.core.paths.user_state_path", lambda: base / "state.json")
+    # The daemon's session store. A native worker, native steering and every
+    # local client mint a session into it, so a test driving one without asking
+    # for `tmp_state_dir` wrote into the developer's REAL auth.json — 399 live
+    # sessions for the fixture workspace `native-worker-aaaaaaaa` on one host,
+    # each listed as a paired device.
+    monkeypatch.setattr("grove.core.paths.user_auth_path", lambda: base / "auth.json")
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: base / "agent-sidecars")
     monkeypatch.setattr(
         "grove.core.paths.agent_hooks_settings_path",

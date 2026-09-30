@@ -33,6 +33,11 @@ export const GROVE_DATA_PART = {
   compaction: "data-compaction",
 } as const;
 
+/** The `metadata.custom` key on a turn's answer message: the turn's
+ * `started_at`, which is both "this message ends a turn" and the address the
+ * daemon rates that turn by. */
+export const GROVE_TURN_ANSWER = "groveTurnAnswer";
+
 /** The bare `data.by_name` render keys for {@link GROVE_DATA_PART}. */
 export const GROVE_DATA_NAME = {
   note: "note",
@@ -143,8 +148,29 @@ const COMPLETE = { type: "complete", reason: "stop" } as const;
  */
 const turnMessageCache = new WeakMap<
   SessionTurnView,
-  { startIndex: number; messages: ThreadMessageLike[] }
+  { startIndex: number; gap: boolean; messages: ThreadMessageLike[] }
 >();
+
+/** The `metadata.custom` key a turn head carries when a time separator belongs
+ * above it. The head's own `createdAt` is the instant the separator names. */
+export const GROVE_TIME_GAP = "groveTimeGap";
+
+/** Consecutive turns further apart than this get a time separator between them. */
+const TIME_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * Whether a separator belongs above a turn that started at `current`.
+ *
+ * The first held turn always gets one when its time is known, so the reader
+ * learns when the visible transcript begins. An unknown time on either side
+ * gets none: assistant-ui fills a missing `createdAt` with "now", and a gap
+ * measured against that would be invented.
+ */
+function opensTimeGap(previous: Date | undefined | null, current: Date | undefined): boolean {
+  if (!current) return false;
+  if (previous === null) return true;
+  return previous !== undefined && current.getTime() - previous.getTime() > TIME_GAP_MS;
+}
 
 /**
  * Flatten the wire's oldest-first turns into assistant-ui messages.
@@ -167,10 +193,16 @@ export function messagesFromTurns(turns: readonly SessionTurnView[]): ThreadMess
   const messages: ThreadMessageLike[] = [];
   const toolCallIds = new Set<string>();
   let nextIndex = 0;
+  // `null` marks "no previous turn", distinct from a previous turn whose time
+  // is unknown (`undefined`).
+  let previousAt: Date | undefined | null = null;
 
   for (const turn of turns) {
+    const startedAt = parseTimestamp(turn.started_at);
+    const gap = opensTimeGap(previousAt, startedAt);
+    previousAt = startedAt;
     const cached = turnMessageCache.get(turn);
-    if (cached && cached.startIndex === nextIndex) {
+    if (cached && cached.startIndex === nextIndex && cached.gap === gap) {
       messages.push(...cached.messages);
       // Cache hits must claim their existing ids before a new tail is built:
       // rebuilding them just to learn those ids would remount an unchanged
@@ -181,8 +213,8 @@ export function messagesFromTurns(turns: readonly SessionTurnView[]): ThreadMess
     }
 
     const startIndex = nextIndex;
-    const turnMessages = buildTurnMessages(turn, startIndex, toolCallIds);
-    turnMessageCache.set(turn, { startIndex, messages: turnMessages });
+    const turnMessages = buildTurnMessages(turn, startIndex, toolCallIds, gap);
+    turnMessageCache.set(turn, { startIndex, gap, messages: turnMessages });
     messages.push(...turnMessages);
     nextIndex = startIndex + turnMessages.length;
   }
@@ -216,6 +248,7 @@ function buildTurnMessages(
   turn: SessionTurnView,
   startIndex: number,
   toolCallIds: Set<string>,
+  gap: boolean,
 ): ThreadMessageLike[] {
   const messages: ThreadMessageLike[] = [];
   let nextIndex = startIndex;
@@ -228,19 +261,18 @@ function buildTurnMessages(
   // carries. The reader then sees which files went with which message instead
   // of a paragraph of paths at the bottom of it.
   const body = turn.user_text ? splitAttachments(turn.user_text) : null;
-  messages.push(
-    body
-      ? {
-          role: "user",
-          content: body.text ? [{ type: "text" as const, text: body.text }] : [],
-          ...(body.attachments.length > 0
-            ? { attachments: messageAttachments(body.attachments) }
-            : {}),
-          id: nextId(),
-          ...(createdAt ? { createdAt } : {}),
-        }
-      : dataMessage(nextId(), GROVE_DATA_PART.continuation, {}, createdAt),
-  );
+  const head: ThreadMessageLike = body
+    ? {
+        role: "user",
+        content: body.text ? [{ type: "text" as const, text: body.text }] : [],
+        ...(body.attachments.length > 0
+          ? { attachments: messageAttachments(body.attachments) }
+          : {}),
+        id: nextId(),
+        ...(createdAt ? { createdAt } : {}),
+      }
+    : dataMessage(nextId(), GROVE_DATA_PART.continuation, {}, createdAt);
+  messages.push(gap ? { ...head, metadata: { custom: { [GROVE_TIME_GAP]: true } } } : head);
 
   // Held open across consecutive `tool` entries so one Read/Bash/Edit run is
   // one message with N parts rather than N messages.
@@ -386,7 +418,26 @@ function buildTurnMessages(
   }
   flushToolRun();
 
+  // The turn's ANSWER — its last assistant text — is the one message that
+  // carries the turn's action bar, because a Grove turn is many messages and a
+  // bar under every tool run is noise. It carries the turn's `started_at`,
+  // the key the daemon rates a turn by. A turn with no reported time carries
+  // nothing, so no control is offered for a rating that could land nowhere.
+  const answer = messages.findLastIndex(
+    (message) => message.role === "assistant" && isTextOnly(message),
+  );
+  if (answer >= 0 && turn.started_at) {
+    messages[answer] = {
+      ...messages[answer]!,
+      metadata: { custom: { [GROVE_TURN_ANSWER]: turn.started_at } },
+    };
+  }
+
   return messages;
+}
+
+function isTextOnly(message: ThreadMessageLike): boolean {
+  return Array.isArray(message.content) && message.content.every((part) => part.type === "text");
 }
 
 /** A `tool-call` part before its id is assigned. `toolCallId` is optional here

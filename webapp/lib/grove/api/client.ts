@@ -40,6 +40,7 @@ import type {
   GalleryItemView,
   GalleryPreviewUploadRequest,
   GalleryPreviewView,
+  TurnFeedbackRequest,
 } from "./types";
 import type { WorkspacePanelView } from "./panels";
 import type { SubagentFleetData } from "./fleet";
@@ -460,6 +461,17 @@ export class GroveClient {
   }
   async interrupt(id: string): Promise<void> {
     return this.post(`/workspaces/${encodeURIComponent(id)}/interrupt`);
+  }
+  /** Rate one turn; the daemon records it as Langfuse scores on the turn's trace. */
+  async submitTurnFeedback(
+    id: string,
+    sessionId: string,
+    feedback: TurnFeedbackRequest,
+  ): Promise<void> {
+    return this.post(
+      `/workspaces/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/feedback`,
+      feedback,
+    );
   }
   /** Deliver one named tmux key to the workspace's live agent pane. */
   async sendKey(id: string, key: SendKey): Promise<void> {

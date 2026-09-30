@@ -59,7 +59,14 @@ from loguru import logger
 
 from grove.core import paths
 from grove.core.agents.brief import AgentBrief
-from grove.core.agents.model import AgentActivityState, AgentQuestion, ContextWindow, NativeFacts
+from grove.core.agents.model import (
+    AgentActivityState,
+    AgentQuestion,
+    ContextWindow,
+    NativeFacts,
+    NativeOperation,
+)
+from grove.statusline import context_usage
 
 if TYPE_CHECKING:
     # Annotation-only (postponed annotations): the adoption seam composes
@@ -193,9 +200,9 @@ _DAEMON_URL_FLAG: Final = "--daemon-url"
 # The statusLine arm of the same entry point. Claude Code invokes the configured
 # ``statusLine`` command after every turn with a JSON payload on stdin that
 # carries ``context_window`` — the one place the harness states how full the
-# model's window is. Grove reads that arm to fold the number into the sidecar
-# and prints NOTHING, so it never competes with a user's own statusline for a
-# terminal row (the container decor script is the one that draws).
+# model's window is. Grove reads that arm to fold the number into the sidecar.
+# The row itself is drawn by `grove.hook_producer` through `grove.statusline`,
+# because the registration replaces the user's own statusline for the pane.
 _STATUSLINE_FLAG: Final = "--statusline"
 
 # The push is an optimization over a sidecar that is already on disk, so it
@@ -324,6 +331,12 @@ class HookRecord:
                     "subagents_spawned": self.native.subagents_spawned,
                     "subagents_completed": self.native.subagents_completed,
                     "subagents_failed": self.native.subagents_failed,
+                    "operation": (
+                        self.native.operation.to_json()
+                        if self.native.operation is not None
+                        else None
+                    ),
+                    "compact_error": self.native.compact_error,
                 }
                 if self.native is not None
                 else None
@@ -838,6 +851,8 @@ class ClaudeHook:
         facts = _native_from_json(body)
         if not isinstance(session_id, str) or not session_id or facts is None:
             return
+        assert isinstance(body, dict)  # _native_from_json returns None otherwise
+        stated = frozenset(key for key in _CLEARABLE_FACTS if key in body)
         state = body.get("context_state") if isinstance(body, dict) else None
         context = _context_from_facts(body) if state == "native_control" else None
         # An ordinary cost/exit update carries no context claim and preserves a
@@ -855,6 +870,7 @@ class ClaudeHook:
             clear_context=state == "clear"
             or legacy_context
             or (state == "native_control" and context is None),
+            stated=stated,
             sidecar_dir=sidecar_dir,
         )
 
@@ -866,6 +882,7 @@ class ClaudeHook:
         *,
         context: ContextWindow | None = None,
         clear_context: bool = False,
+        stated: frozenset[str] = frozenset(),
         sidecar_dir: Path,
     ) -> HookRecord:
         """Merge stream facts into a native session's sidecar, field by field.
@@ -878,7 +895,7 @@ class ClaudeHook:
         agent is doing now.
         """
         prior = cls._read(session_id, sidecar_dir=sidecar_dir)
-        merged = _merge_native(prior.native if prior is not None else None, facts)
+        merged = _merge_native(prior.native if prior is not None else None, facts, stated=stated)
         # A native context is trustworthy only when this current owner stated a
         # control summary. An older worker's ordinary facts may arrive after one;
         # clear rather than letting its cumulative result usage inherit a marker.
@@ -1366,7 +1383,7 @@ class ClaudeHook:
 
     @classmethod
     def statusline_command(cls, spool_dir: Path) -> str:
-        """The ``statusLine`` command that feeds the sidecar and draws nothing.
+        """The ``statusLine`` command that feeds the sidecar and draws the status row.
 
         Same capability probe as :meth:`hook_command` — the entry point where it
         exists, the spool where it does not — with one flag telling the entry
@@ -1470,9 +1487,9 @@ def run_hook_from_stdin(argv: Sequence[str] | None = None) -> int:
     if not isinstance(payload, dict):
         return 0
     if _STATUSLINE_FLAG in args:
-        # The statusLine arm: fold the window, print nothing (an empty line is
-        # what keeps the terminal row free), never push — the next hook event
-        # or poll tick carries it, and this fires once per turn per session.
+        # The statusLine arm: fold the window and never push — the next hook
+        # event or poll tick carries it. Drawing the row is the producer's job
+        # (`grove.hook_producer`), which is the process Claude Code runs.
         ClaudeHook.record_statusline(
             payload,
             sidecar_dir=paths.agent_sidecar_dir(),
@@ -1604,6 +1621,8 @@ def _native_from_json(data: object) -> NativeFacts | None:
         subagents_spawned=_int(data.get("subagents_spawned")),
         subagents_completed=_int(data.get("subagents_completed")),
         subagents_failed=_int(data.get("subagents_failed")),
+        operation=NativeOperation.from_json(data.get("operation")),
+        compact_error=_opt_str(data.get("compact_error")),
     )
 
 
@@ -1625,11 +1644,26 @@ def _context_from_facts(data: object) -> ContextWindow | None:
     return ContextWindow(size=size, used=used)
 
 
-def _merge_native(prior: NativeFacts | None, update: NativeFacts) -> NativeFacts:
-    """``update``'s stated fields over ``prior``'s; an unstated field keeps the old value."""
+#: Facts that are SET OR CLEARED rather than accumulated: an owner states
+#: ``None`` for them on purpose (the compaction ended, the retry succeeded), so
+#: the merge reads KEY PRESENCE in the drop for these and value-presence for the
+#: rest. Reading ``None`` as "unstated" here would pin "Compacting…" forever.
+_CLEARABLE_FACTS: Final[frozenset[str]] = frozenset({"operation", "compact_error"})
+
+
+def _merge_native(
+    prior: NativeFacts | None, update: NativeFacts, *, stated: frozenset[str] = frozenset()
+) -> NativeFacts:
+    """``update``'s stated fields over ``prior``'s; an unstated field keeps the old value.
+
+    ``stated`` names the clearable fields the drop carried as keys, so an
+    explicit ``null`` clears them while their absence carries them forward.
+    """
     if prior is None:
         return update
     return NativeFacts(
+        operation=update.operation if "operation" in stated else prior.operation,
+        compact_error=(update.compact_error if "compact_error" in stated else prior.compact_error),
         cost_usd=update.cost_usd if update.cost_usd is not None else prior.cost_usd,
         ttft_ms=update.ttft_ms if update.ttft_ms is not None else prior.ttft_ms,
         turn_duration_ms=(
@@ -1662,35 +1696,15 @@ def _merge_native(prior: NativeFacts | None, update: NativeFacts) -> NativeFacts
 def _context_from_statusline(payload: dict[str, Any]) -> ContextWindow | None:
     """``context_window`` off a statusLine payload, or ``None`` until it is measured.
 
-    Measured 2026-09-14 on Claude Code 2.1.270: ``context_window_size`` is
-    present from the first invocation (before any request), while
-    ``current_usage`` is ``null`` and ``used_percentage`` ``null`` until the
-    first request completes — then ``current_usage`` carries the LAST request's
-    four token classes, all of which occupy the window. So the window is the
-    sum of the four, and absence of ``current_usage`` is "not measured yet",
-    never zero. ``used_percentage`` is deliberately not read: it is derived from
-    the same numbers and rounding it here would be a second copy of one rule.
+    The rule itself is :func:`grove.statusline.context_usage`, the same one the
+    rendered status row reads, so the terminal and every dashboard publish one
+    number. This only wraps it in the sidecar's type.
     """
-    window = payload.get("context_window")
-    if not isinstance(window, dict):
+    measured = context_usage(payload)
+    if measured is None:
         return None
-    size = window.get("context_window_size")
-    usage = window.get("current_usage")
-    if not _measured_int(size) or size <= 0 or not isinstance(usage, dict):
-        return None
-    parts = [
-        usage.get(key)
-        for key in (
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_read_input_tokens",
-        )
-    ]
-    counted = [part for part in parts if _measured_int(part)]
-    if not counted:
-        return None
-    return ContextWindow(size=size, used=sum(counted))
+    used, size = measured
+    return ContextWindow(size=size, used=used)
 
 
 def _truncate_message(text: str, cap: int = _LAST_MESSAGE_CAP) -> str:

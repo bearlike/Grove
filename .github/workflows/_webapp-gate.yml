@@ -42,8 +42,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: webapp/package-lock.json
       - name: Install
         working-directory: webapp
         run: npm ci
@@ -57,12 +55,7 @@ jobs:
       # drift and is really a missing interpreter. Installed unconditionally:
       # the cost is seconds and gating it on the `gates` input would leave a
       # subset run that happens to include codegen silently broken.
-      - uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-      - name: Install Python deps (for codegen:check)
-        run: uv sync --frozen --group dev
+      - uses: ./.github/actions/setup-python-env
 
       - name: tsc --noEmit
         if: ${{ !cancelled() && (inputs.gates == 'all' || contains(format(',{0},', inputs.gates), ',typecheck,')) }}

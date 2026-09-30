@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { branchPlanFor, buildCreateRequest, deriveTitle } from "@/lib/grove/adapters/launch";
+import { branchPlanFor, buildCreateRequest, deriveTitle, newTitleSalt } from "@/lib/grove/adapters/launch";
 import type { LaunchState, LaunchValues } from "@/components/grove/launch/launch-state";
 
 const values: LaunchValues = {
@@ -65,6 +65,23 @@ describe("deriveTitle", () => {
 
   it("stays inside the wire limit however long the brief is", () => {
     expect(deriveTitle("x".repeat(50_000)).length).toBeLessThanOrEqual(120);
+  });
+
+  it("gives the SAME brief a different name under a different salt", () => {
+    // Two launches of one brief used to share a title, so a second "fix the
+    // tests" was indistinguishable from the first on every list.
+    const first = deriveTitle("Fix the tests", newTitleSalt());
+    const second = deriveTitle("Fix the tests", newTitleSalt());
+    expect(first).toMatch(/^t[0-9a-f]{9}$/);
+    expect(second).not.toBe(first);
+    // A salt is a draft's identity: one draft previews and submits one name.
+    expect(deriveTitle("Fix the tests", "s1")).toBe(deriveTitle("Fix the tests", "s1"));
+  });
+
+  it("submits the name the preview showed, salt included", () => {
+    const request = buildCreateRequest(state(), "Fix the tests", [], "draft-salt");
+    expect(request.title).toBe(deriveTitle("Fix the tests", "draft-salt"));
+    expect(request.title).not.toBe(deriveTitle("Fix the tests"));
   });
 
   it("ignores surrounding whitespace so a stray newline is not a new name", () => {

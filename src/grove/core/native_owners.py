@@ -35,7 +35,7 @@ class OwnerUnavailable(GroveError):
 
 # Everything a worker can be told to do. `steer` submits text as the next user
 # input; the rest go to the provider's own control channel.
-ControlOp = Literal["steer", "interrupt", "set_model", "answer", "compact", "command"]
+ControlOp = Literal["steer", "interrupt", "set_model", "answer", "compact", "command", "macro"]
 
 
 @dataclass(slots=True, frozen=True)

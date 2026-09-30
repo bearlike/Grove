@@ -62,7 +62,13 @@ const TITLE_DIGEST_PREFIX = "t";
  * summary; for a pasted stack trace, a wrapped paragraph or a sentence that
  * starts with "So I was thinking", it produces a name nobody would have
  * written. A digest is at least honest about being a machine-assigned handle,
- * it is stable for identical briefs, and it slugs cleanly into a worktree path.
+ * and it slugs cleanly into a worktree path.
+ *
+ * **The digest is SALTED per draft** (`newTitleSalt`), because an unsalted one
+ * gave two launches of the same brief the same name — a second "fix the tests"
+ * was indistinguishable from the first on every surface that lists by title.
+ * The composer holds one salt per draft, so the name shown under the input is
+ * the name that gets submitted, and rotates it once a create lands.
  *
  * **This is a DEFAULT, and it is only defensible because renaming is one
  * right-click away** — the rail's own menu writes `title`/`description` through
@@ -74,10 +80,22 @@ const TITLE_DIGEST_PREFIX = "t";
  * name live under the input as you type. Nothing here is a security boundary;
  * it is a short stable handle.
  */
-export function deriveTitle(prompt: string): string {
+export function deriveTitle(prompt: string, salt = ""): string {
   const text = prompt.trim();
   if (!text) return "Untitled task";
-  return TITLE_DIGEST_PREFIX + Md5.hashStr(text).slice(0, TITLE_DIGEST_LENGTH);
+  const seed = salt ? `${salt}\n${text}` : text;
+  return TITLE_DIGEST_PREFIX + Md5.hashStr(seed).slice(0, TITLE_DIGEST_LENGTH);
+}
+
+/**
+ * One draft's title salt: the time it was minted plus a random part.
+ *
+ * `Math.random` rather than `crypto.randomUUID`, which exists only in a secure
+ * context and so is absent on a plain-HTTP LAN deployment; the salt separates
+ * names, it guards nothing.
+ */
+export function newTitleSalt(): string {
+  return `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
 }
 
 /** Convert the form's branch vocabulary into the engine's discriminated wire shape. */
@@ -117,9 +135,10 @@ export function buildCreateRequest(
   state: LaunchState,
   prompt: string,
   attachments: readonly StagedAttachment[] = [],
+  titleSalt = "",
 ): CreateWorkspaceRequest {
   const { values, touched } = state;
-  const title = values.titleOverride ?? deriveTitle(prompt);
+  const title = values.titleOverride ?? deriveTitle(prompt, titleSalt);
   if (!values.agentName) throw new RangeError("Choose an agent before creating a workspace");
   if (!values.repoRoot) throw new RangeError("Choose a project before creating a workspace");
   if (!title) throw new RangeError("Workspace title must not be empty");

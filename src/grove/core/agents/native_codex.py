@@ -184,6 +184,15 @@ class CodexNativeOwner:
         del name
         return False
 
+    async def run_command(self, command: str) -> bool:
+        """No named-command verb, so nothing to wait on: a Grove command refuses here."""
+        del command
+        return False
+
+    @property
+    def current_model(self) -> str | None:
+        return None
+
     async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool:
         """Answer the server request whose item id is ``tool_use_id``.
 

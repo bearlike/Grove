@@ -27,9 +27,43 @@ interface CatalogEntry {
   target?: string[];
 }
 
+/** The mark for a tool the catalog does not know, and for an MCP server nothing identifies. */
+export const UNKNOWN_TOOL_ICON = "fluent-color:settings-24";
+export const UNKNOWN_SERVER_ICON = "fluent-color:puzzle-piece-24";
+
 const entries = new Map<string, CatalogEntry>(
   (catalog.tools as CatalogEntry[]).flatMap(entry => entry.names.map(name => [name, entry] as const)),
 );
+
+/** Catalog server names are stored normalized, so `google-calendar`, `GoogleCalendar`
+ * and `google_calendar` all name the same server. */
+const normalize = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const serverMarks = new Map<string, string>(
+  catalog.servers.flatMap(server => server.names.map(name => [normalize(name), server.icon] as const)),
+);
+
+/**
+ * The brand mark for one MCP call, most specific evidence first.
+ *
+ * 1. The host's own `tool-icons.json` entry for this exact server name.
+ * 2. The server name, whole and then by `_`/`-` segment. Server names are the
+ *    user's own label, so `postgresql_mifflin` and the plugin form
+ *    `plugin_playwright_playwright` still name a known service.
+ * 3. The tool name's leading segment. A gateway fronting many services
+ *    (`gateway / Gmail-search`, `gateway / Calendar-CreateEvent`) names the
+ *    service there rather than in the server name, and this is the only place
+ *    it appears. It comes last, so a known server's identity always wins.
+ */
+function serverIcon(server: string, tool: string, overrides: Readonly<Record<string, string>>): string {
+  if (Object.hasOwn(overrides, server)) return overrides[server];
+  const candidates = [server, ...server.split(/[_-]+/), tool.split(/[_-]+/)[0] ?? ""];
+  for (const candidate of candidates) {
+    const icon = serverMarks.get(normalize(candidate));
+    if (icon) return icon;
+  }
+  return UNKNOWN_SERVER_ICON;
+}
 
 /** Provider namespaces are protocol, not arbitrary suffix matching: MCP Read is not builtin Read. */
 export function toolPresentation(
@@ -41,13 +75,12 @@ export function toolPresentation(
   const mcp = name.match(/^(?:functions\.)?mcp__([^]+?)__(.+)$/);
   if (mcp) {
     const [, server, tool] = mcp;
-    const icon = Object.hasOwn(serverIcons, server) ? serverIcons[server] : "flat-color-icons:services";
-    return { verb: "Called", chip: `${server} / ${tool}`, icon, kind: "tool", filePath: null };
+    return { verb: "Called", chip: `${server} / ${tool}`, icon: serverIcon(server, tool, serverIcons), kind: "tool", filePath: null };
   }
   const bareName = name.replace(/^(?:functions|multi_tool_use)\./, "");
   const entry = entries.get(bareName);
   if (!entry) {
-    return { verb: "Called", chip: digest ? `${name} · ${digest}` : name, icon: "flat-color-icons:settings", kind: "tool", filePath: null };
+    return { verb: "Called", chip: digest ? `${name} · ${digest}` : name, icon: UNKNOWN_TOOL_ICON, kind: "tool", filePath: null };
   }
   let target: string | null = null;
   for (const key of entry.target ?? []) {

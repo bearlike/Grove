@@ -26,11 +26,21 @@ on:
         type: string
         required: false
         default: "not integration"
+      ignore:
+        description: "Paths to exclude (--ignore), space separated"
+        type: string
+        required: false
+        default: ""
       ref:
         description: "Ref to check out; empty uses the triggering ref"
         type: string
         required: false
         default: ""
+      timeout:
+        description: "Minutes before the job is killed (about 2x its measured run)"
+        type: number
+        required: false
+        default: 25
 
 jobs:
   pytest:
@@ -41,18 +51,16 @@ jobs:
     # was retired, so an OS matrix cost minutes for no signal. The Windows/macOS
     # defensive code stays but is CI-unverified (tests/CLAUDE.md).
     runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    # A tight ceiling, because a hang costs every job behind it: run 7912's
+    # uv cache save wedged for 30 minutes after its tests had passed.
+    timeout-minutes: ${{ inputs.timeout }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
       # Pillow rides `dev` (not `docs`) so tests/tools/screenshots/ resolves:
       # group placement follows which job needs the package.
-      - name: Install
-        run: uv sync --frozen --group dev
+      - uses: ./.github/actions/setup-python-env
       # Installed unconditionally, including for `not integration` runs: the
       # `requires_tmux` marker skips on hosts without it, so omitting tmux here
       # would silently turn real coverage into skips that still report green.
@@ -66,9 +74,11 @@ jobs:
           PYTEST_PATHS: ${{ inputs.paths }}
           PYTEST_KEYWORD: ${{ inputs.keyword }}
           PYTEST_MARKERS: ${{ inputs.markers }}
+          PYTEST_IGNORE: ${{ inputs.ignore }}
         run: |
           set -euo pipefail
           args=()
+          for p in $PYTEST_IGNORE; do args+=(--ignore "$p"); done
           # `if`, never `[ -n … ] && args+=(…)`: under `set -e` that compound
           # returns 1 when the test is false and exits the whole step.
           if [ -n "$PYTEST_MARKERS" ]; then args+=(-m "$PYTEST_MARKERS"); fi

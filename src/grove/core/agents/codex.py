@@ -722,10 +722,21 @@ class _RolloutLine:
         return value if isinstance(value, str) else None
 
     def tool_name(self) -> str:
-        """The tool a call invokes — ``function_call.name`` or the search query."""
+        """The tool a call invokes — ``function_call.name`` or the search query.
+
+        An MCP call carries its server in a separate ``namespace``
+        (``mcp__postgresql_mifflin__``) beside a bare ``name``, so the two are
+        joined back into the ``mcp__<server>__<tool>`` shape Claude records
+        inline. Every reader then sees one convention; without the namespace an
+        MCP call reads as an unknown builtin and loses its server. A non-MCP
+        namespace (``collaboration``) names a first-party tool and is dropped.
+        """
         payload = self._payload
         name = payload.get("name")
         if isinstance(name, str) and name:
+            namespace = payload.get("namespace")
+            if isinstance(namespace, str) and namespace.startswith("mcp__"):
+                return f"{namespace.rstrip('_')}__{name.lstrip('_')}"
             return name
         if self.payload_type == "tool_search_call":
             args = payload.get("arguments")
@@ -1667,7 +1678,7 @@ class _RolloutParser:
             if current[0] is None and not entries and when is not None:
                 # Leading continuation block inherits the first reply's time.
                 current[0] = ("", when)
-            entries.append(entry)
+            entries.append(replace(entry, at=when))
 
         for message in messages:
             if message.role == "user":

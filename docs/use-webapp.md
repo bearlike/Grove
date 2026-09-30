@@ -106,6 +106,7 @@ The transcript ([`thread.tsx`](repo:webapp/components/grove/workspace/thread.tsx
 - A message sent mid turn joins a collapsed queue with a count in its header.
 - A **Watches** card beside the queue lists what the workspace is waiting on: CI, timers, commands, and a standing watch for each attached ticket. Each row says whether it is running, fired, expired, cancelled or undeliverable. See [Watches](features-watches.md).
 - Paste a screenshot, annotate it, and the agent is handed the path. See [Attachments and annotation](features-attachments.md).
+- Type `/` for commands. Your [Grove commands](configure-agents.md#grove-commands) are listed there beside `/compact`, and each one runs its steps in order.
 
 ## The Session Catalog
 
@@ -129,18 +130,16 @@ The transcript ([`thread.tsx`](repo:webapp/components/grove/workspace/thread.tsx
 
 ## Running it
 
-The dashboard is two processes. A daemon exposing Grove's engine over HTTP, and a Next.js app the browser talks to.
+The dashboard is two processes. A daemon exposing Grove's engine over HTTP, and a Next.js app the browser talks to. The PyPI package ships the app prebuilt, together with the Node.js runtime that serves it.
 
 ```bash
-# Build the web app once (repeat after each upgrade)
-make webapp-build
-
-# Run the two processes
-grove daemon serve     # terminal 1, loopback, port 7421
-cd webapp && npm run start   # terminal 2, serves the build on 0.0.0.0:3000
+grove daemon serve              # terminal 1, loopback, port 7421
+grove web                       # terminal 2, serves the app on 127.0.0.1:3000
+grove web --host 0.0.0.0        # or reachable from a phone on your LAN
 ```
 
-- Open <http://127.0.0.1:3000>, or `http://<machine-ip>:3000` from a phone once you [pair](use-auth.md) it. `GROVE_DAEMON_URL` in `webapp/.env.local` points at a remote daemon.
+- Open <http://127.0.0.1:3000>, or `http://<machine-ip>:3000` from a phone once you [pair](use-auth.md) it. `grove web --daemon-url` (or `GROVE_DAEMON_URL`) points it at a remote daemon.
+- From a source checkout, `make webapp-bundle` stages the copy `grove web` runs, built on Grove's own Node. `./reinstall.sh` does that and restarts the service in one step.
 - The browser only calls the web app's own origin. Next.js proxies each call to the daemon with the paired session's token, a receptionist carrying each request to the back office. See [Authentication & pairing](use-auth.md) and the [`webapp/` README](https://github.com/bearlike/Grove/tree/current/webapp) for the dev server.
 
 ```mermaid
@@ -155,13 +154,12 @@ flowchart TB
 ## Always-on with systemd
 
 ```bash
-make webapp-build                 # npm ci + npm run build
 WITH_WEBAPP=1 make systemd        # write grove-daemon + grove-webapp units
 WITH_WEBAPP=1 make systemd-enable # reload, enable, start now
 loginctl enable-linger "$USER"    # survive logout (remote hosts)
 ```
 
-A daemon hiccup reports unreachable without taking the dashboard down. After pulling new source, `make webapp-build && systemctl --user restart grove-webapp`. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
+The dashboard unit runs `grove web`, so it serves whatever version is installed on the Node that ships with it. A daemon hiccup reports unreachable without taking the dashboard down. After `uv tool upgrade grove-factory`, restart both units. From a checkout, `./reinstall.sh` rebuilds and restarts everything. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
 
 ## Reaching it from outside the network
 

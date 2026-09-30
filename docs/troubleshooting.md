@@ -12,7 +12,7 @@ an unrelated log-collection framework.
 
 ```bash
 uv tool uninstall grove
-uv tool install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
+uv tool install grove-factory
 ```
 
 Confirm with `grove version` and `grove debug`.
@@ -177,6 +177,16 @@ non-default daemon, set `GROVE_DAEMON_URL` in `webapp/.env.local` or the unit's
 `DAEMON_PORT` / `DAEMON_URL`, then restart. See
 [web dashboard](use-webapp.md).
 
+## `grove web` refuses to start
+
+`grove web` exits naming Node.js, or says the install has no bundled web
+dashboard. Both ship with the PyPI package, so an install that lacks either is
+incomplete or predates them.
+
+Reinstall with `uv tool install --reinstall grove-factory`. A git or editable
+install carries no prebuilt dashboard, so from a checkout run `make webapp-bundle`
+first. `grove web --check` prints the dashboard and the Node it would use.
+
 ## Pairing code expired, or a device keeps asking to pair
 
 The browser shows "code expired", or a paired device is bounced back to the
@@ -195,20 +205,20 @@ TUI looks unchanged, or the dashboard lacks a feature you merged. Grove runs as
 several long-lived surfaces and updating the package does not restart what is
 already running.
 
-Relaunch `grove` for the CLI and TUI. Restart the daemon with
-`systemctl --user restart grove-daemon`. Rebuild the dashboard and then restart
-it, since the production server serves a pre-built bundle and new routes stay
-silently absent otherwise. A checkout install is editable, so reinstall only when
-dependencies change.
+Upgrade with `uv tool upgrade grove-factory`, then relaunch `grove` for the CLI
+and TUI. Restart the daemon with `systemctl --user restart grove-daemon`, and
+restart `grove web` if it is running. From a checkout, also rebuild the dashboard
+before restarting it, since the production server serves a pre-built bundle and
+new routes stay silently absent otherwise. A checkout install is editable, so
+reinstall only when dependencies change.
 
 ## `grove-mcp` reports `No module named 'mcp'`
 
-The MCP server fails to start. The SDK is optional and the lean `grove-crew[daemon]`
-install omits it, leaving the always-present `grove-mcp` script unable to import
-it.
+The MCP server fails to start. Every current install carries the SDK, so this
+means an older install from before it became part of the base package.
 
 ```bash
-uv tool install --reinstall "grove-crew[all] @ git+https://github.com/bearlike/Grove"
+uv tool install --reinstall grove-factory
 ```
 
 The MCP client respawns the server per connection, so nothing needs restarting

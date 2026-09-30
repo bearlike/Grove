@@ -2,7 +2,7 @@
 
 ## Let another agent coordinate your fleet
 
-Grove exposes the daemon API to an assistant. Your git stays yours.
+Give an orchestrating agent Grove's MCP tools to launch work across the fleet. Worker agents can find and message peers through the mailbox without sharing a workspace. The `leading-in-grove` skill covers task splitting and peer coordination.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" /></div>
@@ -57,7 +57,7 @@ Any live Grove agent can write to any other, addressed like email.
 ## Same machine: stdio
 
 ```bash
-pip install 'grove-crew[all]'      # or 'grove-crew[mcp]' for just the MCP server
+uv tool install grove-factory      # grove-mcp ships in the one install
 grove daemon serve                 # or the packaged systemd user service
 claude mcp add grove -- grove-mcp  # or the mcp.json entry below
 ```

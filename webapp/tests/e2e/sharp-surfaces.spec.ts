@@ -11,6 +11,11 @@ import { barInset, captureSharpSurface, openSharpSurface } from "./sharp-surface
  * beside them. See `shell-band-heights.spec.ts` for the full reasoning.
  */
 const ACTUAL_TAB_FLOOR = dp(13);
+// The fixture workspace has no diagram, so its strip is
+// `offeredPanelTabs(true, false)` — pinned member-by-member in
+// tests/unit/diagram-tab-presence.test.ts. Update both together when a tab is
+// added (#858 added Trajectory and this count went stale).
+const WORK_TAB_COUNT = 6;
 
 type Rgb = readonly [number, number, number];
 
@@ -50,7 +55,7 @@ test.describe("sharp surfaces", () => {
     await expect(paneList).toHaveAttribute("data-variant", "line");
     await expect(workList).toHaveAttribute("data-variant", "line");
     await expect(paneTabs).toHaveCount(3);
-    await expect(workTabs).toHaveCount(5);
+    await expect(workTabs).toHaveCount(WORK_TAB_COUNT);
 
     const geometry = await page.evaluate(() => {
       const header = document.querySelector<HTMLElement>(
@@ -302,7 +307,7 @@ test.describe("sharp surfaces", () => {
       }),
     );
 
-    expect(tabState).toHaveLength(5);
+    expect(tabState).toHaveLength(WORK_TAB_COUNT);
     for (const tab of tabState) {
       expect(tab.name).not.toBe("");
       expect(tab.scrollWidth - tab.clientWidth, tab.name).toBeLessThanOrEqual(

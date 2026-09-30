@@ -4,6 +4,7 @@ import { ClockIcon, FilePenLineIcon } from "lucide-react";
 
 import { absoluteTime, relativeTime, useNow } from "@/components/grove/relative-time";
 import { abbreviate } from "@/components/grove/usage/format";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { WorkspaceActivity } from "./types";
 
@@ -50,6 +51,12 @@ function Figure({
  * every workspace at once, and nearly every live one has uncommitted files, so
  * amber on each row was a column of warnings saying nothing about any one row;
  * the diff figures beside it keep their hues because they have a direction.
+ *
+ * The three figures ALWAYS render, a measured zero in the quiet tier. A clean
+ * row used to drop the group, which gave cards in one column two different
+ * anatomies; a zero is a measurement, not an absence, so it keeps its cell.
+ * One hairline closes the context above the ledger, and a short rule between
+ * figures keeps `0 +363 −40` from reading as one number.
  */
 export function SessionMetadata({
   workspace,
@@ -59,37 +66,35 @@ export function SessionMetadata({
   context?: React.ReactNode;
 }): React.ReactNode {
   const { dirty_files: dirty, diff_added: added, diff_removed: removed } = workspace;
-  const noChanges = dirty === 0 && added === 0 && removed === 0;
   return (
-    <div className="flex min-w-0 flex-col gap-1.5" data-testid="rail-metadata">
+    <div className="flex min-w-0 flex-col gap-2" data-testid="rail-metadata">
       {context}
+      <Separator data-testid="rail-divider" />
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1" data-testid="rail-ledger">
-          {!noChanges ? (
-            <>
-            <MetricCell
-              Icon={FilePenLineIcon}
-              value={dirty}
-              tone="count"
-              detail={countLabel(dirty, "uncommitted files in the worktree")}
-              testid="rail-dirty"
-            />
-            <MetricCell
-              value={added}
-              tone="added"
-              prefix="+"
-              detail={countLabel(added, "lines added on the branch since its diff base")}
-              testid="rail-added"
-            />
-            <MetricCell
-              value={removed}
-              tone="removed"
-              prefix="−"
-              detail={countLabel(removed, "lines removed on the branch since its diff base")}
-              testid="rail-removed"
-            />
-            </>
-          ) : null}
+          <MetricCell
+            Icon={FilePenLineIcon}
+            value={dirty}
+            tone="count"
+            detail={countLabel(dirty, "uncommitted files in the worktree")}
+            testid="rail-dirty"
+          />
+          <Separator orientation="vertical" className="data-[orientation=vertical]:h-3.5" />
+          <MetricCell
+            value={added}
+            tone="added"
+            prefix="+"
+            detail={countLabel(added, "lines added on the branch since its diff base")}
+            testid="rail-added"
+          />
+          <Separator orientation="vertical" className="data-[orientation=vertical]:h-3.5" />
+          <MetricCell
+            value={removed}
+            tone="removed"
+            prefix="−"
+            detail={countLabel(removed, "lines removed on the branch since its diff base")}
+            testid="rail-removed"
+          />
         </span>
         <CreatedAge iso={workspace.state.created_at} />
       </div>

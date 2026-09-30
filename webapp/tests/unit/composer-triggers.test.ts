@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { COMPOSER_COMMANDS, mentionsFromContacts } from "@/lib/grove/adapters";
-import type { MailboxContact } from "@/lib/grove/api";
+import { COMPOSER_COMMANDS, grovePaletteCommands, mentionsFromContacts } from "@/lib/grove/adapters";
+import type { MailboxContact, SessionControlView } from "@/lib/grove/api";
 
 const SELF = "a".repeat(32);
 const PEER = "b".repeat(32);
@@ -26,6 +26,22 @@ describe("the `/` menu", () => {
       expect(command.id.startsWith("/"), "the route strips the slash itself").toBe(false);
       expect(command.description.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("Grove command palette entries", () => {
+  it("keeps Grove commands in control order, drops other scopes, and supplies a description", () => {
+    const controls: SessionControlView[] = [
+      { name: "grove:compact-fast", scope: "grove", detail: "Compact with the fast profile" },
+      { name: "compact", scope: "builtin", detail: "Summarize the conversation" },
+      { name: "grove:review", scope: "grove", detail: null },
+      { name: "format", scope: "project", detail: "Format the repository" },
+    ];
+
+    expect(grovePaletteCommands(controls)).toEqual([
+      { id: "grove:compact-fast", description: "Compact with the fast profile" },
+      { id: "grove:review", description: "Grove command" },
+    ]);
   });
 });
 

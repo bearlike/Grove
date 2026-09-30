@@ -10,10 +10,12 @@ tests pin, is the client SDK wrapper that lets the MCP tier reach it at all.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 
 import httpx
+import pytest
 
-from grove.client import BackendConfig, GroveClient
+from grove.client import BackendConfig, GroveClient, ProtocolError
 from grove.core.contracts.activity import DashboardEvent, DashboardSnapshotView
 
 _ACTIVITY_BODY: dict[str, object] = {
@@ -139,6 +141,43 @@ async def test_activity_events_parses_authenticated_sse_snapshot() -> None:
     assert isinstance(event, DashboardEvent)
     assert event.kind == "snapshot"
     assert event.snapshot is not None and event.snapshot.total_workspaces == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "code"),
+    [
+        (401, {"detail": {"error": "unauthorized", "message": "no session"}}, "unauthorized"),
+        (502, "bad gateway", "http_error"),
+    ],
+)
+async def test_a_refused_stream_raises_the_typed_error_the_dashboard_retries_on(
+    status: int, body: object, code: str
+) -> None:
+    """A streamed error body is unread until asked for. Reading it as JSON
+    without `aread()` raised httpx's ResponseNotRead, a RuntimeError outside
+    GroveClientError, and the TUI dashboard's retry loop crashed the app on
+    the first refused `/events` instead of retrying.
+
+    The body must be STREAMED: a `content=`/`json=` response arrives already
+    read, which is exactly why the earlier tests never saw this."""
+    payload = (body if isinstance(body, str) else json.dumps(body)).encode()
+
+    class _Streamed(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield payload
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, stream=_Streamed())
+
+    client = _client_with_handler(httpx.MockTransport(handler))
+    try:
+        with pytest.raises(ProtocolError) as caught:
+            await anext(client.activity_events())
+    finally:
+        await client.close()
+
+    assert caught.value.status == status
+    assert caught.value.code == code
 
 
 async def test_pane_events_uses_workspace_stream_path() -> None:

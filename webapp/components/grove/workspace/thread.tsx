@@ -169,6 +169,21 @@
  *      workspace passes `workspace/composer`'s surface through the `composer`
  *      prop, and every other caller is read-only, so none is mounted there.
  *
+ *  16. A TIME SEPARATOR above a turn that began more than an hour after the
+ *      previous one (and above the first held turn), labelled "Today 6:29 PM" /
+ *      "Yesterday …" / "Mon, Sep 22, …". A transcript is recorded over hours or
+ *      days and otherwise reads as one sitting. The adapter decides WHERE
+ *      (`GROVE_TIME_GAP` on the turn head's `metadata.custom`), because only it
+ *      still knows whether a time was reported — assistant-ui fills a missing
+ *      `createdAt` with "now". The row is `elements/day-separator`'s anatomy;
+ *      that element renders its own message list, so it cannot wrap this one.
+ *
+ *  17. ONE ACTION BAR PER TURN, NOT PER MESSAGE — delta 5's refusal narrowed.
+ *      The bar returns under a turn's ANSWER only (the last assistant text,
+ *      marked by the transcript adapter), as Copy plus assistant-ui's native
+ *      thumbs; still no Reload, More or branch picker. A thumbs-down opens the
+ *      vendored feedback dialog under it. See `./turn-actions`.
+ *
  * `components/assistant-ui/thread.tsx` stays in place, unmodified: it is the
  * oracle this file is diffed against. Nothing renders it any more — the
  * archived-session route switched to THIS file precisely so a transcript is
@@ -191,7 +206,9 @@ import {
   ToolGroupTrigger,
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { daySeparatorLabel, useNow } from "@/components/grove/relative-time";
 import { Button } from "@/components/ui/button";
+import { GROVE_TIME_GAP } from "@/lib/grove/adapters";
 import { cn } from "@/lib/utils";
 import {
   AuiIf,
@@ -216,6 +233,7 @@ import {
 
 import { MessageAttachmentRows } from "./composer-attachment";
 import { NewTabLinks } from "./new-tab-links";
+import { TurnActions } from "./turn-actions";
 import { THREAD_INSET, THREAD_WIDTH } from "./thread-width";
 
 import {
@@ -435,10 +453,47 @@ const ThreadMessage: FC = () => {
     useContext(ThreadComponentsContext);
   const role = useAuiState((s) => s.message.role);
 
+  const gap = useAuiState((s) => s.message.metadata.custom[GROVE_TIME_GAP] === true);
+
   // No `isEditing` branch: DELTA 5 removed the only trigger that could enter
   // message-edit mode, and nothing else in Grove opens a message composer.
-  if (role === "user") return <UserMessage />;
-  return <AssistantMessageComponent />;
+  const message = role === "user" ? <UserMessage /> : <AssistantMessageComponent />;
+  if (!gap) return message;
+  return (
+    <>
+      <TimeSeparator />
+      {message}
+    </>
+  );
+};
+
+/**
+ * GROVE DELTA 16 — the vendored `elements/day-separator` row (hairline, label,
+ * hairline) above a turn that began over an hour after the one before it.
+ */
+const TimeSeparator: FC = () => {
+  const createdAt = useAuiState((s) => s.message.createdAt);
+  const now = useNow();
+  const label = daySeparatorLabel(createdAt, now);
+  return (
+    <div
+      role="separator"
+      aria-label={label}
+      data-testid="time-separator"
+      className="flex items-center gap-2.5 px-2"
+    >
+      <span aria-hidden className="h-0 flex-1 border-t border-border" />
+      <time
+        aria-hidden
+        dateTime={createdAt.toISOString()}
+        title={createdAt.toLocaleString()}
+        className="shrink-0 text-xs text-content-tertiary tabular-nums"
+      >
+        {label}
+      </time>
+      <span aria-hidden className="h-0 flex-1 border-t border-border" />
+    </div>
+  );
 };
 
 const ThreadScrollToBottom: FC = () => {
@@ -587,6 +642,8 @@ const AssistantMessage: FC = () => {
         </MessagePrimitive.GroupedParts>
         <MessageError />
       </NewTabLinks>
+      {/* GROVE DELTA 17 — renders nothing unless this message ends a turn. */}
+      <TurnActions />
     </MessagePrimitive.Root>
   );
 };

@@ -1,0 +1,156 @@
+# Build and publish the site, for both mirrors of this repo. The target is
+# chosen at runtime from github.server_url:
+#   * github.com -> versioned GitHub Pages (mike, gh-pages branch)
+#   * otherwise  -> the internal docs host (static zip upload)
+# Internal host details come from an owner-level variable (DOCS_HOST),
+# which is empty on github.com, so that path is skipped and nothing
+# environment-specific is committed.
+#
+# Reusable only. The triggers live in docs.yml and screenshots.yml, because on
+# this Gitea a file that declares `workflow_call` is never started by a push:
+# docs.yml carried push + workflow_call side by side and deployed on no push
+# to main from the day the two were combined.
+name: Docs deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Ref to build; empty uses the triggering ref"
+        type: string
+        required: false
+        default: ""
+
+env:
+  DOCS_HOST: ${{ vars.DOCS_HOST }}
+
+jobs:
+  deploy:
+    if: >-
+      github.event.action != 'closed' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # PINNED TO THE `pages` RUNNER on a self-hosted forge. This job PUTs the
+    # built site to `DOCS_HOST`, which is only reachable from a runner whose
+    # job containers carry an `--add-host` for that name, and only one runner
+    # advertises the `pages` label — so it cannot be scheduled elsewhere.
+    #
+    # The label is chosen by expression, NOT hardcoded, because this job also
+    # runs on github.com, where no `pages` runner exists and the job would
+    # queue forever.
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'pages' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A caller that just pushed passes the branch NAME, so this checks out
+          # the commit it pushed rather than the one that triggered the caller.
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Icon SVGs are fetched from api.iconify.design while the site builds,
+      # so this takes a third-party rate limiter off the deploy path entirely.
+      # The theme already batches those requests down to one per icon set, and
+      # degrades rather than failing when they are throttled; this is the belt
+      # to that braces. Keyed on mkdocs.yml because that is where the icon
+      # names live, so adding one re-fetches instead of serving a stale set.
+      - name: Cache resolved icons
+        uses: actions/cache@v4
+        with:
+          path: .cache/iconify
+          key: iconify-${{ hashFiles('mkdocs.yml') }}
+          restore-keys: iconify-
+
+      # The theme resolves from a moving flat index (see the `[[tool.uv.index]]`
+      # block in pyproject.toml), so the committed `uv.lock` entry is a
+      # SNAPSHOT of whatever the theme's latest release was when somebody last
+      # ran `uv lock` — and syncing it unchanged would not merely serve a stale
+      # theme, it would fail outright: the moving tag carries exactly one wheel,
+      # so the filename the stale lock asks for is already gone (404) the moment
+      # the theme ships a new version. Re-resolving this one package is
+      # therefore both how a new release reaches the site with no version edited
+      # by hand, and how this job stays green at all.
+      #
+      # Scoped to `-P mkdocs-shadcn-mewbo` on purpose: every other dependency
+      # stays pinned at the committed lock, so a docs deploy never silently
+      # picks up an unrelated upgrade. `-P` implies `--refresh-package`, which
+      # is what defeats uv's cached copy of the index page.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv lock --upgrade-package mkdocs-shadcn-mewbo
+          uv sync --group docs
+          uv run python -c "import importlib.metadata as m; print('theme:', m.version('mkdocs-shadcn-mewbo'))"
+
+      - name: Prepare docs inputs
+        run: |
+          printf '{"commit":"%s"}\n' "$(git rev-parse --short HEAD)" > docs/build-info.json
+          # Schema feeds the generated configuration reference; best-effort so
+          # a broken engine import degrades to the stub page, not a dead site.
+          .venv/bin/grove config schema --stdout > docs/grove.schema.json || true
+
+      - name: Verify mkdocstrings imports
+        run: .venv/bin/python -c "import grove.core; print(grove.core.__name__)"
+
+      # --- github.com: versioned GitHub Pages via mike ---
+      - name: Configure git (mike)
+        if: github.server_url == 'https://github.com'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Publish to GitHub Pages
+        if: github.server_url == 'https://github.com' && github.ref == 'refs/heads/current'
+        run: |
+          uv run mike deploy --push --update-aliases main latest --alias-type copy
+          uv run mike set-default --push latest
+
+      - name: Publish PR preview to GitHub Pages
+        if: >-
+          github.server_url == 'https://github.com' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+          !contains(github.actor, '[bot]')
+        run: uv run mike deploy --push "pr-${{ github.event.pull_request.number }}"
+
+      # --- internal docs host: single version, static upload ---
+      - name: Publish to internal docs host
+        if: github.server_url != 'https://github.com' && github.ref != 'refs/heads/current'
+        run: |
+          slug="$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')"
+          [ "${{ github.event_name }}" = "pull_request" ] && slug="${slug}-pr-${{ github.event.pull_request.number }}"
+          sed -i "s|^site_url:.*|site_url: https://${DOCS_HOST}/${slug}/|" mkdocs.yml
+          uv run mkdocs build --strict -d site
+          # zip rather than tar because this upload can cross a slow VPN link,
+          # measured at ~1.5 Mbit/s, where the transfer is ~95% of the step
+          # (8s build, ~150s upload). git-pages accepts application/zip natively and
+          # unpacks it the same way. Two thirds of the payload is already-compressed
+          # PNG/GIF/woff2, so -9 buys ~30% overall, not the 4-5x text alone suggests.
+          (cd site && zip -qr9 ../site.zip .)
+          curl -fsS -k --retry 5 --retry-all-errors --retry-delay 4 --max-time 900 \
+            -X PUT -H 'Content-Type: application/zip' --data-binary @site.zip \
+            "https://${DOCS_HOST}/${slug}/"
+
+  cleanup:
+    # Remove a PR preview from the internal docs host when the PR closes.
+    # (GitHub Pages / mike PR cleanup lives in docs-cleanup.yml.)
+    if: >-
+      github.server_url != 'https://github.com' &&
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed'
+    # PINNED TO THE `pages` RUNNER, for the reason the deploy job above states:
+    # this job DELETEs a PR preview from `DOCS_HOST`, which only the runner
+    # advertising the `pages` label can reach. The `if` above already gates
+    # this job off github.com, but the label stays an expression so the two
+    # jobs cannot drift apart.
+    runs-on: ${{ github.server_url == 'https://github.com' && 'ubuntu-latest' || 'pages' }}
+    steps:
+      - name: Remove PR preview
+        run: |
+          slug="$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]')-pr-${{ github.event.pull_request.number }}"
+          curl -fsS -k --retry 3 --retry-all-errors --retry-delay 4 \
+            -X DELETE "https://${DOCS_HOST}/${slug}/" || true

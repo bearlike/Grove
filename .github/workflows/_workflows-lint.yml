@@ -1,0 +1,48 @@
+name: Workflows lint (reusable)
+
+# Checks the CI's own wiring, which nothing else would: actionlint over every
+# workflow (undeclared inputs, `needs` on a job that does not exist, bad
+# expressions — the mistakes that otherwise surface only as a run that never
+# starts), and the component map's ownership tests. actionlint was configured in
+# .github/actionlint.yaml long before anything ran it.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Ref to check out; empty uses the triggering ref"
+        type: string
+        required: false
+        default: ""
+
+env:
+  # Pinned by version AND checksum: an installer piped into bash is a moving
+  # dependency on a script nobody reviewed.
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+
+jobs:
+  lint:
+    name: actionlint + component map
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          rm "$tarball"
+      # shellcheck and pyflakes are off: the images do not ship them, and a
+      # linter that silently skips half its checks is worse than a stated scope.
+      - name: actionlint
+        run: ./actionlint -shellcheck= -pyflakes=
+      - uses: ./.github/actions/setup-python-env
+      - name: component map
+        run: uv run pytest tests/test_ci_components.py -q

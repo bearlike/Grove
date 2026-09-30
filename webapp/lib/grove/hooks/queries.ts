@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
+  keepPreviousData,
   useMutation,
   useQueries,
   useQuery,
@@ -629,6 +630,44 @@ export function useSessionTurns(
     loadEarlier,
     loadingEarlier: widen.isPending,
   };
+}
+
+/**
+ * Whole transcripts for the sub-agent sessions a trace view has asked to open.
+ *
+ * Keyed on each child's progress `fingerprint` rather than polled: the fleet
+ * stream already carries every child's state, reply and tool counts, so a
+ * change there IS the edge, and a child that did not move costs nothing. The
+ * previous answer stays on screen while the next one loads, so a streaming
+ * child grows rather than blinking empty on every step. Children are read
+ * whole — one delegated task, not a months-long session — so there is no
+ * cursor to follow.
+ */
+export function useChildTurns(
+  workspaceId: string | null,
+  children: readonly { sessionId: string; fingerprint: string }[],
+): ReadonlyMap<string, readonly SessionTurnView[]> {
+  return useQueries({
+    queries: children.map((child) => ({
+      queryKey: groveKeys.trajectoryTurns(workspaceId ?? "", child.sessionId, child.fingerprint),
+      queryFn: () => groveClient.getSessionTurns(workspaceId!, child.sessionId),
+      enabled: workspaceId !== null,
+      placeholderData: keepPreviousData,
+      staleTime: Infinity,
+    })),
+    combine: childTurnsById,
+  });
+}
+
+/** Module-level so react-query can keep the combined map stable between renders. */
+function childTurnsById(
+  results: readonly { data?: SessionDetailView }[],
+): ReadonlyMap<string, readonly SessionTurnView[]> {
+  const map = new Map<string, readonly SessionTurnView[]>();
+  for (const result of results) {
+    if (result.data) map.set(result.data.session.session_id, result.data.turns);
+  }
+  return map;
 }
 
 /**

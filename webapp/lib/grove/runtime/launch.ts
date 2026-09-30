@@ -12,7 +12,7 @@ import {
 import type { CreateWorkspaceRequest, WorkspaceStateView } from "@/lib/grove/api";
 import { base64FromBytes } from "@/lib/grove/api";
 import { useCreateWorkspace } from "@/lib/grove/hooks";
-import { customModelError } from "@/lib/grove/adapters/launch";
+import { customModelError, newTitleSalt } from "@/lib/grove/adapters/launch";
 import { useLaunchControls, type LaunchState } from "@/components/grove/launch/launch-state";
 import {
   acknowledgeComposerDraft,
@@ -41,9 +41,12 @@ export async function submitLaunch(
   restoreDraft?: RestoreDraft,
   acknowledgeDraft?: AcknowledgeDraft,
   rejectDraft?: RejectDraft,
+  titleSalt = "",
 ): Promise<void> {
   try {
-    const workspace = await createWorkspace(buildCreateRequest(state, prompt, attachments));
+    const workspace = await createWorkspace(
+      buildCreateRequest(state, prompt, attachments, titleSalt),
+    );
     acknowledgeDraft?.();
     navigate(`/w/${workspace.id}`);
   } catch (error) {
@@ -59,6 +62,8 @@ export async function submitLaunch(
 
 export interface LaunchSubmit {
   readonly prompt: string;
+  /** This draft's default-title salt: the preview and the submit read the same one. */
+  readonly titleSalt: string;
   readonly setPrompt: (prompt: string) => void;
   readonly submit: () => void;
   readonly canSubmit: boolean;
@@ -126,6 +131,7 @@ export function useLaunchSubmit(): LaunchSubmit {
   const create = useCreateWorkspace();
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
+  const [titleSalt, setTitleSalt] = useState(newTitleSalt);
   // The staged files sit BESIDE the draft, for the draft's own reason: the
   // composer is moved between an inline mount and a dialog one, so anything
   // held inside it is destroyed the moment the writer expands the box.
@@ -254,8 +260,13 @@ export function useLaunchSubmit(): LaunchSubmit {
           ),
         );
       },
-      () => acknowledgeComposerDraft("launch"),
+      () => {
+        acknowledgeComposerDraft("launch");
+        // A landed create spends this salt; the next draft gets its own name.
+        setTitleSalt(newTitleSalt());
+      },
       () => rejectComposerDraftSubmission("launch"),
+      titleSalt,
     ).catch((error: unknown) => {
       // A refusal from the BUILDER never reaches the mutation, so it has no
       // other way onto the screen. A mutation failure is already in
@@ -263,10 +274,11 @@ export function useLaunchSubmit(): LaunchSubmit {
       // rejection.
       if (error instanceof RangeError) setRefusal(error.message);
     });
-  }, [attachments, controls, create.isPending, create.mutateAsync, prompt, router]);
+  }, [attachments, controls, create.isPending, create.mutateAsync, prompt, router, titleSalt]);
 
   return {
     prompt,
+    titleSalt,
     setPrompt,
     submit,
     canSubmit: prompt.trim() !== "" && !create.isPending,

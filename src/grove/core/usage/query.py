@@ -32,6 +32,61 @@ rows, and public because ``series.py`` asks the same question at a second
 grain."""
 
 
+def calendar_scope(
+    filters: UsageFilters, buckets: Sequence[DayBucket]
+) -> tuple[str, str, list[Any]]:
+    """The calendar CTE and the event filter for a day-grained read, as ONE window.
+
+    **The range bound lives in the spine, never in the WHERE as well.** The join
+    already confines every event to ``[day_start, day_end)``, so repeating
+    ``e.ts >= since`` is redundant — and it is what SQLite's planner picks to
+    drive the ``ix_events_ts`` range search. It then walks every event after
+    ``since`` once PER BUCKET instead of one day's events. Measured on the
+    1.3M-event screenshot corpus, one year-wide ``activity`` read went from
+    14.4 s to 2.0 s with the bound moved here, and that read is what stalled the
+    serialized usage page past the capture's wait on every CI run.
+
+    The first and last buckets are clamped to the filter's own bounds, because a
+    spine covers whole local days and a mid-day ``since`` must not admit the
+    earlier part of its first day. ``day=`` compiles to the same pair, so it is
+    folded in too; the facet filters stay in the WHERE, where they belong. A
+    bucket the bounds exclude entirely is kept at zero width rather than
+    dropped: it then matches no event, exactly as the WHERE would have, and the
+    spine stays as long as the caller's (an empty ``VALUES`` is invalid SQL).
+    """
+    since, until = _event_bounds(filters)
+    clamped = []
+    for bucket in buckets:
+        start = max(bucket.start, since) if since is not None else bucket.start
+        end = min(bucket.end, until) if until is not None else bucket.end
+        clamped.append(DayBucket(day=bucket.day, start=start, end=max(start, end)))
+    timeless = filters.model_copy(update={"since": None, "until": None, "day": None})
+    where, params = session_filter_sql(timeless, alias="s", timestamp_column="e.ts")
+    calendar, calendar_params = day_calendar_sql(clamped)
+    return calendar, where, [*calendar_params, *params]
+
+
+def _event_bounds(filters: UsageFilters) -> tuple[int | None, int | None]:
+    """The epoch ``[since, until)`` a filter asks for, ``day=`` resolved in its zone.
+
+    Mirrors the temporal half of :func:`session_filter_sql` so a clamped spine
+    and a WHERE clause cannot disagree about which instants a filter names.
+    """
+    since = int(filters.since.timestamp()) if filters.since else None
+    until = int(filters.until.timestamp()) if filters.until else None
+    if filters.day:
+        try:
+            selected = date.fromisoformat(filters.day)
+        except ValueError:
+            return since, until
+        zone = resolve_zone(filters.tz)
+        since = int(datetime.combine(selected, time.min, tzinfo=zone).timestamp())
+        until = int(
+            datetime.combine(selected + timedelta(days=1), time.min, tzinfo=zone).timestamp()
+        )
+    return since, until
+
+
 def day_calendar_sql(buckets: Sequence[DayBucket]) -> tuple[str, list[Any]]:
     """The day spine as a CTE, plus its parameters — bound, never interpolated.
 
@@ -369,9 +424,14 @@ class UsageQuery:
         """
         earliest = self.store.scalar("SELECT MIN(ts) FROM usage_events WHERE ts IS NOT NULL")
         latest = self.store.scalar("SELECT MAX(ts) FROM usage_events WHERE ts IS NOT NULL")
-        since = filters.since or _dt(earliest) or self._now()
+        # The filter's own bounds, `day=` resolved — the axis `series` draws for
+        # the same filter. Ignoring `day=` here built a whole-history spine that
+        # only the WHERE narrowed, and once the bound moved into the spine
+        # (`calendar_scope`) that became a year-long scan for a one-day answer.
+        bound_since, bound_until = _event_bounds(filters)
+        since = _dt(bound_since) or _dt(earliest) or self._now()
         latest_at = _dt(latest)
-        until = filters.until or (
+        until = _dt(bound_until) or (
             latest_at + timedelta(seconds=1) if latest_at is not None else self._now()
         )
         bucket_until = until - timedelta(microseconds=1) if until > since else until
@@ -808,9 +868,7 @@ class UsageQuery:
         three chances for one of them to answer about a slightly different set
         of events. Calendar parameters lead because the CTE leads the SQL.
         """
-        where, params = self._event_where(filters)
-        calendar, calendar_params = day_calendar_sql(buckets)
-        return calendar, where, [*calendar_params, *params]
+        return calendar_scope(filters, buckets)
 
     def _daily_event_groups(
         self, filters: UsageFilters, buckets: Sequence[DayBucket], *, with_active_ms: bool
@@ -1435,21 +1493,7 @@ def session_filter_sql(
             f"EXISTS (SELECT 1 FROM json_each({prefix}models) model_filter WHERE model_filter.value = ?)"
         )
         params.append(filters.model)
-    since = int(filters.since.timestamp()) if filters.since else None
-    until = int(filters.until.timestamp()) if filters.until else None
-    if filters.day:
-        try:
-            selected_day = date.fromisoformat(filters.day)
-        except ValueError:
-            selected_day = None
-        if selected_day is not None:
-            zone = resolve_zone(filters.tz)
-            since = int(datetime.combine(selected_day, time.min, tzinfo=zone).timestamp())
-            until = int(
-                datetime.combine(
-                    selected_day + timedelta(days=1), time.min, tzinfo=zone
-                ).timestamp()
-            )
+    since, until = _event_bounds(filters)
     if since is not None:
         clauses.append(f"{prefix}last_event_at >= ?")
         params.append(since)

@@ -68,10 +68,10 @@ class SvgRaster:
         subprocess.run(
             [node, str(RASTER_MJS)],
             check=True,
-            # Inherited, not constructed: Playwright resolves its browser build
-            # out of the real HOME cache, and a hand-built env that forgets one
-            # such variable fails as a browser launch error rather than as a
-            # missing-variable one.
+            # Inherited, not constructed: Playwright finds its browser build
+            # through PLAYWRIGHT_BROWSERS_PATH, which `Sandbox.activate()` pins
+            # to the real cache, and a hand-built env that forgets it fails as
+            # a browser launch error rather than as a missing-variable one.
             env={
                 **os.environ,
                 "WORKTREE": str(self._worktree),

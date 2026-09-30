@@ -90,7 +90,8 @@ the repo paths every other tool wants. Then grove_list_workspaces for the fleet,
 grove_get_workspace for one, and grove_peek_workspace for a bounded live
 snapshot. Lifecycle is grove_create_workspace, grove_pause_workspace,
 grove_resume_workspace, grove_respawn_workspace and grove_kill_workspace. Steer
-a running agent with grove_send_workspace_message. To wait on slow work — CI on
+a running agent with grove_send_workspace_message. Leading several agents
+toward one deliverable? Read the `leading-in-grove` skill first. To wait on slow work — CI on
 a commit, a timer, a command that exits when it is done — call
 grove_register_watch and then END YOUR TURN rather than polling or sleeping:
 Grove delivers the outcome to the recipient as ordinary mail when it settles. Every

@@ -10,8 +10,9 @@ unreachable facts into committed PNGs:
 * ``ClaudeQuotaProvider.collect`` spends a live OAuth request against
   ``api.anthropic.com``, which an offline sandbox can never answer.
 
-Only those are faked, and only at the narrowest point. Everything upstream of
-the quota call stays real: `ClaudeSubscription` below plants an ordinary
+Only those are faked, and only at the narrowest point; the quota fake is
+`DemoClaudeQuota`, which the capture process installs as well. Everything
+upstream of the quota call stays real: `ClaudeSubscription` below plants an ordinary
 (fictional) ``.credentials.json`` under the sandbox profile so
 ``_read_credential``/``describe()`` and the plan-tier parsing all exercise their
 real code paths. The Codex window needs no fake at all — its provider tail-reads
@@ -25,13 +26,14 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import IO, Final
+from typing import IO, ClassVar, Final
 
 from loguru import logger
 
@@ -44,6 +46,53 @@ WEBAPP_PORT: Final[int] = 3344
 SHOTS_MJS: Final[Path] = Path(__file__).with_name("webapp_shots.mjs")
 
 
+SLOW_REQUEST_SECONDS: Final[float] = 2.0
+"""A daemon request past this is logged with its path; streams are exempt."""
+
+
+class DemoClaudeQuota:
+    """The one network call the demo cannot answer, answered with a fixed window.
+
+    INSTALLED IN EVERY PROCESS THAT CAN ASK, not only the daemon. The capture
+    process asks too: the usage warm-up probes quota, and the TUI's quota footer
+    reads it in-process. Unpatched there, the real provider spends a request
+    with a fictional token, fails, and records `rate_limited` plus a cool-off in
+    the cross-process quota ledger, which the daemon then honours without ever
+    calling its own patched fetch. One fake, installed everywhere, means the
+    order in which the two halves of a capture run cannot change a picture.
+    """
+
+    @staticmethod
+    def fetch(_provider: object, _token: str) -> tuple[int, dict[str, object], None]:
+        now = datetime.now(UTC)
+        return (
+            200,
+            {
+                "limits": [
+                    {
+                        "kind": "5h_limit",
+                        "group": "session",
+                        "percent": 42.0,
+                        "resets_at": (now + timedelta(hours=3, minutes=12)).isoformat(),
+                    },
+                    {
+                        "kind": "7d_limit",
+                        "group": "weekly",
+                        "percent": 18.0,
+                        "resets_at": (now + timedelta(days=4, hours=6)).isoformat(),
+                    },
+                ]
+            },
+            None,
+        )
+
+    @classmethod
+    def install(cls) -> None:
+        from grove.core.usage.quota.claude import ClaudeQuotaProvider  # noqa: PLC0415
+
+        ClaudeQuotaProvider._fetch = cls.fetch  # type: ignore[method-assign,assignment]
+
+
 def _daemon_wrapper(port: int) -> str:
     """The in-process patches applied BEFORE `grove.daemon._asgi` is imported."""
     return f"""
@@ -51,30 +100,34 @@ import socket, getpass
 socket.gethostname = lambda: "grove-demo"
 getpass.getuser = lambda: "grove"
 
-from datetime import UTC, datetime, timedelta
-from grove.core.usage.quota.claude import ClaudeQuotaProvider
+from tools.screenshots.driver.webapp import DemoClaudeQuota
+DemoClaudeQuota.install()
 
-def _fake_claude_fetch(self, token):
-    now = datetime.now(UTC)
-    payload = {{
-        "limits": [
-            {{
-                "kind": "5h_limit",
-                "group": "session",
-                "percent": 42.0,
-                "resets_at": (now + timedelta(hours=3, minutes=12)).isoformat(),
-            }},
-            {{
-                "kind": "7d_limit",
-                "group": "weekly",
-                "percent": 18.0,
-                "resets_at": (now + timedelta(days=4, hours=6)).isoformat(),
-            }},
-        ]
-    }}
-    return 200, payload, None
+# THE DAEMON'S SIDE OF A SLOW REQUEST. The browser script logs how long each
+# call took end to end, and that number cannot say whether the time was spent
+# in the daemon or in front of it; a CI capture failed on 100+ s usage reads
+# that this same daemon answers in ~15 s on a developer host, and nothing
+# could tell the two apart. Grove's own access log is off, so this is the one
+# timing of the daemon's own work. It prints straight to stderr, which the CI
+# job log keeps, and only past a threshold, so a healthy run says nothing.
+import sys as _sys, time as _time
+import grove.daemon._asgi as _asgi
 
-ClaudeQuotaProvider._fetch = _fake_claude_fetch
+_inner_app = _asgi.app
+
+async def _timed_app(scope, receive, send):
+    if scope.get("type") != "http":
+        return await _inner_app(scope, receive, send)
+    started = _time.monotonic()
+    try:
+        return await _inner_app(scope, receive, send)
+    finally:
+        took = _time.monotonic() - started
+        path = scope.get("path", "?")
+        if took >= {SLOW_REQUEST_SECONDS} and not path.endswith(("/events", "/stream")):
+            print("daemon: %s took %.1fs" % (path, took), file=_sys.stderr, flush=True)
+
+_asgi.app = _timed_app
 
 import uvicorn
 uvicorn.run(
@@ -123,23 +176,19 @@ class ClaudeSubscription:
         }
         (claude_root / ".credentials.json").write_text(json.dumps(credentials), encoding="utf-8")
 
+        # MERGE, never overwrite: `DemoConfig.publish` writes the demo's pricing
+        # into this same file, and a capture that plants the credential after
+        # seeding would otherwise price every session as unknown.
         config_path = paths.user_config_path()
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            json.dumps(
-                {
-                    "usage": {
-                        "quota": {
-                            "profiles": {
-                                "claude_code": [str(claude_root)],
-                                "codex": [str(self._sandbox.path("codex"))],
-                            }
-                        }
-                    }
-                }
-            ),
-            encoding="utf-8",
-        )
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        profiles = data.setdefault("usage", {}).setdefault("quota", {}).setdefault("profiles", {})
+        profiles["claude_code"] = [str(claude_root)]
+        profiles["codex"] = [str(self._sandbox.path("codex"))]
+        config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 @dataclass(slots=True)
@@ -158,14 +207,41 @@ class _Service:
     process: subprocess.Popen[bytes]
     log: IO[bytes]
 
+    TAIL_BYTES: ClassVar[int] = 8000
+
     def stop(self) -> None:
-        if self.process.poll() is None:
+        died = self.process.poll()
+        if died is None:
             self._signal(signal.SIGTERM)
             try:
                 self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self._signal(signal.SIGKILL)
         self.log.close()
+        if died is not None:
+            self._report_death(died)
+
+    def _report_death(self, code: int) -> None:
+        """Print the log's tail when this child exited on its own, before `stop`.
+
+        THE ONE LOG THAT NAMES THE CAUSE IS DELETED WITH THE SANDBOX. The daemon
+        dying mid-capture surfaces only as a wall of 502s from the web server in
+        front of it, and a run that fails discards the sandbox — so on CI the
+        explanation never survived a single run. Stderr is what a CI job log
+        keeps, so the tail goes there, and only for a death nobody asked for.
+        """
+        path = Path(self.log.name)
+        try:
+            with path.open("rb") as handle:
+                handle.seek(max(0, path.stat().st_size - self.TAIL_BYTES))
+                tail = handle.read().decode("utf-8", "replace")
+        except OSError as exc:
+            tail = f"(log unreadable: {exc})"
+        print(
+            f"--- {self.name} exited on its own with code {code}; last lines of its log ---\n"
+            f"{tail}\n--- end of {self.name} log ---",
+            file=sys.stderr,
+        )
 
     def _signal(self, sig: int) -> None:
         try:
@@ -204,7 +280,14 @@ class WebappCapture:
             return "node not found on PATH"
         return None
 
-    def start(self) -> None:
+    def start(self, *, webapp: bool = True) -> None:
+        """Bring up the sandbox daemon, then (unless told not to) the web server.
+
+        ``webapp=False`` is the TUI capture's entry: its Activity dashboard reads
+        ONLY the daemon's `/events` stream, so a TUI run needs this same daemon
+        and nothing else. Without one the stream is refused, the dashboard
+        retries quietly, and the captured wall is empty.
+        """
         self._spawn(
             "daemon",
             ["uv", "run", "python", "-c", _daemon_wrapper(DAEMON_PORT)],
@@ -213,6 +296,8 @@ class WebappCapture:
         )
         self._wait_http(f"{self.daemon_url}/healthz", timeout=40, label="daemon")
         logger.warning("daemon up on {}", self.daemon_url)
+        if not webapp:
+            return
 
         env = os.environ.copy()
         env["GROVE_DAEMON_URL"] = self.daemon_url
@@ -252,6 +337,24 @@ class WebappCapture:
         for service in reversed(self._services):
             service.stop()
         self._services.clear()
+        self._report_slow_requests()
+
+    def _report_slow_requests(self) -> None:
+        """Echo the daemon's own slow-request lines, which live in its log.
+
+        The daemon's output goes to `daemon.log` inside the sandbox, and the
+        sandbox is discarded after the run — so without this the daemon-side
+        timing would be written and never read. Printed on success too: a run
+        that passed at 80 s is the one worth seeing before it fails at 95.
+        """
+        path = self._sandbox.path("daemon.log")
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return
+        for line in lines:
+            if line.startswith("daemon: ") and " took " in line:
+                print(line, file=sys.stderr)
 
     def _spawn(self, name: str, argv: list[str], *, cwd: Path, env: dict[str, str]) -> None:
         log = (self._sandbox.path(f"{name}.log")).open("wb")

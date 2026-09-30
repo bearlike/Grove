@@ -9,7 +9,7 @@ answer.
 its question differently rather than merely asking a different question: every
 other aggregate folds time away, so its SQL groups by a facet alone, while this
 one JOINs a generated calendar and keeps both axes. The shared parts are reached
-through the seams that already exist — ``session_filter_sql`` for the facet
+through the seams that already exist — ``calendar_scope`` for the window and facet
 filter, ``day_boundaries`` for the calendar, ``PriceBook`` for money, and an
 injected ``coverage`` callable — so nothing here is a second definition of a rule
 somebody else owns.
@@ -46,7 +46,7 @@ from grove.core.contracts.usage import (
 from grove.core.usage._intervals import ActiveIntervals
 from grove.core.usage._pricing import PriceBook, TokenCounts
 from grove.core.usage._store import DayBucket, UsageStore, day_boundaries, resolve_zone
-from grove.core.usage.query import DAY_EVENT_JOIN, day_calendar_sql, session_filter_sql
+from grove.core.usage.query import DAY_EVENT_JOIN, calendar_scope
 
 _EVENT_JOIN: Final = DAY_EVENT_JOIN
 """The one join every read here makes: events, their session, and the day they
@@ -299,13 +299,12 @@ class UsageSeriesQuery:
         23 or 25 hours across a DST transition — and no expression over epoch
         seconds can say that.
         """
-        where, params = session_filter_sql(filters, alias="s", timestamp_column="e.ts")
+        calendar, where, params = calendar_scope(filters, buckets)
         if dimension == "tool":
             # A tool series is about named tools; an event that named none is
             # not an anonymous tool, it is not a tool call.
             where += " AND e.tool_name IS NOT NULL"
-        calendar, calendar_params = day_calendar_sql(buckets)
-        return calendar, where, [*calendar_params, *params]
+        return calendar, where, params
 
     def _session_days(
         self,

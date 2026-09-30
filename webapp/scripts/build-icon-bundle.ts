@@ -8,9 +8,8 @@
  * on the deployed app 2026-09-15 it cost three cross-origin round trips to a
  * third party on EVERY page load, with no HTTP caching surviving a reload.
  *
- * The whole catalog is small enough that shipping it is cheaper than fetching
- * it: 30 distinct slugs across 4 prefixes, ~17 KB of raw JSON before compression.
- * Bundling it removes the third-party dependency from first paint entirely, so
+ * The whole catalog — builtin tools and the MCP servers it recognizes — is small
+ * enough that shipping it is cheaper than fetching it. Bundling it removes the third-party dependency from first paint entirely, so
  * a timeline's marks are present in the first render rather than swapping in
  * after a network hop — and a reader on a slow link, an offline laptop, or a
  * network that blocks the API sees real icons instead of a page of fallbacks.
@@ -25,12 +24,32 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { UNKNOWN_SERVER_ICON, UNKNOWN_TOOL_ICON } from "../lib/grove/adapters/tool-catalog";
+
 const CATALOG = "lib/grove/adapters/tool-catalog.json";
 const BUNDLE = "lib/grove/adapters/tool-icon-bundle.json";
 
-/** Slugs Grove renders that no catalog entry names: the two generic fallbacks
- * (an unknown tool, an unmapped MCP server) and the agent brand mark. */
-const EXTRA_SLUGS = ["flat-color-icons:services", "flat-color-icons:settings"];
+/** Slugs Grove renders that no catalog entry names: the two generic fallbacks. */
+const EXTRA_SLUGS = [UNKNOWN_TOOL_ICON, UNKNOWN_SERVER_ICON];
+
+/**
+ * Grove's own mark is no public icon set's, so it is its own prefix, read from
+ * the artwork of record rather than a copy that could drift from it. The logo
+ * is one `<svg>` whose children are the whole picture — attributes included,
+ * since its `fill-rule` is load-bearing geometry (see `brand-mark.test.tsx`).
+ */
+const LOCAL_SETS: Record<string, { file: string; name: string }> = {
+  grove: { file: "../docs/img/grove-logo.svg", name: "grove" },
+};
+
+async function localSet(root: string, prefix: string): Promise<IconifyJSON> {
+  const { file, name } = LOCAL_SETS[prefix];
+  const svg = await readFile(join(root, file), "utf8");
+  const viewBox = svg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/);
+  const body = svg.match(/<svg[^>]*>([^]*)<\/svg>/)?.[1].trim();
+  if (!viewBox || !body) throw new Error(`${file}: expected one <svg> with a viewBox`);
+  return { prefix, icons: { [name]: { body } }, width: Number(viewBox[1]), height: Number(viewBox[2]) };
+}
 
 interface IconifyJSON {
   prefix: string;
@@ -53,14 +72,22 @@ async function fetchPrefix(prefix: string, names: string[]): Promise<IconifyJSON
   }
   const missing = names.filter((name) => !(name in (data.icons ?? {})));
   if (missing.length) throw new Error(`${prefix}: missing after fetch: ${missing.join(", ")}`);
+  // A mark that names no paint at all falls back to SVG's default black, which
+  // disappears on a dark coin and a dark row (`logos:devin` ships this way).
+  // Monochrome sets say `currentColor` for exactly this reason, so an unpainted
+  // body is given the same instruction rather than a colour of its own.
+  for (const icon of Object.values(data.icons) as { body: string }[]) {
+    if (!/fill=|stroke=|currentColor/.test(icon.body)) icon.body = `<g fill="currentColor">${icon.body}</g>`;
+  }
   return data;
 }
 
 export async function buildBundle(root: string): Promise<Record<string, IconifyJSON>> {
   const catalog = JSON.parse(await readFile(join(root, CATALOG), "utf8")) as {
     tools: { icon: string }[];
+    servers: { icon: string }[];
   };
-  const slugs = new Set([...catalog.tools.map((tool) => tool.icon), ...EXTRA_SLUGS]);
+  const slugs = new Set([...catalog.tools, ...catalog.servers].map((entry) => entry.icon).concat(EXTRA_SLUGS));
 
   const byPrefix = new Map<string, string[]>();
   for (const slug of slugs) {
@@ -71,7 +98,9 @@ export async function buildBundle(root: string): Promise<Record<string, IconifyJ
 
   const bundle: Record<string, IconifyJSON> = {};
   for (const prefix of [...byPrefix.keys()].sort()) {
-    bundle[prefix] = await fetchPrefix(prefix, byPrefix.get(prefix) ?? []);
+    bundle[prefix] = Object.hasOwn(LOCAL_SETS, prefix)
+      ? await localSet(root, prefix)
+      : await fetchPrefix(prefix, byPrefix.get(prefix) ?? []);
   }
   return bundle;
 }

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from tools.screenshots.fixture import DemoWorld, Tempo, ToolStep, Transcript, Turn
 from tools.screenshots.planter import ClaudeTranscriptPlanter, CodexRolloutPlanter
+from tools.screenshots.planter.config import DemoConfig
 
 BASE = datetime(2026, 6, 13, 10, 0, tzinfo=UTC)
 SESSION = "11111111-1111-4111-8111-111111111111"
@@ -254,3 +255,41 @@ class TestCodexRolloutPlanter:
         )
         calls = [r["payload"] for r in records if r["payload"].get("type") == "custom_tool_call"]
         assert [call["input"] for call in calls] == [body]
+
+
+class TestDemoConfig:
+    """The demo agents are shell scripts that print and sleep, so every one of
+    them has to launch as a TERMINAL. When the engine's default flipped to a
+    Grove-owned native session, the stubs answered no protocol, and every
+    capture shipped an errored fleet: `error` on each list card, a dashboard
+    with no cards and a sessions browser with no sessions."""
+
+    def test_every_demo_agent_pins_the_terminal_launch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Asserted on what the config SAYS, not on what it resolves to: the
+        suite's autouse `_terminal_agents_by_default` patches the field default
+        to False, so a resolved `owns_native_session` reads False here whether
+        or not the demo pinned it — the exact blind spot that let the flip ship.
+        """
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        cfg = DemoConfig(DemoWorld.load()).resolve()
+        stubs = [spec for spec in cfg.agents if spec.name in DemoConfig.STUBS]
+        assert {spec.name for spec in stubs} == set(DemoConfig.STUBS)
+        for spec in stubs:
+            assert "native" in spec.model_fields_set, spec.name
+            assert spec.native is False, spec.name
+
+    def test_the_capture_daemon_is_the_one_every_client_is_pointed_at(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The TUI dashboard reads only `/events` at `hooks.daemon_url`. Left at
+        the default loopback port, a capture found no daemon on CI (an empty
+        wall) and the developer's real one on a workstation."""
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        world = DemoWorld.load()
+        url = "http://127.0.0.1:7533"
+        assert DemoConfig(world, daemon_url=url).resolve().hooks.daemon_url == url
+        assert DemoConfig(world).resolve().hooks.daemon_url == ""

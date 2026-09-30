@@ -60,7 +60,7 @@ on:
           - python-quality
           - webapp-gate
           - webapp-e2e
-          - docs-screenshots
+          - docs-build
           - everything
       paths:
         description: "[python-tests] paths, space separated (e.g. 'tests/core tests/daemon')"
@@ -92,31 +92,11 @@ on:
         type: string
         required: false
         default: ""
-      e2e_shards:
-        description: "[webapp-e2e] parallel shards"
+      e2e_shard:
+        description: "[webapp-e2e] which shard to run, 1-4; each shard is its own dispatch"
         type: number
         required: false
-        default: 4
-      shots_target:
-        description: "[docs-screenshots] branch the regenerated images are committed to"
-        type: string
-        required: false
-        default: "main"
-      shots_source:
-        description: "[docs-screenshots] branch supplying the capture tooling; empty reuses the target"
-        type: string
-        required: false
-        default: ""
-      shots:
-        description: "[docs-screenshots] all | subset of tui,webapp"
-        type: string
-        required: false
-        default: "all"
-      shots_dry_run:
-        description: "[docs-screenshots] 'true' captures and diffs but never pushes"
-        type: string
-        required: false
-        default: "false"
+        default: 1
 
 jobs:
   python-tests:
@@ -142,24 +122,21 @@ jobs:
     with:
       gates: ${{ inputs.webapp_gates }}
 
+  # ONE shard per dispatch, and not part of `everything`: the whole suite is
+  # four parallel jobs, which is what ci.yml's own dispatch runs (components=webapp).
   webapp-e2e:
     name: Webapp e2e
-    if: inputs.suite == 'webapp-e2e' || inputs.suite == 'everything'
+    if: inputs.suite == 'webapp-e2e'
     uses: ./.github/workflows/_webapp-e2e.yml
     with:
       grep: ${{ inputs.e2e_grep }}
-      shards: ${{ inputs.e2e_shards }}
+      shard: ${{ inputs.e2e_shard }}
+      shards: 4
 
-  # Deliberately NOT part of `everything`. Every other suite here READS the tree
-  # and reports a verdict; this one WRITES to a branch. Folding a push into the
-  # run-everything option would mean a routine "just gate the branch" dispatch
-  # quietly landed a commit, so it is reachable only by asking for it by name.
-  docs-screenshots:
-    name: Docs screenshots
-    if: inputs.suite == 'docs-screenshots'
-    uses: ./.github/workflows/_docs-screenshots.yml
-    with:
-      target: ${{ inputs.shots_target }}
-      source: ${{ inputs.shots_source }}
-      shots: ${{ inputs.shots }}
-      dry_run: ${{ inputs.shots_dry_run }}
+  docs-build:
+    name: Docs build
+    if: inputs.suite == 'docs-build' || inputs.suite == 'everything'
+    uses: ./.github/workflows/_docs-build.yml
+
+# Screenshots are NOT here: they write to a branch, so they live in their own
+# workflow (screenshots.yml) with their own dispatch form and inputs.

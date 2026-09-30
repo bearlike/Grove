@@ -124,6 +124,10 @@ def test_maps_real_tool_parts_and_todo(adapter: OpencodeAdapter) -> None:
     assert [(item.content, item.status) for item in todo.items] == [("parity", "pending")]
     tool_calls = [entry.tool for turn in turns for entry in turn.entries if entry.tool is not None]
     assert [call.status for call in tool_calls] == ["ok", "ok", "ok", "ok"]
+    # Every entry is stamped with its message's clock, in non-decreasing order.
+    stamps = [entry.at for turn in turns for entry in turn.entries]
+    assert stamps and all(at is not None for at in stamps)
+    assert stamps == sorted(stamps)  # type: ignore[type-var]
 
 
 def test_keeps_real_stuck_tool_running_without_inventing_an_error(adapter: OpencodeAdapter) -> None:

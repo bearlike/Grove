@@ -3,11 +3,11 @@ title: Grove
 ---
 
 <div class="ms-hero">
-  <p class="ms-hero__eyebrow">Grove · workspaces for AI coding agents</p>
+  <p class="ms-hero__eyebrow">Grove · agent development environment</p>
   <h1 class="ms-hero__title">Run a forest of coding agents</h1>
   <p class="ms-hero__lede">
-    Twenty agents, twenty isolated workspaces, and you never lose your place. Grove does not touch
-    your agent. It owns everything around it, and every workspace reports to the ticket you filed.
+    Grove is a software factory for the agents you already use. It gives each task a workspace
+    and keeps work visible from ticket to delivery. Guide the work with files and diagrams.
   </p>
   <div class="ms-cta-row">
     <a class="ms-btn ms-btn--primary" href="../getting-started/">
@@ -146,7 +146,7 @@ title: Grove
 
 ## What is Grove? { .ms-h2-icon data-icon="target" }
 
-- **Writing the code stopped being the slow part.** Deciding what to build did. More agents can build in parallel but shared checkouts cause conflicts and laptops limit capacity. Grove adds IDE tools around those agents without replacing them. It manages their workspaces and runtimes and gives you tools to guide their work.
+- **Writing the code stopped being the slow part.** Deciding what to build did. More agents can build in parallel but shared checkouts cause conflicts and laptops limit capacity. Grove turns the agents you already use into a software factory. Guide each task from ticket to delivery.
 - **Give each task its own workspace.** Each agent gets its own worktree and branch in a separate window. Agents report progress phases for the workspace and each attached ticket independently. You can see what is being planned, built or verified across the fleet.
 - **Choose how each agent runs.** Run agents on your host with the environment they normally inherit. Or use a [container](features-containers.md) defined by your repository's `.devcontainer/`. It provides separate services and ports with resource limits. Use that isolation for runs with agent permission checks disabled.
 - **Choose where the work runs.** Tests, builds and scripts compete for CPU and memory across concurrent workspaces. Move those workloads off your laptop when it slows down. Reuse the container configuration on a shared team machine or serverless cloud infrastructure.
@@ -170,7 +170,7 @@ Every workspace is reachable from all four.
     <iconify-icon icon="lucide:layout-panel-top" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Web dashboard</span>
-  <span class="ms-card__body">Manage your agents from any device and track their transcripts and task progress. Review diagrams and annotate screenshots to show what needs changing.</span>
+  <span class="ms-card__body">Follow agent sessions from any device. Read the transcript beside the branch and diff. Upload files or annotate screenshots. Edit draw.io diagrams with the agent.</span>
 </a>
 <a class="ms-card" href="../issue-ops/">
   <span class="ms-card__icon">
@@ -184,7 +184,7 @@ Every workspace is reachable from all four.
     <iconify-icon icon="lucide:plug" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Another agent</span>
-  <span class="ms-card__body">Give an orchestrating agent the tools to delegate across isolated workspaces. Through MCP it can launch agents, inspect their progress and send follow ups while you retain oversight.</span>
+  <span class="ms-card__body">An orchestrating agent can delegate work and track progress through Grove's MCP tools. Worker agents discover peers and exchange messages through the mailbox. Separate workspaces can stay coordinated without sharing files.</span>
 </a>
 </div>
 
@@ -203,14 +203,14 @@ Every workspace is reachable from all four.
       <iconify-icon icon="lucide:waypoints" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
     <span class="ms-card__title">Agent monitoring</span>
-    <span class="ms-card__body">Every turn becomes one trace with its model calls, tool calls, latency and cost, in Langfuse or any OTLP backend. Usage, subscription windows and a year of spend come from transcripts on your own disk.</span>
+    <span class="ms-card__body">Each turn becomes a trace of tool calls and cost. Rate answers in Grove with a thumb and an optional reason. Langfuse keeps the scores on that trace. Usage and spend come from local transcripts.</span>
   </a>
   <a class="ms-card" href="../features-containers/">
     <span class="ms-card__icon">
       <iconify-icon icon="lucide:box" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
     <span class="ms-card__title">Isolated containers</span>
-    <span class="ms-card__body">Each agent runs in the repository's own devcontainer with resource and egress ceilings, so permissions off is safe and twenty agents cannot saturate one machine. Sessions survive restarts and re-adopt on their own.</span>
+    <span class="ms-card__body">Run each agent in a containerized sandbox for its task. Separate files and services prevent collisions. Set resource limits to protect the rest of the fleet. Scale each agent container independently on serverless cloud platforms as tasks arrive.</span>
   </a>
   <a class="ms-card" href="../features-diagrams/">
     <span class="ms-card__icon">
@@ -231,7 +231,7 @@ Every workspace is reachable from all four.
       <iconify-icon icon="lucide:plug" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
     <span class="ms-card__title">Remote access</span>
-    <span class="ms-card__body">The same fleet from a terminal, a browser on any device, a tracker comment, or another agent over MCP. One daemon on loopback, a pairing handshake, and push notifications when an agent needs you.</span>
+    <span class="ms-card__body">Your agents run headlessly and stay reachable from any browser or through MCP.</span>
   </a>
 </div>
 

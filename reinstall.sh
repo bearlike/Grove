@@ -1,342 +1,242 @@
 #!/usr/bin/env bash
-# Grove dev reinstaller — refresh every surface from a local checkout.
+# Grove dev reinstaller: refresh every running surface from this checkout.
 #
-# Unlike install.sh (the end-user PyPI/git installer), this script is for
-# contributors running Grove out of an editable `uv tool` install. New code on
-# disk does NOT change anything already running: a live process loaded its
-# modules at startup, a long-lived service keeps the old build until restarted,
-# and the webapp serves a prebuilt `.next`. So an update is never "just pull" —
-# it is reinstall the package, rebuild the webapp, restart the services, then
-# prove each surface loaded the new code.
+# For contributors running Grove from an editable `uv tool` install. End users
+# upgrade with `uv tool upgrade grove-factory` instead. New code on disk changes
+# nothing already running, so this script reinstalls, rebuilds, restarts, then
+# proves each surface serves the new code.
+#
+# It uses no Node from your machine. Node and npm ship inside Grove's own tool
+# venv (the `nodejs-wheel` dependency), and the dashboard build runs on those.
+#
+# Safe to run unattended: it never prompts, reruns cleanly, and builds the new
+# dashboard BEFORE touching a live service, so a failed build leaves everything
+# serving the previous version. Any failure exits non-zero and names the step.
 #
 # Usage:
-#   ./reinstall.sh                 # do everything (package + webapp + services + verify)
-#   ./reinstall.sh --no-webapp     # skip the webapp rebuild
-#   ./reinstall.sh --no-daemon     # skip restarting the daemon
-#   ./reinstall.sh --no-mcp        # skip restarting a networked grove-mcp service
-#   ./reinstall.sh --no-reinstall  # skip the uv reinstall (editable source is already live)
-#   ./reinstall.sh --extras '.[daemon,mcp]'   # override the install extras (default '.[all]')
+#   ./reinstall.sh                 reinstall + rebuild + restart + verify
+#   ./reinstall.sh --no-reinstall  keep the current tool venv (editable code is live anyway)
+#   ./reinstall.sh --no-webapp     skip the dashboard rebuild and restart
+#   ./reinstall.sh --no-daemon     skip the daemon restart
+#   ./reinstall.sh --no-mcp        skip restarting a networked grove-mcp service
+#   ./reinstall.sh --no-verify     skip the verification pass
 #   ./reinstall.sh -h | --help
 #
-# Env:
-#   WEBAPP_NPM_BIN=<path>  pin the npm used for the webapp build. Otherwise it is
-#                          discovered: the webapp unit's own npm, the shell's, then
-#                          any nvm install — first one whose Node is >= 22 wins.
-#
-# Surfaces it refreshes (see the reinstalling-grove skill for the full model):
-#   • Package (CLI + TUI)  — `uv tool install --reinstall --editable`
-#   • Webapp               — `make webapp-build` THEN restart the webapp service
-#   • Daemon               — restart the long-lived HTTP + tmux service
-#   • MCP (grove-mcp)      — stdio: nothing to restart; the client respawns it per
-#                            connection. A networked `--transport streamable-http`
-#                            server is long-lived, so it IS restarted here when a
-#                            grove-mcp unit exists — a stdio-only host simply has
-#                            no unit to find. Skipping it silently was a real gap:
-#                            a newly added tool stayed invisible to networked
-#                            clients while every other surface reported success.
-#
-# Ports and service names are recovered live (never hard-coded) so the script is
-# portable across hosts.
+# Service names, ports and the daemon URL are read from this host, never assumed.
 
 set -euo pipefail
 
 # ─── options ──────────────────────────────────────────────────────────────────
-DO_REINSTALL=1
-DO_WEBAPP=1
-DO_DAEMON=1
-DO_MCP=1
-DO_VERIFY=1
-EXTRAS=".[all]"
+DO_REINSTALL=1 DO_WEBAPP=1 DO_DAEMON=1 DO_MCP=1 DO_VERIFY=1
 
-# Derived from the header block, not a hard-coded line range: a line number in a
-# sed script silently truncates the help text the moment the header grows.
-usage() {
-  awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"
+usage() {  # print the header comment above, which is the one source of truth
+  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
   exit "${1:-0}"
 }
 
-while [ $# -gt 0 ]; do
-  case "$1" in
+for arg in "$@"; do
+  case "$arg" in
     --no-reinstall) DO_REINSTALL=0 ;;
     --no-webapp)    DO_WEBAPP=0 ;;
     --no-daemon)    DO_DAEMON=0 ;;
     --no-mcp)       DO_MCP=0 ;;
     --no-verify)    DO_VERIFY=0 ;;
-    --extras)       EXTRAS="${2:?--extras needs a value}"; shift ;;
-    --extras=*)     EXTRAS="${1#--extras=}" ;;
     -h|--help)      usage 0 ;;
-    *) echo "unknown flag: $1" >&2; usage 2 ;;
+    *) printf 'unknown option: %s\n\n' "$arg" >&2; usage 2 ;;
   esac
-  shift
 done
 
-# ─── logging ──────────────────────────────────────────────────────────────────
+# ─── output ───────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
-  C_DIM=$'\033[2m'; C_BLUE=$'\033[34m'; C_GREEN=$'\033[32m'
-  C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_BOLD=$'\033[1m'; C_OFF=$'\033[0m'
+  BOLD=$'\033[1m' DIM=$'\033[2m' RED=$'\033[31m' GREEN=$'\033[32m'
+  YELLOW=$'\033[33m' BLUE=$'\033[34m' OFF=$'\033[0m'
 else
-  C_DIM=""; C_BLUE=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_BOLD=""; C_OFF=""
+  BOLD="" DIM="" RED="" GREEN="" YELLOW="" BLUE="" OFF=""
 fi
 
-STEP=0
-TOTAL=0
+CURRENT_STEP="startup"
+step() { CURRENT_STEP="$1"; printf '\n%s%s▸ %s%s\n' "$BOLD" "$BLUE" "$1" "$OFF"; }
+info() { printf '  %s%s%s\n' "$DIM" "$1" "$OFF"; }
+ok()   { printf '  %s✓%s %s\n' "$GREEN" "$OFF" "$1"; }
+warn() { printf '  %s!%s %s\n' "$YELLOW" "$OFF" "$1"; }
+die()  { printf '  %s✗%s %s\n' "$RED" "$OFF" "$1" >&2; exit 1; }
+run()  { "$@" 2>&1 | sed 's/^/    /'; }  # indent a command's output under its step
 
-ts() { date +%H:%M:%S; }
-step() { STEP=$((STEP + 1)); printf '%s%s[%d/%d]%s %s%s%s\n' "$C_BOLD" "$C_BLUE" "$STEP" "$TOTAL" "$C_OFF" "$C_BOLD" "$1" "$C_OFF"; }
-info() { printf '  %s%s%s %s\n' "$C_DIM" "$(ts)" "$C_OFF" "$1"; }
-ok()   { printf '  %s✓%s %s\n' "$C_GREEN" "$C_OFF" "$1"; }
-warn() { printf '  %s!%s %s\n' "$C_YELLOW" "$C_OFF" "$1"; }
-die()  { printf '  %s✗%s %s\n' "$C_RED" "$C_OFF" "$1" >&2; exit 1; }
+trap 'printf "\n%s✗ failed during: %s%s\n  line %s: %s\n" "$RED" "$CURRENT_STEP" "$OFF" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
-# ─── locate repo + tools ──────────────────────────────────────────────────────
+# ─── context ──────────────────────────────────────────────────────────────────
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)" \
-  || die "not inside a git checkout — run this from the Grove repo"
+  || die "not inside a git checkout; run this from the Grove repository"
 cd "$REPO_ROOT"
+command -v uv >/dev/null 2>&1 || die "uv is not on PATH (https://docs.astral.sh/uv/)"
 
-command -v uv >/dev/null 2>&1 || die "uv not on PATH — see install.sh"
-HAVE_SYSTEMCTL=0
-command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1 && HAVE_SYSTEMCTL=1
+HAVE_SYSTEMD=0
+systemctl --user show-environment >/dev/null 2>&1 && HAVE_SYSTEMD=1
 
-HEAD_SHA="$(git rev-parse --short HEAD)"
-HEAD_SUBJECT="$(git log --oneline -1)"
-printf '%s%sGrove reinstall%s  %srepo:%s %s  %shead:%s %s\n\n' \
-  "$C_BOLD" "$C_BLUE" "$C_OFF" "$C_DIM" "$C_OFF" "$REPO_ROOT" "$C_DIM" "$C_OFF" "$HEAD_SUBJECT"
-
-# Discover the installed grove-* user services (host-agnostic).
-discover_service() {  # $1 = keyword (daemon|webapp|mcp) → echoes unit name or empty
-  [ "$HAVE_SYSTEMCTL" = 1 ] || return 0
-  systemctl --user list-unit-files "grove-*.service" --no-legend 2>/dev/null \
-    | awk '{print $1}' | grep -E "grove-$1" | head -1
+unit_named() {  # $1 = daemon|webapp|mcp → the installed grove unit, or nothing
+  [ "$HAVE_SYSTEMD" = 1 ] || return 0
+  # list-unit-files exits non-zero when nothing matches, which is an answer here.
+  systemctl --user list-unit-files "grove-$1.service" --no-legend 2>/dev/null \
+    | awk 'NR==1 {print $1}' || true
 }
-DAEMON_SVC="$(discover_service daemon)"
-WEBAPP_SVC="$(discover_service webapp)"
-# Only a NETWORKED grove-mcp is a long-lived process worth restarting. A stdio
-# server is respawned by its client per connection, so it needs nothing here and
-# correctly has no unit to find.
-MCP_SVC="$(discover_service mcp)"
+DAEMON_UNIT="$(unit_named daemon)"
+WEBAPP_UNIT="$(unit_named webapp)"
+MCP_UNIT="$(unit_named mcp)"   # only a networked grove-mcp has one; stdio needs none
 
-# Counted after discovery, not before: the MCP step exists only on a host that
-# actually runs a networked server, and printing "[3/5]" for a step that will
-# never run reads as a silent skip.
-[ "$DO_REINSTALL" = 1 ] && TOTAL=$((TOTAL + 1))
-[ "$DO_WEBAPP"    = 1 ] && TOTAL=$((TOTAL + 1))
-[ "$DO_DAEMON"    = 1 ] && TOTAL=$((TOTAL + 1))
-[ "$DO_MCP" = 1 ] && [ -n "$MCP_SVC" ] && TOTAL=$((TOTAL + 1))
-[ "$DO_VERIFY"    = 1 ] && TOTAL=$((TOTAL + 1))
-
-restart_service() {  # $1 = unit name, $2 = human label
-  local unit="$1" label="$2"
-  if [ -z "$unit" ]; then
-    warn "no $label systemd unit found — restart it however it runs on this host"
+restart() {  # $1 = unit (may be empty), $2 = label
+  if [ -z "$1" ]; then
+    warn "no $2 service installed; restart it however it runs on this host"
     return 0
   fi
-  info "restarting $unit"
-  systemctl --user restart "$unit" || die "failed to restart $unit"
-  ok "$label restarted ($unit)"
+  systemctl --user restart "$1"
+  ok "$2 restarted ($1)"
 }
 
-# The webapp needs Node >= 22 (Next 16) and this host's default `node` is often
-# older, so `make webapp-build` — which inherits whatever npm is on PATH — would
-# build it on the wrong toolchain. That is not cosmetic: npm prints a wall of
-# EBADENGINE warnings and the resulting .next is then SERVED by the unit's own
-# (newer) Node, so build and runtime disagree while every step reports success.
-# Resolve it the same way the ports and unit names above are resolved: ask the
-# host, never assume the shell.
-npm_node_major() {  # $1 = path to an npm bin → echoes its sibling node's major
-  local node_bin
-  node_bin="$(dirname "$1")/node"
-  [ -x "$node_bin" ] || return 0
-  "$node_bin" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true
-}
+printf '%s%sGrove reinstall%s  %s%s%s\n' "$BOLD" "$BLUE" "$OFF" "$DIM" "$(git log --oneline -1)" "$OFF"
 
-# Candidates in trust order: an explicit override, the Node the webapp unit
-# already runs (the strongest signal — it is what will execute the build's
-# output), the shell's npm, then any nvm-managed install, newest first.
-webapp_npm_candidates() {
-  [ -n "${WEBAPP_NPM_BIN:-}" ] && echo "$WEBAPP_NPM_BIN"
-  [ "$HAVE_SYSTEMCTL" = 1 ] && [ -n "$WEBAPP_SVC" ] && \
-    systemctl --user cat "$WEBAPP_SVC" 2>/dev/null \
-      | sed -n 's|^ExecStart=\([^ ]*/npm\) .*|\1|p' | head -1
-  command -v npm 2>/dev/null || true
-  local nvm_dir
-  for nvm_dir in "${NVM_DIR:-}" "$HOME/.nvm" "$HOME/.config/nvm"; do
-    [ -n "$nvm_dir" ] && [ -d "$nvm_dir/versions/node" ] || continue
-    find "$nvm_dir/versions/node" -mindepth 3 -maxdepth 3 -name npm -type f 2>/dev/null | sort -V -r
-  done
-}
-
-# Echoes an npm whose Node is >= 22, or empty when the host has none.
-resolve_webapp_npm() {
-  local cand major
-  while read -r cand; do
-    [ -n "$cand" ] && [ -x "$cand" ] || continue
-    major="$(npm_node_major "$cand")"
-    [ -n "$major" ] && [ "$major" -ge 22 ] 2>/dev/null || continue
-    echo "$cand"
-    return 0
-  done <<EOF
-$(webapp_npm_candidates)
-EOF
-}
-
-# Resolve the daemon URL from grove's own config, falling back to the default.
-daemon_url() {
-  local url
-  url="$(grove debug 2>/dev/null | sed -n 's/.*\(http:\/\/127\.0\.0\.1:[0-9]\+\).*/\1/p' | head -1)"
-  echo "${url:-http://127.0.0.1:7421}"
-}
-
-# Run any grove entrypoint as another user — a root shell, `sudo claude` spawning
-# grove-mcp out of .mcp.json — and CPython writes that run's __pycache__ into this
-# shared venv as uid 0. uv must empty site-packages to reinstall, cannot unlink the
-# foreign bytecode, and aborts with a bare "Permission denied" naming some innocent
-# dependency. The cause is unguessable from that message, so name it here.
-assert_tool_venv_ours() {
-  local dir owner intruder
-  dir="$(uv tool dir 2>/dev/null)/grove"
-  [ -d "$dir" ] || return 0
-  owner="$(id -un)"
-  intruder="$(find "$dir" ! -user "$owner" -print -quit 2>/dev/null)"
-  [ -n "$intruder" ] || return 0
+# ─── 1. package ───────────────────────────────────────────────────────────────
+# One editable install carries every surface plus Grove's own Node and npm.
+assert_venv_owned_by_me() {
+  # A grove entrypoint once run as root (e.g. `sudo claude` spawning grove-mcp)
+  # leaves root-owned bytecode that uv cannot delete, and uv's error never says
+  # why. Name the cause instead.
+  local shim venv intruder
+  shim="$(command -v grove 2>/dev/null)" || return 0
+  venv="$(dirname "$(dirname "$(readlink -f "$shim")")")"
+  intruder="$(find "$venv" ! -user "$(id -un)" -print -quit 2>/dev/null || true)"
+  [ -z "$intruder" ] && return 0
   die "$(printf '%s\n      %s\n      %s' \
-    "the grove venv holds files not owned by ${owner} — e.g. ${intruder#"${dir}/"}" \
-    "cause: a grove entrypoint ran as another user (usually root); uv cannot delete its bytecode cache" \
-    "fix:   sudo chown -R ${owner}: ${dir}   # then re-run this script")"
+    "the grove venv holds files you do not own, e.g. ${intruder#"$venv/"}" \
+    "cause: a grove command ran as another user (usually root)" \
+    "fix:   sudo chown -R $(id -un): $venv   # then rerun")"
 }
 
-# ─── 1. package (CLI + TUI) ───────────────────────────────────────────────────
 if [ "$DO_REINSTALL" = 1 ]; then
-  step "Reinstall package (editable) — extras ${EXTRAS}"
-  assert_tool_venv_ours
-  info "uv tool install --reinstall --force --editable '${EXTRAS}'"
-  uv tool install --reinstall --force --editable "$EXTRAS" 2>&1 | sed 's/^/    /'
-  RESOLVED="$(grove version 2>/dev/null || echo '?')"
-  ok "package reinstalled — grove ${RESOLVED}"
-else
-  info "skipping package reinstall (--no-reinstall); editable source is live on next launch"
+  step "Reinstall the package"
+  assert_venv_owned_by_me
+  # Tools from before the distribution was renamed would otherwise linger beside it.
+  for old in grove-crew grove; do
+    uv tool list 2>/dev/null | grep -q "^$old " && run uv tool uninstall "$old"
+  done
+  run uv tool install --reinstall --force --editable .
+  ok "grove $("$(uv tool dir --bin)/grove" version 2>/dev/null | awk '{print $NF}') installed"
 fi
 
-# ─── 2. webapp (rebuild THEN restart) ─────────────────────────────────────────
+# The grove that uv manages, never merely the first one on PATH: a service unit
+# is written against this path, and it must survive the next reinstall.
+GROVE_SHIM="$(uv tool dir --bin)/grove"
+[ -x "$GROVE_SHIM" ] || die "no uv-managed grove at $GROVE_SHIM; rerun without --no-reinstall"
+TOOL_BIN="$(dirname "$(readlink -f "$GROVE_SHIM")")"
+[ -x "$TOOL_BIN/npm" ] || die "Grove's bundled npm is missing from $TOOL_BIN; rerun without --no-reinstall"
+
+wait_for_http() {  # $1 = url, $2 = seconds → echoes the last HTTP status
+  local code="000" i
+  for ((i = 0; i < $2; i++)); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$1" || true)"
+    [ "$code" != 000 ] && break
+    sleep 1
+  done
+  echo "$code"
+}
+
+unit_port() {  # $1 = unit → the --port its ExecStart names, if any
+  systemctl --user cat "$1" 2>/dev/null | sed -n 's/.*--port[= ]\([0-9]\{1,\}\).*/\1/p' | head -1
+}
+
+unit_serves_grove_web() {
+  systemctl --user cat "$WEBAPP_UNIT" 2>/dev/null | grep -q '^ExecStart=.* web --host'
+}
+
+# A unit written for the old `npm run start` layout serves webapp/.next on the
+# host's Node. Move it to `grove web`, keeping its host and port, and put the old
+# unit back untouched if the new one does not answer: the dashboard is never left
+# down by a migration.
+migrate_webapp_unit() {
+  local file backup port host code
+  file="$(systemctl --user show "$WEBAPP_UNIT" -p FragmentPath --value)"
+  backup="$file.pre-grove-web"
+  port="$(unit_port "$WEBAPP_UNIT")"
+  host="$(systemctl --user cat "$WEBAPP_UNIT" | sed -n 's/.*--hostname \([^ ]*\).*/\1/p' | head -1)"
+  info "migrating $WEBAPP_UNIT to 'grove web' on ${host:-0.0.0.0}:${port:-3000} (old unit kept as ${backup##*/})"
+  cp -f "$file" "$backup"
+  run make _systemd-install-webapp WITH_WEBAPP=1 GROVE_BIN="$GROVE_SHIM" \
+    WEBAPP_PORT="${port:-3000}" WEBAPP_HOST="${host:-0.0.0.0}"
+  systemctl --user daemon-reload
+  systemctl --user restart "$WEBAPP_UNIT"
+  code="$(wait_for_http "http://127.0.0.1:${port:-3000}/login" 30)"
+  case "$code" in
+    200|302|307) ok "dashboard migrated and serving (HTTP $code)" ;;
+    *)
+      cp -f "$backup" "$file"
+      systemctl --user daemon-reload
+      systemctl --user restart "$WEBAPP_UNIT"
+      die "the migrated dashboard answered HTTP $code, so the previous unit was restored; see 'journalctl --user -u $WEBAPP_UNIT'"
+      ;;
+  esac
+}
+
+# ─── 2. dashboard ─────────────────────────────────────────────────────────────
 if [ "$DO_WEBAPP" = 1 ]; then
-  step "Rebuild webapp (.next) + restart"
-  WEBAPP_NPM="$(resolve_webapp_npm)"
-  if [ -z "$WEBAPP_NPM" ]; then
-    die "$(printf '%s\n      %s' \
-      "no Node >= 22 npm found — the webapp (Next 16) cannot be built on this host" \
-      "fix:   install Node 22+ (e.g. 'nvm install 22'), or set WEBAPP_NPM_BIN=<path to its npm>")"
-  fi
-  # Report the node the SIBLING resolves to, which is the one Make will put on
-  # PATH — not `node -v` off the ambient shell, which is the mismatch this whole
-  # resolution exists to avoid.
-  info "npm: ${WEBAPP_NPM} (node $("$(dirname "$WEBAPP_NPM")/node" -p 'process.versions.node'))"
-  info "make webapp-build  (npm ci + npm run build)"
-  # Pass the resolved npm through Make's own override rather than mutating PATH:
-  # WEBAPP_NPM_BIN is the documented seam (see webapp/CLAUDE.md), and its recipes
-  # derive the sibling node dir from it.
-  make webapp-build WEBAPP_NPM_BIN="$WEBAPP_NPM" 2>&1 | sed 's/^/    /' || die "webapp build failed"
-  if [ -f webapp/.next/BUILD_ID ]; then
-    ok "build complete — BUILD_ID $(cat webapp/.next/BUILD_ID)"
-  fi
-  restart_service "$WEBAPP_SVC" "webapp"
-else
-  info "skipping webapp (--no-webapp)"
-fi
+  step "Rebuild the web dashboard"
+  info "node $("$TOOL_BIN/node" -p process.versions.node), npm $("$TOOL_BIN/npm" -v), both from Grove's venv"
+  # Builds beside the live bundle and swaps it in only on success, so the running
+  # dashboard keeps serving the previous build if anything below fails.
+  run make webapp-bundle WEBAPP_NPM_BIN="$TOOL_BIN/npm"
+  "$GROVE_SHIM" web --check >/dev/null || die "the new bundle does not resolve; see 'grove web --check'"
+  ok "bundle ready in src/grove/_webapp"
 
-# ─── 3. daemon (restart) ──────────────────────────────────────────────────────
-if [ "$DO_DAEMON" = 1 ]; then
-  step "Restart daemon"
-  restart_service "$DAEMON_SVC" "daemon"
-else
-  info "skipping daemon restart (--no-daemon)"
-fi
-
-# ─── 3b. networked MCP server (restart) ───────────────────────────────────────
-# The reinstall above swapped the tool venv this unit's entrypoint lives in, but
-# a running process keeps the modules it already imported — so without this it
-# happily serves the PREVIOUS build while every other surface reports success.
-# The symptom is a newly added tool simply not existing for networked clients,
-# which reads as an MCP client problem rather than a stale server.
-if [ -n "$MCP_SVC" ]; then
-  if [ "$DO_MCP" = 1 ]; then
-    step "Restart networked MCP server"
-    restart_service "$MCP_SVC" "mcp"
+  if [ -n "$WEBAPP_UNIT" ] && ! unit_serves_grove_web; then
+    migrate_webapp_unit
   else
-    info "skipping mcp restart (--no-mcp) — $MCP_SVC still serves the previous build"
+    restart "$WEBAPP_UNIT" "dashboard"
   fi
-else
-  info "no grove-mcp unit — stdio servers respawn per connection, nothing to restart"
+fi
+
+# ─── 3. daemon and MCP ────────────────────────────────────────────────────────
+if [ "$DO_DAEMON" = 1 ]; then
+  step "Restart the daemon"
+  restart "$DAEMON_UNIT" "daemon"
+fi
+
+# A networked grove-mcp keeps the modules it imported at startup, so it would
+# serve the previous build until restarted. A stdio server respawns per client.
+if [ "$DO_MCP" = 1 ] && [ -n "$MCP_UNIT" ]; then
+  step "Restart the networked MCP server"
+  restart "$MCP_UNIT" "mcp"
 fi
 
 # ─── 4. verify ────────────────────────────────────────────────────────────────
 if [ "$DO_VERIFY" = 1 ]; then
-  step "Verify surfaces loaded the new code"
-  URL="$(daemon_url)"
+  step "Verify"
+  if "$GROVE_SHIM" debug >/dev/null 2>&1; then ok "config loads"; else warn "grove debug failed; check 'grove config show'"; fi
+  if "$TOOL_BIN/grove-mcp" --help >/dev/null 2>&1; then ok "grove-mcp runs"; else warn "grove-mcp does not start"; fi
 
-  # Daemon races its own bind for ~1-2s after restart — poll healthz.
-  if [ "$DO_DAEMON" = 1 ] || [ -n "$DAEMON_SVC" ]; then
-    info "polling ${URL}/healthz"
-    code=""
-    for i in $(seq 1 15); do
-      code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "${URL}/healthz" || true)"
-      [ "$code" = 200 ] && { ok "healthz 200 (${i}s)"; break; }
-      sleep 1
-    done
-    [ "$code" = 200 ] || warn "healthz did not return 200 (last: ${code:-no response})"
-
-    # Route surface: count paths + confirm a known endpoint is present.
-    routes="$(curl -s --max-time 3 "${URL}/openapi.json" 2>/dev/null \
-      | python3 -c "import sys,json;d=json.load(sys.stdin);print(len(d['paths']), '/events' in d['paths'])" 2>/dev/null || true)"
-    [ -n "$routes" ] && info "openapi routes: ${routes% *} (/events present: ${routes#* })"
+  if [ -n "$DAEMON_UNIT" ]; then
+    daemon="http://127.0.0.1:$(unit_port "$DAEMON_UNIT" || true)"
+    [ "$daemon" = "http://127.0.0.1:" ] && daemon="http://127.0.0.1:7421"
+    code="$(wait_for_http "$daemon/healthz" 20)"
+    if [ "$code" = 200 ]; then ok "daemon healthy at $daemon"; else warn "daemon /healthz answered ${code} at $daemon"; fi
   fi
 
-  # CLI / config sanity.
-  if grove debug >/dev/null 2>&1; then
-    ok "grove debug OK (config loaded)"
-  else
-    warn "grove debug failed — check 'grove config show'"
-  fi
-
-  # MCP importability (only meaningful when the mcp extra is installed).
-  if grove-mcp --help >/dev/null 2>&1; then
-    ok "grove-mcp importable (mcp SDK resolved)"
-  else
-    warn "grove-mcp not importable — reinstall with an mcp extra (e.g. '.[all]')"
-  fi
-
-  # A networked MCP server is a surface like any other, so prove it came back
-  # rather than assuming the restart took. Port is read off the unit's own
-  # ExecStart — never hard-coded, same rule as the daemon URL above.
-  if [ -n "$MCP_SVC" ]; then
-    mcp_port="$(systemctl --user cat "$MCP_SVC" 2>/dev/null \
-      | sed -n 's/.*--port[= ]\([0-9]\{1,\}\).*/\1/p' | head -1)"
-    if [ "$(systemctl --user is-active "$MCP_SVC" 2>/dev/null)" = active ]; then
-      if [ -n "$mcp_port" ]; then
-        # Any HTTP status proves the listener is up; the MCP endpoint itself
-        # rejects a bare GET (it wants POST + session headers), so a 4xx here is
-        # a healthy server, not a failure. Only a connection refusal is bad.
-        mcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${mcp_port}/mcp" 2>/dev/null || true)"
-        case "$mcode" in
-          000|"") warn "mcp active but nothing answering on :${mcp_port}" ;;
-          *)      ok "mcp serving on :${mcp_port} (HTTP ${mcode})" ;;
-        esac
-      else
-        ok "mcp active ($MCP_SVC)"
-      fi
-    else
-      warn "$MCP_SVC is not active — check 'systemctl --user status $MCP_SVC'"
-    fi
-  fi
-
-  # Webapp HTTP reachability + build freshness.
-  if [ -n "$WEBAPP_SVC" ] || [ -f webapp/.next/BUILD_ID ]; then
-    wcode="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3000/ 2>/dev/null || true)"
-    case "$wcode" in
-      200|302|307) ok "webapp up (HTTP ${wcode})" ;;
-      *)           warn "webapp not reachable on :3000 (HTTP ${wcode:-none}) — port may differ on this host" ;;
+  if [ -n "$WEBAPP_UNIT" ]; then
+    web="http://127.0.0.1:$(unit_port "$WEBAPP_UNIT" || true)"
+    [ "$web" = "http://127.0.0.1:" ] && web="http://127.0.0.1:3000"
+    code="$(wait_for_http "$web/login" 20)"
+    case "$code" in
+      200|302|307) ok "dashboard serving at $web" ;;
+      *)           warn "dashboard answered ${code} at $web; see 'journalctl --user -u $WEBAPP_UNIT'" ;;
     esac
+  fi
+
+  if [ -n "$MCP_UNIT" ]; then
+    # The MCP endpoint rejects a bare GET, so any HTTP status means it is listening.
+    port="$(unit_port "$MCP_UNIT" || true)"
+    code=000
+    if [ -n "$port" ]; then code="$(wait_for_http "http://127.0.0.1:$port/mcp" 10)"; fi
+    if [ "$code" != 000 ]; then ok "mcp listening on :$port"; else warn "mcp is not answering; see 'systemctl --user status $MCP_UNIT'"; fi
   fi
 fi
 
-printf '\n%s%s✓ done%s — refreshed from %s\n' "$C_BOLD" "$C_GREEN" "$C_OFF" "$HEAD_SUBJECT"
-printf '%sNote:%s the TUI is a process YOU launch — quit any open %sgrove%s TUI and relaunch to pick up changes.\n' \
-  "$C_DIM" "$C_OFF" "$C_BOLD" "$C_OFF"
+trap - ERR
+printf '\n%s%s✓ done%s  relaunch any open %sgrove%s TUI to pick up the new code.\n' \
+  "$BOLD" "$GREEN" "$OFF" "$BOLD" "$OFF"

@@ -1954,6 +1954,27 @@ def test_read_turns_groups_replies_under_each_prompt(
     assert [e.role for e in second.entries] == ["tool", "assistant"]
 
 
+def test_read_turns_stamps_each_entry_with_its_message_clock(
+    adapter: ClaudeCodeAdapter, claude_home: Path
+) -> None:
+    """A trace view lays each step on a time axis, so every entry carries the
+    timestamp of the message it rode in on — the same clock a tool call's
+    ``duration_ms`` starts from. Two blocks of one message share it."""
+    _install(claude_home, BASIC_CWD, BASIC_SID, BASIC)
+    first, second = adapter.read_turns(BASIC_CWD, BASIC_SID)
+    at = datetime.fromisoformat
+    assert [e.at for e in first.entries] == [
+        at("2026-06-01T10:00:01.000Z"),
+        at("2026-06-01T10:00:01.000Z"),
+        at("2026-06-01T10:00:03.000Z"),
+        at("2026-06-01T10:00:05.000Z"),
+    ]
+    assert [e.at for e in second.entries] == [
+        at("2026-06-01T10:00:07.000Z"),
+        at("2026-06-01T10:00:10.000Z"),
+    ]
+
+
 def test_read_turns_last_window(adapter: ClaudeCodeAdapter, claude_home: Path) -> None:
     _install(claude_home, BASIC_CWD, BASIC_SID, BASIC)
     turns = adapter.read_turns(BASIC_CWD, BASIC_SID, last=1)
@@ -2549,6 +2570,8 @@ def test_fleet_activity_identity_status_turns_model(
     assert session.session_id == "agent01"
     assert session.adapter_kind == "claude_code"
     assert session.parent_session_id == sid
+    # The sidecar's `toolUseId` is the parent's spawning call.
+    assert session.spawn_tool_use_id == "tu1"
     assert act.title == "Explore"
     assert act.current_task == "Explore the auth flow"
     assert act.human_turns == 1

@@ -609,9 +609,10 @@ test.describe("native sidebar project context", () => {
       },
     );
 
-    // Tile-and-three-lines anatomy: 87px measured at the 80% root. The ceiling
-    // catches a fourth line or a reserved slot, not the tile's own height.
-    expect(geometry.blocked.box!.height).toBeLessThanOrEqual(92);
+    // Tile-and-three-lines anatomy plus the hairline divider above the ledger:
+    // 96px measured at the 80% root. The ceiling catches a fourth line or a
+    // reserved slot (a line here is ~17px), not the tile's own height.
+    expect(geometry.blocked.box!.height).toBeLessThanOrEqual(101);
     expect(geometry.blocked.clipped).toBe(false);
     expect(geometry.blocked.titleFont).toBeCloseTo(11.2, 1);
     expect(geometry.blocked.metadataFont).toBeCloseTo(10.4, 1);

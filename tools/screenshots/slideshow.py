@@ -75,10 +75,11 @@ class SlideshowStyle(BaseModel):
     propagates left-to-right and top-to-bottom across the whole frame, so a
     change confined to the window interior perturbs the dither pattern in the
     wallpaper AFTER it — which destroys exactly the frame-to-frame identity this
-    module is built on. Measured over a five-slide tour (before the annotation and diagram slides): 7840 KB dithered
-    against 4205 KB not. The banding it costs is far less visible here than in a
-    full-resolution still, because the tour is published at 960px and every
-    frame is on screen for well under a second.
+    module is built on. Measured over a five-slide tour (before the annotation
+    and diagram slides): 7840 KB dithered against 4205 KB not. The banding it
+    costs is far less visible here than in a full-resolution still, because the
+    tour is published at 960px and every frame is on screen for well under a
+    second.
     """
 
     @property
@@ -187,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     missing = [str(p) for p in sources if not p.exists()]
     if missing:
         print(f"missing framed shot(s): {missing}", file=sys.stderr)
-        print("run `make docs-webapp-screenshots` first", file=sys.stderr)
+        print("run `make docs-capture` first", file=sys.stderr)
         return 2
 
     size = Slideshow().render(sources, args.out)

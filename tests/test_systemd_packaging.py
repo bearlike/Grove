@@ -103,29 +103,35 @@ def test_webapp_unit_passes_daemon_url_via_env() -> None:
         with_webapp=True,
         env_overrides={"DAEMON_PORT": "7421", "WEBAPP_PORT": "3030"},
     )
-    assert "Environment=GROVE_DAEMON_URL=http://127.0.0.1:7421" in out
+    assert "--daemon-url http://127.0.0.1:7421" in out
     # Webapp listens on its own port, baked into the ExecStart line.
     assert "--port 3030" in out
 
 
-def test_webapp_unit_carries_its_own_node_toolchain() -> None:
-    """The webapp's npm is a SEPARATE knob from the daemon's, and must reach the
-    unit as both the ExecStart binary and a baked PATH.
+def test_webapp_unit_serves_through_grove_web_with_no_host_toolchain() -> None:
+    """The unit runs `grove web`, which brings its own Node and bundle.
 
-    Next 16 needs Node >= 22, which is routinely newer than the shell default
-    that `NPM_BIN` resolves. Under `systemd --user` nothing sources a shell, so
-    an ExecStart naming the right npm still runs it against whatever `node` the
-    bare PATH finds first — the unit has to carry the toolchain's bin directory
-    too, or the app starts under the wrong major and fails at import time.
+    It used to run `npm run start` from a checkout with the installer's Node
+    baked onto PATH, so a toolchain move or an nvm default bump silently broke
+    it. No npm, no Node PATH and no checkout directory may reappear.
     """
     out = _run_print(
         with_webapp=True,
-        env_overrides={"WEBAPP_PORT": "3000", "WEBAPP_NPM_BIN": "/opt/node22/bin/npm"},
+        env_overrides={
+            "GROVE_BIN": "/opt/grove/bin/grove",
+            "WEBAPP_PORT": "3000",
+            "DAEMON_PORT": "7421",
+        },
     )
-    assert f"WorkingDirectory={REPO_ROOT / 'webapp'}" in out
-    assert "ExecStart=/opt/node22/bin/npm run start -- --hostname 0.0.0.0 --port 3000" in out
-    assert "Environment=PATH=/opt/node22/bin:" in out
-    assert "@WEBAPP_DESC@" not in out
+    unit = out.split("─── grove-webapp.service ───", 1)[1]
+    directives = "\n".join(ln for ln in unit.splitlines() if not ln.startswith("#"))
+    assert (
+        "ExecStart=/opt/grove/bin/grove web --host 0.0.0.0 --port 3000 "
+        "--daemon-url http://127.0.0.1:7421"
+    ) in directives
+    assert "npm" not in directives
+    assert "Environment=PATH=" not in directives
+    assert "WorkingDirectory=" not in directives
 
 
 def test_webapp_recipes_resolve_npm_without_an_override() -> None:
@@ -160,7 +166,7 @@ def test_webapp_recipes_resolve_npm_without_an_override() -> None:
 def test_webapp_unit_default_host_is_lan_reachable() -> None:
     """Default WEBAPP_HOST is 0.0.0.0 (LAN-reachable, the whole point of the webapp)."""
     out = _run_print(with_webapp=True)
-    assert "--hostname 0.0.0.0" in out
+    assert "web --host 0.0.0.0" in out
 
 
 def test_daemon_unit_bakes_install_time_path() -> None:

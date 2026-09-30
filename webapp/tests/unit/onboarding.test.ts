@@ -32,7 +32,7 @@ const ANCHORS = new Set<string>([
   ...Array.from(SOURCE.matchAll(/data-testid=\{LAUNCH_TESTIDS\.(\w+)\}/g), (match) => `launch-${match[1]!}`),
   ...Array.from(SOURCE.matchAll(/data-slot="([a-z-]+)"/g), (match) => `slot-${match[1]!}`),
   ...Array.from(SOURCE.matchAll(/kind="([a-z]+)"/g), (match) => `pill-${match[1]!}`),
-  ...["terminal", "info", "changes", "files", "controls", "diagram"].map((tab) => `work-panel-tab-${tab}`),
+  ...["terminal", "trajectory", "info", "changes", "files", "controls", "diagram"].map((tab) => `work-panel-tab-${tab}`),
 ]);
 
 const LAUNCH_VALUES = new Set(

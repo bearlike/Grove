@@ -165,7 +165,7 @@ describe("roomier vertical spacing preserves compact horizontal controls", () =>
 
   it("keeps body lines closer than neighboring workspace cards", () => {
     const metrics = code("components/grove/fleet/workspace-metrics.tsx");
-    expect(metrics).toMatch(/flex min-w-0 flex-col gap-1.*data-testid="rail-metadata"/);
+    expect(metrics).toMatch(/flex min-w-0 flex-col gap-2" data-testid="rail-metadata"/);
     expect(fleetTree).toContain('className="flex flex-col gap-3"');
   });
 });

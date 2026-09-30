@@ -141,8 +141,9 @@ def main() -> None:
         frozen_roots = []
         corpus_mounts = corpus
 
-    tool_venv = Path.home() / ".local/share/uv/tools/grove"
-    interpreter = (tool_venv / "bin/python").resolve()
+    # lab.py runs this under the installed Grove's interpreter, so the venv is
+    # our own prefix — named for the distribution, which a rename moves.
+    interpreter = (Path(sys.prefix) / "bin/python").resolve()
 
     manifest = {
         "root": str(root),

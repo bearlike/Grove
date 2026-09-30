@@ -52,7 +52,9 @@ async function fontState(page) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ headless: true });
+  // Docker gives a container a 64 MB /dev/shm; Chromium stalls rendering when
+  // it fills. /tmp has no such cap.
+  const browser = await chromium.launch({ headless: true, args: ["--disable-dev-shm-usage"] });
   const ctx = await browser.newContext({ deviceScaleFactor: SCALE });
   const page = await ctx.newPage();
 

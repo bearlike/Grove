@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -89,19 +90,36 @@ def test_declared_versions_agree() -> None:
         f"grove.__version__ is {__version__} but pyproject.toml declares {declared}"
     )
 
-    webapp = json.loads((_REPO_ROOT / "webapp" / "package.json").read_text(encoding="utf-8"))
-    assert webapp["version"] == declared, (
-        f"webapp/package.json is {webapp['version']} but pyproject.toml declares {declared}"
-    )
+    def _json(*parts: str) -> dict[str, Any]:
+        loaded: dict[str, Any] = json.loads(_REPO_ROOT.joinpath(*parts).read_text(encoding="utf-8"))
+        return loaded
+
+    # The plugin manifests are the ones that drifted furthest (1.4.0 / 1.0.0
+    # against a 0.0.10 package) because this test once stopped at the webapp:
+    # every artifact the stack ships carries the one release version.
+    lock = _json("webapp", "package-lock.json")
+    marketplace = _json(".claude-plugin", "marketplace.json")
+    manifests = {
+        "webapp/package.json": _json("webapp", "package.json")["version"],
+        "webapp/package-lock.json": lock["version"],
+        "webapp/package-lock.json root package": lock["packages"][""]["version"],
+        "src/grove/.claude-plugin/plugin.json": _json(
+            "src", "grove", ".claude-plugin", "plugin.json"
+        )["version"],
+        ".claude-plugin/marketplace.json": marketplace["version"],
+        ".claude-plugin/marketplace.json plugin entry": marketplace["plugins"][0]["version"],
+    }
+    drifted = {name: found for name, found in manifests.items() if found != declared}
+    assert not drifted, f"pyproject.toml declares {declared}, but {drifted}"
 
 
 def test_distribution_name_is_not_the_taken_pypi_name() -> None:
-    """The distribution is ``grove-crew``; ``grove`` on PyPI is someone else's
+    """The distribution is ``grove-factory``; ``grove`` on PyPI is someone else's
     package. Self-referential extras must track the distribution name or
     ``.[all]`` resolves nothing.
     """
     pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["name"] == "grove-crew"
+    assert pyproject["project"]["name"] == "grove-factory"
     for extra, requirements in pyproject["project"]["optional-dependencies"].items():
         for requirement in requirements:
             assert not requirement.startswith("grove["), (

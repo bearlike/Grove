@@ -71,10 +71,12 @@ class FleetPlanter:
     """Long enough for the stub agents to start, print, and reach `sleep`, so
     `capture-pane` returns the printed content rather than an empty pane."""
 
-    def __init__(self, world: DemoWorld, *, store: JsonWorkspaceStore) -> None:
+    def __init__(
+        self, world: DemoWorld, *, store: JsonWorkspaceStore, daemon_url: str = ""
+    ) -> None:
         self._world = world
         self._store = store
-        self._config = DemoConfig(world)
+        self._config = DemoConfig(world, daemon_url=daemon_url)
         self._cfg: GroveConfig = self._config.resolve()
         self._claude = ClaudeTranscriptPlanter.from_env(tempo=world.tempo)
         self._codex = CodexRolloutPlanter.from_env(tempo=world.tempo)

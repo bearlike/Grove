@@ -57,7 +57,7 @@ _PEER_PREAMBLE: Final = (
 )
 # Operator controls that bypass the text input lane entirely — each maps
 # straight onto a NativeOwner method rather than becoming provider input.
-_CONTROL_OPS: Final = frozenset({"interrupt", "set_model", "compact", "command"})
+_CONTROL_OPS: Final = frozenset({"interrupt", "set_model", "compact", "command", "macro"})
 
 
 class NativeWorkerConfig(BaseModel):
@@ -102,6 +102,7 @@ class NativeWorker:
         self._registration_lock = asyncio.Lock()
         self._token: str | None = None
         self._generation: str | None = None
+        self._macro: asyncio.Task[None] | None = None
 
     def transport(self) -> NativeOwner:
         env = dict(os.environ)
@@ -219,7 +220,7 @@ class NativeWorker:
             reader = asyncio.create_task(native.wait_closed())
             sender = asyncio.create_task(self._send_inputs(native))
             acknowledger = asyncio.create_task(self._ack_results())
-            tasks = (relay, reader, sender, acknowledger)
+            tasks: tuple[asyncio.Task[None], ...] = (relay, reader, sender, acknowledger)
             try:
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 if reader in done:
@@ -231,6 +232,8 @@ class NativeWorker:
                     await acknowledger
                 await relay
             finally:
+                if self._macro is not None:
+                    tasks = (*tasks, self._macro)
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
@@ -278,12 +281,7 @@ class NativeWorker:
         if self._token is None:
             from grove.core.auth import SessionStore  # noqa: PLC0415 — off the import path
 
-            store = SessionStore()
-            challenge = store.pair_init(label=f"native-worker-{self.config.workspace_id[:8]}")
-            store.pair_approve(challenge.challenge_id)
-            _, token = store.pair_poll(challenge.challenge_id)
-            if token is None:  # pragma: no cover - approve-then-poll always mints
-                raise RuntimeError("could not mint a local daemon session")
+            token = SessionStore().mint_local(f"native-worker-{self.config.workspace_id[:8]}")
             self._token = token
         return self._token
 
@@ -312,8 +310,7 @@ class NativeWorker:
                 await asyncio.sleep(_RECONNECT_FLOOR_SECONDS)
                 self._results_ready.set()
 
-    @staticmethod
-    async def _dispatch_control(native: NativeOwner, op: str, text: str) -> None:
+    async def _dispatch_control(self, native: NativeOwner, op: str, text: str) -> None:
         """Route one operator control op straight to the owner's typed verb.
 
         Controls never enter the text input queue — an unsupported op on a
@@ -325,8 +322,37 @@ class NativeWorker:
             await native.set_model(text)
         elif op == "compact":
             await native.compact()
+        elif op == "macro":
+            self._start_macro(native, json.loads(text))
         else:
             await native.invoke_control(text)
+
+    def _start_macro(self, native: NativeOwner, macro: Mapping[str, Any]) -> None:
+        """Run a Grove command off the relay loop, one at a time per worker.
+
+        A compaction step takes minutes, and the relay must keep delivering
+        interrupts and answers meanwhile, so the steps run as their own task.
+        A second command while one runs is refused rather than queued: two
+        interleaved step lists would each restore a model the other set.
+        """
+        if self._macro is not None and not self._macro.done():
+            name = macro.get("name", "")
+            self.emit(f"Grove command /grove:{name} refused: one is already running.")
+            return
+        self._macro = asyncio.create_task(self._run_macro(native, macro), name="grove-macro")
+
+    async def _run_macro(self, native: NativeOwner, macro: Mapping[str, Any]) -> None:
+        name = str(macro.get("name", ""))
+        # `{model}` is the model the session was on when the command STARTED,
+        # captured once: a step that switches models must not move its own anchor.
+        model = native.current_model or "default"
+        steps = [str(step).replace("{model}", model) for step in macro.get("steps", [])]
+        for index, step in enumerate(steps, 1):
+            self.emit(f"Grove command /grove:{name} step {index}/{len(steps)}: {step}")
+            if not await native.run_command(step):
+                self.emit(f"Grove command /grove:{name} stopped: step {index} did not complete.")
+                return
+        self.emit(f"Grove command /grove:{name} finished.")
 
     async def _queue_input(self, item: _Input) -> None:
         if item.acknowledge:

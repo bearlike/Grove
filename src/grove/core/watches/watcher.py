@@ -76,6 +76,20 @@ class Watcher[P: BaseModel](ABC):
             raise TypeError(f"{type(self).__name__} cannot evaluate a {predicate.kind!r} predicate")
         return self.observe(cast("P", predicate), now)
 
+    def admit(self, predicate: P) -> None:
+        """Refuse a subject that no probe could ever observe. Admits by default.
+
+        Raises :class:`~grove.core.errors.WatchUnobservable`. Called once, at
+        registration, and never on the probe path. It is a different question
+        from :meth:`observe` returning ``None``, which means "I could not tell
+        this time". A subject that can never be told would otherwise pass as
+        pending until its deadline and then expire, and the agent that halted
+        on it learns the truth an hour late and in the wrong words. Only
+        configuration belongs here, never a network read. A forge that is down
+        now may be up by the next interval.
+        """
+        del predicate
+
     @abstractmethod
     def observe(self, predicate: P, now: datetime) -> Observation:
         """Has this settled? ``None`` means not yet — including "I cannot tell".

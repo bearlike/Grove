@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 
 import { GenerationLoader } from "@/components/elements/loading-state";
+import { operationLabel } from "@/lib/grove/adapters";
+import type { NativeOperationView } from "@/lib/grove/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -133,14 +135,18 @@ function useWorkingTick(): number {
  * surface. See that rule for why a `size-*` utility here — or an `em` — would
  * be the wrong repair.
  */
-export function WorkingLoader() {
+export function WorkingLoader({ operation = null }: { operation?: NativeOperationView | null }) {
+  const now = useSecondClock(operation !== null);
   return (
     <GenerationLoader
       // `rounded` over the default `dots`: the transcript's own marks — tool
       // call chips, badges, the composer — are all soft rectangles, and a grid
       // of circles beside them reads as a loading spinner from another app.
       variant="rounded"
-      label="Working"
+      // The native step when the harness announced one ("Compacting context ·
+      // 41s", "Retrying 2/10 in 8s"), else the plain word. `now` is null until
+      // mount, so the server and the first client render agree on the word.
+      label={operation && now !== null ? operationLabel(operation, now) : "Working"}
       tick={useWorkingTick()}
       // Left, with the footer's siblings, rather than the component's own
       // centred default: it sits in a column with the sending echo, the plan
@@ -150,12 +156,40 @@ export function WorkingLoader() {
       className="items-start gap-1.5"
       // The same courtesy-confirmation contract `SendingEcho` uses: worth
       // announcing once, never worth interrupting what a reader is already
-      // hearing. The label never changes, so it announces once and stays quiet
-      // while the matrix moves.
+      // hearing. A step's label ticks every second, and a polite live region
+      // re-announces every change to its text — so while a step stands the
+      // region is switched off and NAMED instead: a screen reader gets
+      // "Compacting context" as the status, not a number per second.
       role="status"
+      aria-live={operation ? "off" : undefined}
+      aria-label={operation ? OPERATION_NAME[operation.kind] : undefined}
+      data-operation={operation?.kind}
       data-testid="working-loader"
     />
   );
+}
+
+const OPERATION_NAME: Record<NativeOperationView["kind"], string> = {
+  compacting: "Compacting context",
+  retrying: "Retrying a failed request",
+};
+
+/**
+ * Wall-clock ms, ticking once a second while `live` — and not at all otherwise.
+ *
+ * Not `useNow`: that clock ticks once a MINUTE because it serves ages, and a
+ * compaction lasts tens of seconds, so its elapsed time on a minute clock would
+ * read "0s" and then jump. This one exists only while a step is on screen.
+ */
+function useSecondClock(live: boolean): number | null {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!live) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [live]);
+  return now;
 }
 
 /**

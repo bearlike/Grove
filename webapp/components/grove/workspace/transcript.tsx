@@ -3,6 +3,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 
+import { TurnFeedbackContext } from "@/lib/grove/runtime/feedback";
+
 import { ErrorState } from "@/components/elements/error-state";
 import { findWorkspaceActivity } from "@/lib/grove/adapters";
 import {
@@ -168,6 +170,10 @@ export function Transcript({
           rather than on the part: assistant-ui mounts `ToolCallPart` from a
           message part several providers down, with no route for a prop. */}
       <ToolBodyProvider source={{ kind: "workspace", workspaceId, sessionId }}>
+        {/* The thumbs-down follow-up's reasons and submit, for the same reason
+            the tool-body coordinate rides a provider: `TurnActions` mounts
+            inside the thread with no route for a prop. */}
+        <TurnFeedbackContext.Provider value={thread.feedback}>
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col"
           data-testid="transcript"
@@ -185,6 +191,7 @@ export function Transcript({
             exitReason={exitReason}
           />
         </div>
+        </TurnFeedbackContext.Provider>
         <SubagentTranscriptDialog
           workspaceId={workspaceId}
           sessionId={openChild?.sessionId ?? null}
@@ -261,6 +268,7 @@ function ThreadPane({
     loadingEarlier,
     sending,
     working,
+    operation,
   } = thread;
   const pending = thread.pending.length === 0 ? NO_PENDING : thread.pending;
   // One mode picks both halves of the transcript's geometry — see
@@ -294,7 +302,7 @@ function ThreadPane({
                 reports the agent rather than the conversation, which is why it
                 needs no condition beyond the agent working — a pending question
                 means `waiting`, so the two can never claim the floor at once. */}
-            {working && <WorkingLoader />}
+            {working && <WorkingLoader operation={operation} />}
             {todo && <TodoPanel todo={todo} />}
             {queue && <QueuePanel queue={queue} />}
             {/* Beside Queue: both say what this agent is waiting on. */}
@@ -352,6 +360,7 @@ function ThreadPane({
       loadingEarlier,
       sending,
       working,
+      operation,
     ],
   );
 }

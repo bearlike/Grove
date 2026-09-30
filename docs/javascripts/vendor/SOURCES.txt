@@ -9,12 +9,13 @@ Runtime (unmodified):
   package/build/three.module.js -> three.module.js
   package/build/three.core.js   -> three.core.js
 
-Bloom addons (one edit each: the bare `from 'three'` specifier is rewritten to
+Bloom and geometry addons (one edit each: the bare `from 'three'` specifier is rewritten to
 `from '../three.module.js'` so they load without an import map):
   package/examples/jsm/postprocessing/{EffectComposer,RenderPass,UnrealBloomPass,
     ShaderPass,OutputPass,Pass,MaskPass}.js -> postprocessing/
   package/examples/jsm/shaders/{CopyShader,LuminosityHighPassShader,OutputShader}.js
     -> shaders/
+  package/examples/jsm/utils/BufferGeometryUtils.js -> utils/
 
 These are vendored so the landing scene has no remote module import or runtime
 CDN dependency. Refresh them only by copying the same files from a pinned npm

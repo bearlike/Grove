@@ -40,7 +40,7 @@ from grove.core.agents.hook import (
     HookRecord,
     SubagentHookRecord,
 )
-from grove.core.agents.model import TokenUsage
+from grove.core.agents.model import NativeFacts, NativeOperation, TokenUsage
 from grove.core.agents.session_registry import NativeClaudeSession
 from grove.core.config import GroveConfig, load_config
 from grove.core.contracts.activity import (
@@ -395,6 +395,71 @@ def test_snapshot_parses_real_transcript(
     assert primary.human_turns == 1
     assert primary.current_task == "do the thing"
     # has_transcript True + transcript WAITING (end_turn) → WAITING.
+    assert primary.state is AgentActivityState.WAITING
+
+
+def test_a_native_step_makes_an_idle_session_read_working(
+    env: tuple[ActivityService, RepoRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """`/compact` on an idle native session reads `working` while it runs.
+
+    The transcript tail stays the last `end_turn` reply and the startup
+    sidecar no longer outranks it, so only the owner's step can say so.
+    """
+    service, registry = env
+    cfg_home = tmp_path / "claude"
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
+
+    repo = _init_repo(tmp_path / "repo")
+    state = registry.get(repo).create(CreateWorkspaceRequest(agent_name="claude", title="compact"))
+    sid = state.agent_session_id
+    assert sid is not None
+    # Sidecar first, transcript after: the ordering of a live idle session.
+    started = datetime.now(UTC)
+    ClaudeHook.record_native_facts(sid, NativeFacts(cost_usd=0.1), sidecar_dir=sidecar_dir)
+    later = (started + timedelta(seconds=5)).isoformat().replace("+00:00", "Z")
+    folder = cfg_home / "projects" / _ClaudeHome.encode_cwd(Path(state.worktree_path))
+    folder.mkdir(parents=True)
+    (folder / f"{sid}.jsonl").write_text(
+        '{"type":"user","uuid":"u1","timestamp":"' + later + '",'
+        '"isSidechain":false,"message":{"role":"user","content":"do the thing"}}\n'
+        '{"type":"assistant","uuid":"a1","timestamp":"' + later + '",'
+        '"isSidechain":false,"message":{"id":"m1","role":"assistant","model":"claude-opus-4-8",'
+        '"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2},'
+        '"content":[{"type":"text","text":"done"}]}}\n',
+        encoding="utf-8",
+    )
+    primary = service.reconcile().projects[0].workspaces[0].primary
+    assert primary is not None
+    assert primary.state is AgentActivityState.WAITING  # idle before the step
+
+    ClaudeHook.record_native_facts(
+        sid,
+        NativeFacts(operation=NativeOperation(kind="compacting", started_at=started)),
+        stated=frozenset({"operation"}),
+        sidecar_dir=sidecar_dir,
+    )
+
+    row = service.reconcile().projects[0].workspaces[0]
+    primary = row.primary
+    assert primary is not None
+    assert primary.state is AgentActivityState.WORKING
+    assert primary.native is not None and primary.native.operation is not None
+    # The runtime-only reblend must agree, or a tmux edge drops the loader.
+    reblended = service._refresh_row(registry.get(repo), state, row, RefreshDomain.RUNTIME)
+    assert reblended.primary is not None
+    assert reblended.primary.state is AgentActivityState.WORKING
+
+    ClaudeHook.record_native_facts(
+        sid, NativeFacts(), stated=frozenset({"operation"}), sidecar_dir=sidecar_dir
+    )
+    primary = service.reconcile().projects[0].workspaces[0].primary
+    assert primary is not None
     assert primary.state is AgentActivityState.WAITING
 
 
@@ -1156,6 +1221,17 @@ def test_fingerprint_covers_every_session_not_just_primary() -> None:
     two_changed = row((primary, sess("b", AgentActivityState.WAITING)))
     assert two.fingerprint != two_changed.fingerprint  # secondary streams
     assert row(()).fingerprint != two.fingerprint  # emptied set streams
+
+    # A native step starting, ending or failing moves nothing else on the row —
+    # the state stays WORKING and the transcript is silent — so without these
+    # members the loader would say "Working" through the whole compaction.
+    def native(facts: NativeFacts) -> SessionActivity:
+        return replace(primary, activity=replace(primary.activity, native=facts))
+
+    compacting = NativeFacts(operation=NativeOperation(kind="compacting", started_at=t0))
+    assert row((native(NativeFacts()),)).fingerprint != row((native(compacting),)).fingerprint
+    failed = NativeFacts(compact_error="summarization produced empty response")
+    assert row((native(NativeFacts()),)).fingerprint != row((native(failed),)).fingerprint
 
 
 def test_fs_discovery_surfaces_handstarted_session(

@@ -161,7 +161,7 @@ def prepare_state(mode: str) -> Path:
     # The INSTALLED Grove's interpreter, not whatever python3 runs this harness:
     # the mount plan must come from the same resolver the daemon uses, and a
     # bare python3 has no grove package at all.
-    interpreter = Path.home() / ".local/share/uv/tools/grove/bin/python"
+    interpreter = Path(os.path.realpath(shutil.which("grove") or "/nonexistent")).parent / "python"
     proc = subprocess.run(
         [str(interpreter) if interpreter.exists() else sys.executable,
          str(script), str(root), mode],
@@ -233,7 +233,7 @@ def launch(root: Path, *, seconds: int, with_agent: bool, mode: str) -> None:
     cmd += [IMAGE, "bash", "-lc",
             "set -e; uv tool install --force --editable '.[all]' >/tmp/install.log 2>&1 "
             "|| { tail -20 /tmp/install.log; exit 1; }; "
-            'exec "$(uv tool dir)/grove/bin/python" /runner.py']
+            'exec "$(dirname "$(readlink -f "$(command -v grove)")")/python" /runner.py']
 
     out = run(cmd, timeout=180)
     if out.returncode:

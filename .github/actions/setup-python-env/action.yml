@@ -1,0 +1,45 @@
+name: Set up the Python environment
+description: >-
+  Install uv into this job's own tool cache and sync the locked dependency
+  groups. The one place every Python-using job gets its toolchain.
+
+# WHY A COMPOSITE AND NOT A BARE `setup-uv`: the runners mount ONE shared
+# `act-toolcache` volume at /opt/hostedtoolcache into every job, and two
+# setup-uv steps writing it at once corrupt each other — one leg per run died
+# with a bare `❌ Failure - Main astral-sh/setup-uv@v3` and no message. That is
+# the reason ci.yml used to chain its jobs. `@actions/tool-cache` resolves
+# RUNNER_TOOL_CACHE on every call, so pointing it at the job's own temp dir
+# moves the write off the shared volume and the jobs can run side by side.
+#
+# No dependency cache: the runners have no cache service, and setup-uv's save
+# post-step is what wedged a job for 30 minutes after its tests had passed.
+# A cold `uv sync --frozen` measures ~2s.
+#
+# Named groups, never `--all-groups`: the latter reaches for metadata on every
+# group's direct-URL requirement even when excluded, which pulled the docs theme
+# (a GitHub release asset with no index mirror) and failed installs over a
+# package no gate runs. `--frozen` installs from uv.lock with no resolution.
+
+inputs:
+  groups:
+    description: "Dependency groups to sync, space separated"
+    required: false
+    default: "dev"
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v3
+      env:
+        RUNNER_TOOL_CACHE: ${{ runner.temp }}/toolcache
+      with:
+        enable-cache: false
+    - name: Sync dependencies
+      shell: bash
+      env:
+        GROUPS: ${{ inputs.groups }}
+      run: |
+        set -euo pipefail
+        args=()
+        for g in $GROUPS; do args+=(--group "$g"); done
+        uv sync --frozen "${args[@]}"

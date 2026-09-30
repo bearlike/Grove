@@ -1,7 +1,7 @@
 {
   "name": "grove",
-  "description": "Grove's fleet-orchestration, in-workspace reporting, configuration and reinstall skills, shipped from the package that implements them.",
-  "version": "1.3.0",
+  "description": "Grove's own skills, published from the repository that implements them: fleet orchestration, leading a fleet toward one deliverable, in-workspace reporting and native mailbox workers, configuration, reinstalling, and collaborative diagrams and mockups.",
+  "version": "0.0.11",
   "author": {
     "name": "bearlike"
   },

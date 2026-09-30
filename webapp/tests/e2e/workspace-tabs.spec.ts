@@ -10,6 +10,7 @@ const PANES = "Workspace panes";
 
 const TABS = [
   { value: "terminal", label: "Terminal", content: "terminal-tab" },
+  { value: "trajectory", label: "Trajectory", content: "trajectory-tab" },
   { value: "changes", label: "Changes", content: "changes-tab" },
   { value: "diagram", label: "Diagram", content: "diagram-tab" },
   { value: "files", label: "Files", content: "files-tab" },
@@ -135,7 +136,7 @@ test.describe("workspace tab rows", () => {
     const row = workList(page);
     const seen: { width: number; mode: Mode }[] = [];
 
-    for (const width of [500, 400, 320, 240, 180, 150] as const) {
+    for (const width of [500, 400, 320, 240, 180, 165] as const) {
       await row.evaluate((element, width) => { element.parentElement!.style.width = `${width}px`; }, width);
       await page.evaluate(() => new Promise(requestAnimationFrame));
       const mode = await modeOf(row);
@@ -255,6 +256,14 @@ test.describe("workspace tab rows", () => {
         Math.abs(mark.bottom - rule.bordered[0]!.bottom),
         `${label} mark sits on the closing rule`,
       ).toBeLessThanOrEqual(1.5);
+      // The strip scrolls sideways only. A mark hanging past the scrollport
+      // made both bands vertical scrollers by exactly one pixel.
+      const strip = await list(page, label).evaluate((element) => {
+        const box = element.parentElement!;
+        return { overhang: box.scrollHeight - box.clientHeight, y: getComputedStyle(box).overflowY };
+      });
+      expect(strip.overhang, `${label} strip overhangs vertically`).toBe(0);
+      expect(strip.y, `${label} strip never scrolls vertically`).toBe("hidden");
     }
     await expect(page.locator(".workspace-tab-strip.workspace-work-tabs")).toHaveCount(1);
   });

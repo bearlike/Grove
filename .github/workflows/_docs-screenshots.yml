@@ -4,8 +4,8 @@ name: Docs screenshots (reusable)
 # back to the branch they belong to.
 #
 # WHY THIS EXISTS. A screenshot refresh is the most expensive routine task in
-# this repo and the only one with no CI home: `make docs-webapp-screenshots` is
-# a ~12 minute command dominated by seeding a year of synthetic usage history,
+# this repo and the only one with no CI home: `make docs-capture` is a
+# half-hour command dominated by seeding a year of synthetic usage history,
 # and it wants a browser, a tmux server, a daemon and a production Next build
 # all at once. Run locally it competes with the agent fleet and the user's own
 # work, which is the same argument that moved pytest and Playwright onto
@@ -23,8 +23,9 @@ name: Docs screenshots (reusable)
 # branch it updates — and `source`'s tooling is overlaid onto it.
 #
 # WHAT IT WILL NOT DO. It never invents a commit for an unchanged tree, it
-# never force-pushes, and it stops rather than merging when the target has moved
-# under it. `dry_run` gets the whole pipeline and uploads nothing.
+# never force-pushes or merges, and when the target has moved under it it
+# rebases its images-only commit and stops if that conflicts. `dry_run` gets the
+# whole pipeline and uploads nothing.
 
 on:
   workflow_call:
@@ -49,6 +50,10 @@ on:
         type: string
         required: false
         default: "false"
+    outputs:
+      pushed:
+        description: "'true' when a commit of regenerated images reached the target"
+        value: ${{ jobs.screenshots.outputs.pushed }}
 
 # `contents: write` because the job pushes. Restricted-mode Gitea (>=1.26.0)
 # 403s an undeclared write scope, and the older instances parse-and-ignore the
@@ -60,11 +65,15 @@ jobs:
   screenshots:
     name: capture ${{ inputs.shots }} → ${{ inputs.target }}
     runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
-    # The local run is ~12 minutes and a cold runner adds npm ci, a Next build
-    # and a Chromium download on top. act_runner's own ceiling is 1h; naming a
-    # smaller one here means a slow run is reported as a timeout instead of
-    # dying at the ceiling where it reads as a failure.
+    # Measured on this runner: seeding the year of history is ~17 minutes (the
+    # usage projection ~14, the session-fact warm-up ~3.5), and the two-seed
+    # layout took 48 of the 50 minutes allowed here. One seed brings that to
+    # ~30. act_runner's own ceiling is 1h; naming a smaller one means a slow
+    # run is reported as a timeout instead of dying at the ceiling where it
+    # reads as a failure.
     timeout-minutes: 50
+    outputs:
+      pushed: ${{ steps.push.outputs.pushed }}
     steps:
       # fetch-depth: 0 — the push at the end needs real history, and a shallow
       # clone cannot fast-forward-check against the remote.
@@ -88,19 +97,12 @@ jobs:
           git checkout "origin/$SOURCE" -- tools/screenshots webapp Makefile
           echo "overlaid tools/screenshots, webapp and Makefile from $SOURCE"
 
-      - uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: webapp/package-lock.json
 
       # Pillow rides `dev`, and so does the TUI capture's own toolchain.
-      - name: Install Python deps
-        run: uv sync --frozen --group dev
+      - uses: ./.github/actions/setup-python-env
 
       # tmux, git and bash are the capture's unpreflighted runtime dependencies:
       # the planter creates real tmux sessions and real git repos. Missing tmux
@@ -116,12 +118,15 @@ jobs:
         working-directory: webapp
         run: npx playwright install --with-deps chromium
 
-      # THE SANDBOX MUST NOT LIVE ON `/tmp` HERE. act_runner mounts a RAM-backed
-      # /tmp inside a memory-capped container, and this tree holds a year of
-      # synthetic transcripts, twelve git repos and the usage cache at once.
-      # Exhausting it kills the job with an exit code that reads as a test
-      # failure rather than as a full disk — the same ENOSPC class that forced
-      # e2e to be chained behind the webapp gate in ci.yml.
+      # THE SANDBOX MUST NOT LIVE ON `/tmp` HERE — AND $RUNNER_TEMP *IS* /tmp.
+      # act_runner mounts a RAM-backed /tmp inside a memory-capped container,
+      # and this tree holds a year of synthetic transcripts, twelve git repos
+      # and the usage cache at once; exhausting it exits with a code that reads
+      # as a test failure rather than a full disk. The first CI capture's log
+      # shows the sandbox at /tmp/grove-shots, i.e. the override that was meant
+      # to avoid this pointed straight back at it. The job's workspace is a
+      # docker volume, so the sandbox goes beside the checkout, outside it so
+      # `git add docs/img` can never pick anything up.
       #
       # `git config --global` matters for the same "unpreflighted dependency"
       # reason as tmux: the sandbox rewrites HOME, so the planter's repos get
@@ -130,26 +135,29 @@ jobs:
       - name: Prepare the capture sandbox
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/grove-shots"
-          echo "GROVE_SHOTS_ROOT=$RUNNER_TEMP/grove-shots" >> "$GITHUB_ENV"
+          root="$(dirname "$GITHUB_WORKSPACE")/grove-shots"
+          mkdir -p "$root"
+          echo "GROVE_SHOTS_ROOT=$root" >> "$GITHUB_ENV"
+          df -h "$root" | tail -1
           git config --global user.name "grove-ci[bot]"
           git config --global user.email "grove-ci[bot]@users.noreply.local"
 
-      - name: Capture TUI screenshots
-        if: ${{ !cancelled() && (inputs.shots == 'all' || contains(format(',{0},', inputs.shots), ',tui,')) }}
+      # ONE STEP, ONE SEED. The two halves used to be separate steps with
+      # separate sandboxes, and each planted and projected the same year of
+      # history — ~17 minutes paid twice for identical input. The target picks
+      # the halves; each chains its own framing, which is not idempotent and so
+      # must never be split into a step of its own.
+      - name: Capture screenshots
         env:
-          GROVE_SHOTS_ROOT: ${{ env.GROVE_SHOTS_ROOT }}/tui
-        run: make docs-screenshots
-
-      # `make docs-webapp-screenshots` chains webapp-build, the capture, the
-      # framer and the tour GIF, so the whole web half is this one target. The
-      # framer is not idempotent and the GIF is built from the framed stills, so
-      # the chain must never be split apart into separate steps here.
-      - name: Capture webapp screenshots
-        if: ${{ !cancelled() && (inputs.shots == 'all' || contains(format(',{0},', inputs.shots), ',webapp,')) }}
-        env:
-          GROVE_SHOTS_ROOT: ${{ env.GROVE_SHOTS_ROOT }}/webapp
-        run: make docs-webapp-screenshots
+          SHOTS: ${{ inputs.shots }}
+        run: |
+          set -euo pipefail
+          case "$SHOTS" in
+            all|tui,webapp|webapp,tui) make docs-capture ;;
+            tui) make docs-screenshots ;;
+            webapp) make docs-webapp-screenshots ;;
+            *) echo "::error::shots must be all, tui, webapp or tui,webapp (got '$SHOTS')" >&2; exit 2 ;;
+          esac
 
       # `make docs-images` is deliberately NOT the target above: it chains
       # `docs-mockups`, which cannot run at all — `mockups.py` hard-exits 2 on
@@ -179,26 +187,41 @@ jobs:
       # guard above is therefore about an EMPTY tree (a capture that silently
       # produced nothing), not about proving the images were stale.
       - name: Commit and push
+        id: push
         if: ${{ steps.diff.outputs.changed == 'true' && inputs.dry_run != 'true' }}
         env:
           TARGET: ${{ inputs.target }}
           SOURCE: ${{ inputs.source }}
         run: |
           set -euo pipefail
-          git commit -m "📸 docs(screenshots): regenerate from ${SOURCE:-$TARGET} [skip ci]" \
-                     -m "Captured on CI by the docs-screenshots workflow."
-          # Refuse rather than merge or force. A screenshot commit is never
-          # worth resolving a race over: the images are reproducible by
-          # definition, so the honest answer to a moved target is to say so and
-          # let the next run redo them against current code.
-          if ! git push origin "HEAD:$TARGET"; then
-            echo "::error::$TARGET moved during the capture; nothing was pushed. Re-run." >&2
-            exit 1
-          fi
+          git commit -m "📸 docs(screenshots): regenerate from ${SOURCE:-$TARGET}" \
+                     -m "Captured on CI by the screenshots workflow."
+          # REBASE OVER A MOVED TARGET, NEVER MERGE OR FORCE. A capture is ~45
+          # minutes and main routinely moves in that window, so refusing on a
+          # moved target meant a finished capture almost never landed. The
+          # commit touches only docs/img, so replaying it onto newer code is
+          # conflict-free unless someone else changed the same images — and
+          # THAT is the one case worth refusing over, never resolving: the
+          # images are reproducible, and the next run redraws them.
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:$TARGET"; then
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git fetch --no-tags origin "+refs/heads/$TARGET:refs/remotes/origin/$TARGET"
+            if ! git rebase "origin/$TARGET"; then
+              git rebase --abort
+              echo "::error::$TARGET changed docs/img during the capture; nothing was pushed. Re-run." >&2
+              exit 1
+            fi
+          done
+          echo "::error::$TARGET kept moving; nothing was pushed after 3 attempts. Re-run." >&2
+          exit 1
 
-      # `[skip ci]` in the subject is what stops this from re-triggering ci.yml
-      # on every regeneration, which would spend a full gate on a commit that
-      # only moves PNGs. It is not a substitute for the push refusing to force.
+      # NO `[skip ci]` in the message. The push is made with the job token and
+      # Gitea never starts a workflow for an event whose doer is the Actions
+      # user, so it cannot loop — and on Gitea the marker skips EVERY workflow,
+      # which is what used to strand the new images unpublished.
       - name: Summarize
         if: ${{ !cancelled() }}
         env:

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { GROVE_DATA_PART, messagesFromTurns } from "@/lib/grove/adapters";
+import { GROVE_DATA_PART, GROVE_TIME_GAP, messagesFromTurns } from "@/lib/grove/adapters";
+import type { SessionTurnView } from "@/lib/grove/api";
 import { QUESTION_BATCH, TRANSCRIPT_TURNS } from "../fixtures/turns";
 
 /** The `data-*` part type of a single-part message, for terse assertions. */
@@ -185,5 +186,52 @@ describe("messagesFromTurns", () => {
     // Same turn, different starting index: ids must continue from the prefix
     // in front of it, never repeat what `asOnlyTurn` minted in isolation.
     expect(tail.map((m) => m.id)).not.toEqual(asOnlyTurn.map((m) => m.id));
+  });
+});
+
+describe("messagesFromTurns — time separators", () => {
+  const turn = (started_at: string | null, user_text = "hi"): SessionTurnView => ({
+    user_text,
+    started_at,
+    entries: [],
+  });
+  const gaps = (turns: SessionTurnView[]): boolean[] =>
+    messagesFromTurns(turns).map((m) => m.metadata?.custom?.[GROVE_TIME_GAP] === true);
+
+  it("marks the first turn and any turn over an hour after the previous one", () => {
+    expect(
+      gaps([
+        turn("2026-09-28T10:00:00Z"),
+        turn("2026-09-28T10:59:00Z"), // 59 min — same sitting
+        turn("2026-09-28T12:00:00Z"), // 61 min — new sitting
+        turn("2026-09-29T09:00:00Z", ""), // continuation heads count too
+      ]),
+    ).toEqual([true, false, true, true]);
+  });
+
+  it("measures from the previous turn, not from the last separator", () => {
+    // Three turns 40 min apart span 80 min, but no single gap exceeds an hour.
+    expect(
+      gaps([turn("2026-09-28T10:00:00Z"), turn("2026-09-28T10:40:00Z"), turn("2026-09-28T11:20:00Z")]),
+    ).toEqual([true, false, false]);
+  });
+
+  it("never measures against an unknown time", () => {
+    // assistant-ui fills a missing createdAt with "now"; a gap measured against
+    // that would be invented, on either side.
+    expect(gaps([turn(null), turn("2026-09-29T09:00:00Z"), turn(null)])).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it("re-marks a cached turn when its predecessor changes", () => {
+    // The per-turn cache keys on identity and start index; a refetched prefix
+    // can put a different predecessor in front of the SAME turn object at the
+    // same index, and the separator must follow the new predecessor.
+    const later = turn("2026-09-28T10:30:00Z");
+    expect(gaps([turn("2026-09-28T10:00:00Z"), later])).toEqual([true, false]);
+    expect(gaps([turn("2026-09-28T08:00:00Z"), later])).toEqual([true, true]);
   });
 });

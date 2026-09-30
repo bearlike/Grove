@@ -311,8 +311,14 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
     """Pick agent + title + branch plan. Returns ``CreateWorkspaceRequest``."""
 
     DEFAULT_CSS = """
+    /* The form is ~64 rows; an auto-height dialog centred in a shorter
+     * terminal is clipped at BOTH ends with no way to reach either, which
+     * hid the top fields (the session-mode box among them). Cap it at the
+     * screen and let it scroll instead. */
     CreateWorkspaceScreen .grove-dialog {
         width: 90;
+        max-height: 100%;
+        overflow-y: auto;
     }
     CreateWorkspaceScreen .field-label {
         margin-top: 1;
@@ -773,8 +779,12 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 FooterKey("ctrl+s", "Create"),
             ]
         )
-        self.query_one("#title", Input).focus()
+        # Focus Title without scrolling to it, so a short terminal opens on the
+        # agent and session-mode fields rather than past them.
+        self.query_one("#title", Input).focus(scroll_visible=False)
         self._sync_native_visibility(self._default_agent)
+        dialog = self.query_one(".grove-dialog")
+        self.call_after_refresh(dialog.scroll_home, animate=False)
 
     # ─── live preview / mode toggling ──────────────────────────────────────
 

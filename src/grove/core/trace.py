@@ -755,6 +755,19 @@ class _AcknowledgingSpanProcessor:
     def on_start(self, span: Any, parent_context: Any = None) -> None:
         del span, parent_context
 
+    def _on_ending(self, span: Any) -> None:
+        """The SDK's pre-end hook; this processor has nothing to do there.
+
+        This class is duck-typed rather than a ``SpanProcessor`` subclass so
+        ``grove.core`` imports without the ``telemetry`` extra — which means a
+        hook the SDK adds is NOT inherited. The SDK started calling this one,
+        and every span Grove exported raised inside ``span.end()``; ``replay``
+        swallows that by design, so the whole tier went dark with nothing
+        logged. ``test_a_real_span_ends_through_the_acknowledging_processor``
+        drives a real span through this class so the next such hook fails there.
+        """
+        del span
+
     def on_end(self, span: ReadableSpan) -> None:
         """Admit a finished span only when its pre-append bounds fit."""
         estimated_bytes = self._estimated_span_bytes(span)
@@ -958,7 +971,7 @@ def build_span_sink(
         from opentelemetry.sdk.trace.export import SpanExportResult  # noqa: PLC0415
     except ImportError as exc:
         logger.debug(
-            "opentelemetry not installed (grove-crew[telemetry] extra); tracing stays no-op: {}",
+            "opentelemetry not installed (grove-factory[telemetry] extra); tracing stays no-op: {}",
             exc,
         )
         return None
@@ -1493,6 +1506,29 @@ def _completed_turns(
             )
         )
     return tuple(completed)
+
+
+def turn_trace_id(
+    messages: Sequence[AgentMessage], session_id: str, started_at: datetime
+) -> int | None:
+    """The trace id the live replay exports for the turn that began at ``started_at``.
+
+    The join key a client can hold is the wire turn's ``started_at``: the
+    replay's turn anchor is the same human prompt the adapter's
+    ``read_turns`` opens a turn on, so the two timestamps are equal (measured
+    25/25 on a live session). A turn still OPEN answers too: its id derives
+    from the anchor alone, so it is the id the replay will export once the
+    turn closes, and a person flagging waste while the agent is still working
+    is the case a rating most needs to cover. ``None`` only when no anchor
+    matches. Seeded like :meth:`TraceInstrumentor.replay` (no ``source_id``),
+    the tier that exports a workspace's own sessions.
+    """
+    main_thread = tuple(message for message in messages if not message.is_sidechain)
+    for ordinal, turn in enumerate(_turns(main_thread)):
+        anchor = next((m for m in turn.messages if m.role == "user"), turn.messages[0])
+        if anchor.timestamp == started_at:
+            return derive_turn_trace_id(session_id, turn.turn_id, first=ordinal == 0)
+    return None
 
 
 def _message_identity(message: AgentMessage) -> str:

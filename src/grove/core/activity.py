@@ -401,6 +401,12 @@ class WorkspaceActivity:
                     # turn flushed and the transcript's own totals took over).
                     s.live.tokens_in if s.live is not None else None,
                     s.live.tokens_out if s.live is not None else None,
+                    # A native step (compacting, retrying) starting or ending
+                    # moves nothing else on the row: the state stays WORKING
+                    # and the transcript is silent until it ends. The value is
+                    # frozen, so the whole object keys.
+                    s.activity.native.operation if s.activity.native is not None else None,
+                    s.activity.native.compact_error if s.activity.native is not None else None,
                 )
                 for s in self.sessions
             ),
@@ -858,6 +864,7 @@ class ActivityService:
                 now=now, transcript_at=transcript.last_event_at
             ):
                 blended = sidecar.state
+            blended = self._with_native_step(blended, sidecar)
             if agent_exit is not None and agent_exit.failed:
                 blended = AgentActivityState.ERROR
             blended = self._settle(session.session.session_id, blended, now)
@@ -1588,6 +1595,7 @@ class ActivityService:
             now=now, transcript_at=transcript.last_event_at
         ):
             blended = sidecar.state
+        blended = self._with_native_step(blended, sidecar)
         # A recorded non-zero exit outranks everything above. It is the
         # one signal that is a FACT rather than an inference: the agent command
         # ran and returned, so no transcript tail, pane heartbeat or sidecar
@@ -1891,6 +1899,29 @@ class ActivityService:
         ):
             return AgentActivityState.WORKING
         return AgentActivityState.IDLE
+
+    @staticmethod
+    def _with_native_step(
+        blended: AgentActivityState, sidecar: HookRecord | None
+    ) -> AgentActivityState:
+        """A native step the owner reports (compacting, retrying) means the agent is busy.
+
+        `/compact` on an idle session leaves the transcript tail at its last
+        reply, so only the owner's step says a turn is running. It lifts
+        WAITING/IDLE only; BLOCKED and ERROR still outrank it.
+        """
+        native = sidecar.native if sidecar is not None else None
+        if (
+            native is not None
+            and native.operation is not None
+            and blended
+            in (
+                AgentActivityState.WAITING,
+                AgentActivityState.IDLE,
+            )
+        ):
+            return AgentActivityState.WORKING
+        return blended
 
     @staticmethod
     def _with_native_status(

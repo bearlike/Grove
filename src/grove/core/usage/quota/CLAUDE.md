@@ -261,6 +261,35 @@ Three things follow, and the third is the general one:
   Count every client on the host holding that credential before tuning your own,
   or you will spend a redesign lowering a rate that was never the binding one.
 
+## Grove's own status line is a quota READER, and it must never become the chatty poller above
+
+The host-pane status row (`grove.statusline`, #851) shows every selected
+subscription, and it is exactly the kind of client the co-tenant measurement
+indicted: it renders after every turn of every session. Three choices keep it
+from becoming one, and each is load-bearing.
+
+- **A render reads a FILE and never imports the engine.** The numbers are
+  `UsageService.quotas()`'s own view, serialized by a detached
+  `python -m grove.statusline --refresh-quotas` child into
+  `statusline-quotas.json`, beside the ledger. The render path costs one
+  `stat` and one JSON read, while `grove quota` costs about 1.8 s, nearly all of
+  it engine import. Paying that per render would stall every pane's prompt.
+- **The refresh goes THROUGH the collector, so it inherits the ledger's TTL,
+  cool-off and cross-process budget.** It is one more reader of the shared
+  budget, not a second prober. A snapshot older than
+  `QUOTA_REFRESH_AFTER_SECONDS` triggers ONE child, and a `.refreshing` claim
+  file coalesces every pane on the host onto it. So however many panes render,
+  a metered account is still probed at most once per `ttl_seconds`. An
+  unmetered source (the gateway, a rollout tail) is read at most once per
+  refresh period host-wide. That rate is new, because before this nothing read
+  quota except a human opening a page, and it is cheap only because those
+  reads cost nothing upstream.
+- **A window whose `resets_at` has passed is dropped from the row, not shown.**
+  The collector correctly serves a stale account's last-good windows, and a
+  month-old `7d:23%` rendered as current is the most misleading thing a status
+  row could say. The account still renders, labelled `(stale)`, because hiding
+  it reads as "no such subscription".
+
 ## Counting your own requests has to survive the default log level
 
 `QuotaProbeState.probe_count` is monotonic and lives on the ledger, because the

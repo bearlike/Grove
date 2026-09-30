@@ -358,6 +358,54 @@ class SessionStore:
             )
             return challenge, token
 
+    # ─── local self-approved sessions ──────────────────────────────────────
+
+    #: A same-label local session unused for this long is abandoned: every
+    #: short-lived CLI process mints one and exits without revoking it.
+    LOCAL_IDLE_REVOKE_AFTER: ClassVar[timedelta] = timedelta(minutes=10)
+
+    def mint_local(self, label: str) -> str:
+        """Mint a session for a same-UID local client, retiring its abandoned twins.
+
+        Plaintext tokens never touch disk, so a short-lived process (`grove
+        watch`, `grove-mcp`) cannot reuse a session: it mints a fresh one per
+        run. Without this sweep each run left a live 30-day session behind —
+        274 `local-watch` devices accumulated on one host, one per watch call.
+        Revoking only IDLE same-label sessions keeps a concurrent client with
+        the same label (two MCP servers) working, since it slides its own
+        `last_seen_at` on every request.
+
+        Rate limiting is skipped: the caller is this host's own user, and the
+        limiter exists to throttle remote pairing attempts.
+        """
+        with self._lock:
+            now = self._clock()
+            data = self._load(now)
+            retired = 0
+            for session in data["sessions"]:
+                if (
+                    session.label == label
+                    and session.revoked_at is None
+                    and now - session.last_seen_at > self.LOCAL_IDLE_REVOKE_AFTER
+                ):
+                    session.revoked_at = now
+                    retired += 1
+            token = _generate_token(self._rng)
+            data["sessions"].append(
+                Session(
+                    session_id=uuid4(),
+                    label=label,
+                    token_hash=_hash_token(token),
+                    created_at=now,
+                    expires_at=now + self._session_ttl,
+                    last_seen_at=now,
+                    revoked_at=None,
+                )
+            )
+            self._save(data)
+            logger.info("session.mint_local label={!r} retired_idle={}", label, retired)
+            return token
+
     # ─── session lifecycle ─────────────────────────────────────────────────
 
     def validate(self, token: str) -> Session:

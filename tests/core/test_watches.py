@@ -24,7 +24,7 @@ from grove.core.contracts.watches import (
     WatchRegistration,
     WatchView,
 )
-from grove.core.errors import GroveError
+from grove.core.errors import GroveError, WatchUnobservable
 from grove.core.watches.log import WatchLog
 from grove.core.watches.mailbox import MailboxWatchCourier
 from grove.core.watches.scheduler import WatchScheduler
@@ -312,6 +312,48 @@ async def test_a_deadline_delivers_an_expiry_rather_than_going_silent(tmp_path):
         assert row.state == "expired"
         assert len(courier.sent) == 1
         assert courier.sent[0][1].ok is False
+    finally:
+        scheduler.close()
+
+
+class RefusingWatcher(CountingWatcher):
+    """Admits nothing, the way a CI watcher refuses a forge it cannot read."""
+
+    def admit(self, predicate):
+        raise WatchUnobservable("this subject can never be observed here")
+
+
+@pytest.mark.asyncio
+async def test_an_unobservable_watch_is_refused_and_never_recorded(tmp_path):
+    """A refusal at registration is the one the agent can act on.
+
+    Admitted, the watch would be probed until its deadline and then report
+    "condition NOT met" about a subject nobody ever looked at.
+    """
+    scheduler, log, watcher, _ = await _build(tmp_path, watcher=RefusingWatcher())
+    try:
+        with pytest.raises(WatchUnobservable):
+            scheduler.register(_registration())
+        assert log.all() == []
+        assert scheduler.seconds_until_next() is None
+        assert watcher.calls == 0
+    finally:
+        scheduler.close()
+
+
+@pytest.mark.asyncio
+async def test_a_kind_with_no_watcher_is_refused_at_registration(tmp_path):
+    scheduler = WatchScheduler(
+        log=WatchLog(tmp_path / "watches.json"),
+        watchers=WatcherRegistry([TimerWatcher()]),
+        deliver=RecordingCourier(),
+        clock=FakeClock(),
+    )
+    scheduler.prime()
+    try:
+        with pytest.raises(WatchUnobservable, match="command"):
+            scheduler.register(_registration())
+        assert scheduler.list().watches == []
     finally:
         scheduler.close()
 

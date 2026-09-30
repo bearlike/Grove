@@ -626,6 +626,15 @@ class WhoamiView(BaseModel):
     the credentials are partial, or Langfuse could not be reached — all of
     which mean the same thing to a client, which is to link no further than
     the host it already has."""
+    positive_feedback_reasons: list[str] = Field(default_factory=list)
+    """The reasons a thumbs-UP may name (``telemetry.positive_feedback_reasons``).
+    Empty under the same gate as ``feedback_reasons``."""
+    feedback_reasons: list[str] = Field(default_factory=list)
+    """The reasons a thumbs-down may name (``telemetry.feedback_reasons``), and
+    the gate on rating at all: empty whenever ``langfuse_host`` is ``None``,
+    because a rating with nowhere to land is a button that lies. The daemon
+    refuses any reason not listed here, so the rubric in Langfuse stays the
+    one the config names."""
 
 
 __all__ = [

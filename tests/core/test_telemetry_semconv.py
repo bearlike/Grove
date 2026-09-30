@@ -25,6 +25,7 @@ from grove.core.telemetry.semconv import (
     GenAiAttr,
     GenAiOperation,
     GroveIdentityAttr,
+    LangfuseAttr,
     ObservationShapes,
     TextPart,
     ToolCallPart,
@@ -339,6 +340,16 @@ def test_the_orchestrator_tag_survives_an_identity_that_knows_nothing() -> None:
     question would otherwise be unanswerable in a mixed project."""
     assert TraceIdentity().tags() == ("grove",)
     assert TraceIdentity().attributes() == {}
+
+
+def test_the_user_is_langfuse_own_user_axis_and_never_a_tag() -> None:
+    """Every trace Grove emitted reached Langfuse with no user, so "whose work is
+    this" had no answer on the one surface a reviewer filters by. It rides the
+    vendor key rather than a `grove.*` one, because only that key populates the
+    user column; a person's name is high-cardinality, so it is not a facet."""
+    identity = TraceIdentity(user="dev")
+    assert identity.attributes() == {LangfuseAttr.USER_ID: "dev"}
+    assert identity.tags() == ("grove",)
 
 
 def test_versions_are_tagged_by_what_they_version() -> None:

@@ -1,5 +1,5 @@
 site_name: Grove
-site_description: The workspace manager for AI coding agents. Run a forest of isolated workspaces on one shared machine, reach any of them from your terminal, your browser or another agent, and hand each one the specs, screenshots and tickets it works from.
+site_description: Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.
 repo_url: https://github.com/bearlike/Grove
 repo_name: bearlike/Grove
 site_url: https://bearlike.github.io/Grove/
@@ -132,6 +132,7 @@ theme:
 hooks:
   - docs/hooks/schema_to_md.py
   - docs/hooks/no_tracker_refs.py
+  - docs/hooks/defer_vendor_scripts.py
 
 # Order matters: the theme's authoring skill documents this sequence, and a
 # missing extension degrades SILENTLY (a fence title prints as text, `++k++`
@@ -180,9 +181,18 @@ exclude_docs: |
   superpowers/
   _glossary.md
   hooks/
+  # The landing scene's readable sources and the vendored Three.js build are
+  # bundled into javascripts/grove-factory.min.js (tools/landing_bundle.py);
+  # the page loads only the bundle, so publishing ~2 MB of inputs is waste.
+  javascripts/grove-factory.js
+  javascripts/factory/
+  javascripts/vendor/
   design-system.md
   AGENTS.md
   CLAUDE.md
+  # Folder READMEs describe the source tree for contributors. Without this,
+  # mkdocs would publish docs/README.md as the site's index.
+  README.md
 
 plugins:
   - search

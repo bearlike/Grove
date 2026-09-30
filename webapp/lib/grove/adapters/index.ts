@@ -97,9 +97,12 @@ export {
   buildCreateRequest,
   customModelError,
   deriveTitle,
+  newTitleSalt,
 } from "./launch";
 
-export { COMPOSER_COMMANDS, mentionsFromContacts } from "./composer";
+export { COMPOSER_COMMANDS, grovePaletteCommands, mentionsFromContacts } from "./composer";
+
+export { operationLabel } from "./operation";
 export type { ComposerCommand, ComposerMention } from "./composer";
 
 export { mergeTurns, turnCursor } from "./turns";
@@ -171,6 +174,8 @@ export type { ToolCallField, ToolCallView } from "./tool-call";
 export {
   GROVE_DATA_NAME,
   GROVE_DATA_PART,
+  GROVE_TIME_GAP,
+  GROVE_TURN_ANSWER,
   messagesFromTurns,
 } from "./transcript";
 export type {

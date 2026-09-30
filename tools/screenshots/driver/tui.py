@@ -8,19 +8,34 @@ geometry, and nothing about what the fleet underneath it contains.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
 from textual.pilot import Pilot
+from textual.widget import Widget
 
 from grove.core.auth import PairingChallenge
 from grove.core.manager import WorkspaceManager
 from grove.tui.app import GroveApp
 from grove.tui.screens.pairing import PairingModal
+from grove.tui.screens.sessions import SessionRow
+from grove.tui.widgets.card import WorkspaceCard
+from grove.tui.widgets.dashboard_grid import DashboardCard
 
 PilotAction = Callable[[Pilot[Any]], Awaitable[None]]
+
+
+class EmptyCaptureError(RuntimeError):
+    """A data-fed screen reached its deadline without the data it exists to show."""
+
+
+_DATA_WAIT_SECONDS: Final[float] = 30.0
+"""How long a data-fed shot waits for its first row. The dashboard's first
+snapshot arrives on stream connect, well inside a second against a local
+daemon; the budget is for a loaded CI runner, not for normal operation."""
 
 TERMINAL_SIZE: Final[tuple[int, int]] = (132, 36)
 """132 columns by 36 rows produces an SVG with roughly 16:9 visual aspect once
@@ -51,13 +66,20 @@ class TuiCapture:
 
     async def capture_fleet(self, manager: WorkspaceManager) -> None:
         """The populated surfaces — list, modals, browsers, overlays."""
-        await self.shoot(manager, "tui-list", "Grove")
+        await self.shoot(manager, "tui-list", "Grove", expect=WorkspaceCard)
         await self.shoot(manager, "tui-create-modal", "Grove · new workspace", self.press("n"))
         await self.shoot(manager, "tui-edit-modal", "Grove · edit workspace", self.press("e"))
         await self.shoot(manager, "tui-steer", "Grove · send message", self._steer)
-        await self.shoot(manager, "tui-sessions", "Grove · sessions", self.press("s"))
+        await self.shoot(
+            manager, "tui-sessions", "Grove · sessions", self.press("s"), expect=SessionRow
+        )
         await self.shoot(manager, "tui-project-switcher", "Grove · switch project", self.press("P"))
-        await self.shoot(manager, "tui-dashboard", "Grove · dashboard", self.press("d"))
+        # The dashboard is the one shot fed over HTTP: its wall is the daemon's
+        # `/events` stream and nothing else, so it renders only when the
+        # capture has brought up a daemon and pointed the manager's config at it.
+        await self.shoot(
+            manager, "tui-dashboard", "Grove · dashboard", self.press("d"), expect=DashboardCard
+        )
         await self.shoot(manager, "tui-help", "Grove · help", self.press("question_mark"))
         await self.shoot(manager, "tui-filter", "Grove · filter", self._filter)
         await self.shoot(manager, "tui-kill-confirm", "Grove · kill confirm", self.press("k"))
@@ -74,15 +96,40 @@ class TuiCapture:
         name: str,
         title: str,
         actions: PilotAction | None = None,
+        *,
+        expect: type[Widget] | None = None,
     ) -> None:
+        """Capture one state; with ``expect``, refuse to capture it EMPTY.
+
+        A data-fed screen that never received its data still renders its
+        chrome, so the capture exits 0 and publishes a blank screen. That
+        happened twice (an errored fleet, then a dashboard with no daemon), and
+        both times the job was green. ``expect`` names the widget that only
+        data can produce; its absence at the deadline fails the run instead.
+        """
         app = GroveApp(manager)
         async with app.run_test(size=TERMINAL_SIZE) as pilot:
             await pilot.pause(_SETTLE_SECONDS)
             if actions is not None:
                 await actions(pilot)
                 await pilot.pause(0.4)
+            if expect is not None:
+                await self._await_rendered(pilot, name, expect)
             svg = self._with_intrinsic_size(app.export_screenshot(title=title))
             (self._out_dir / f"{name}.svg").write_text(svg, encoding="utf-8")
+
+    @staticmethod
+    async def _await_rendered(pilot: Pilot[Any], name: str, expect: type[Widget]) -> None:
+        deadline = time.monotonic() + _DATA_WAIT_SECONDS
+        while not pilot.app.screen.query(expect):
+            if time.monotonic() > deadline:
+                raise EmptyCaptureError(
+                    f"{name}: no {expect.__name__} after {_DATA_WAIT_SECONDS:.0f}s — the "
+                    f"{type(pilot.app.screen).__name__} rendered without its data"
+                )
+            await pilot.pause(0.25)
+        # One more beat so the frame that added the widget has painted.
+        await pilot.pause(0.4)
 
     @staticmethod
     def press(key: str) -> PilotAction:

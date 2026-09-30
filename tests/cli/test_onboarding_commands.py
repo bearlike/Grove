@@ -87,6 +87,26 @@ def test_skills_install_target_all_skips_undetected_user_scope(
     assert (project / ".codex" / "skills" / "using-grove" / "SKILL.md").exists()
 
 
+@pytest.mark.parametrize("target", ["user", "project"])
+def test_skills_install_copies_every_packaged_skill_for_both_tools(
+    runner: CliRunner, project: Path, target: str
+) -> None:
+    """The install copies the packaged tree, so a newly added skill (here
+    `leading-in-grove`) reaches both tools at both scopes with no code change."""
+    home = project.parent
+    (home / ".claude").mkdir()
+    (home / ".codex").mkdir()
+    base = home if target == "user" else project
+
+    result = runner.invoke(app, ["skills", "install", "--target", target, "--agent", "all"])
+
+    assert result.exit_code == 0, result.output
+    assert "skipped" not in result.output
+    for tool in (".claude", ".codex"):
+        for skill in ("using-grove", "leading-in-grove"):
+            assert (base / tool / "skills" / skill / "SKILL.md").exists(), (tool, skill)
+
+
 def test_skills_install_target_project_outside_repo_fails_cleanly(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_state_dir: Path, tmp_path: Path
 ) -> None:

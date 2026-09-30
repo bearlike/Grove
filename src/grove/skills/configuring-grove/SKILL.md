@@ -5,9 +5,9 @@ description: Use when configuring Grove for a user or project, including agent r
 
 # Configuring Grove
 
-[Grove](https://github.com/bearlike/Grove) is a terminal workspace manager for AI
-coding agents. Each Grove workspace is one git worktree plus one tmux session
-running an agent, scoped to the repository it is launched from. This skill helps
+[Grove](https://github.com/bearlike/Grove) is a software factory for coding
+agents. Each Grove workspace is one git worktree plus one tmux session running
+an agent, scoped to the repository it is launched from. This skill helps
 you configure Grove correctly for a user, both at the host/user level and per
 project.
 

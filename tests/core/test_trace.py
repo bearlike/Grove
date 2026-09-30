@@ -16,12 +16,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from loguru import logger
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -390,6 +390,37 @@ def _acknowledging_processor(
 def _emit_finished_spans(processor: Any, count: int) -> None:
     for _ in range(count):
         processor.on_end(object())
+
+
+def test_a_real_span_ends_through_the_acknowledging_processor() -> None:
+    """The PRODUCTION pairing, end to end: a real span through the real processor.
+
+    Every other test here feeds `on_end` a bare `object()`, so no real span ever
+    reached the processor — and when the SDK started calling a span-processor
+    hook the duck-typed class did not have (`_on_ending`, 1.3x+), EVERY span
+    Grove emitted raised inside `span.end()`. `replay` swallows that by design,
+    so Grove's own traces stopped reaching Langfuse with nothing in the log.
+    """
+    exporter = _RecordedExporter(deque(), [])
+    sink = sink_from_processor(
+        cast("SpanProcessor", _acknowledging_processor(exporter)),
+        Resource.create({"service.name": "grove"}),
+    )
+    sink(
+        SpanRecord.agent(
+            trace_id=derive_trace_id("s1"),
+            span_id=derive_span_id("s1", "agent", "root"),
+            parent_span_id=None,
+            name="session:s1",
+            start_time=_ts("2026-07-08T10:00:00"),
+            end_time=_ts("2026-07-08T10:00:05"),
+        )
+    )
+
+    assert sink.flush() is True
+    assert [span.name for batch in exporter.batches for span in batch] == [
+        "invoke_agent session:s1"
+    ]
 
 
 def test_acknowledging_processor_batches_before_exporting() -> None:

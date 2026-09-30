@@ -107,7 +107,7 @@ test.describe("native help and compact chrome", () => {
         await page.locator(locator).first().evaluate((el) => getComputedStyle(el).fontSize),
       );
 
-    const title = await size('[data-testid="shell-header"] > span');
+    const title = await size('[data-testid="shell-header"] > [data-testid="looping-text"]');
     const paneTab = await size('[data-testid="pane-transcript"]');
     const workTab = await size('[data-testid="work-panel-tab-terminal"]');
     const metadata = await size('[data-testid="terminal-capture-source"]');

@@ -75,6 +75,10 @@ class AgentSession:
     provenance: SessionProvenance
     tmux_window: str | None = None
     parent_session_id: str | None = None
+    spawn_tool_use_id: str | None = None
+    """The parent's ``tool_use_id`` that spawned this sub-agent, when the
+    provider records it — the edge a trace view nests a child under. ``None``
+    for a top-level session and for a provider that keeps no such link."""
 
 
 # A structured question an agent asked the user. One closed set of
@@ -876,6 +880,73 @@ class TokenUsage:
 
 
 @dataclass(slots=True, frozen=True)
+class NativeOperation:
+    """A transitional step the owned stream says is in progress RIGHT NOW.
+
+    A turn is not one undifferentiated "working": the harness announces when it
+    stops generating to summarize its context (Claude's ``status: compacting``,
+    OpenCode's ``compaction`` part) and when a request failed and is waiting to
+    retry (Claude's ``api_retry``, OpenCode's ``session.status: retry``). No
+    transcript records either while it happens — a compaction's boundary is
+    written only when it ends (measured: 79 s after it began) and a retry never
+    at all — so the owner is the only witness, and without this a client can
+    only draw a generic spinner over a session that is doing something specific.
+
+    Every field past ``kind`` is ``None`` when the provider did not state it;
+    ``retry_at`` is an absolute instant so a client counts down without a
+    server tick.
+    """
+
+    kind: Literal["compacting", "retrying"]
+    started_at: datetime
+    attempt: int | None = None
+    max_attempts: int | None = None
+    retry_at: datetime | None = None
+    detail: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "started_at": self.started_at.isoformat(),
+            "attempt": self.attempt,
+            "max_attempts": self.max_attempts,
+            "retry_at": self.retry_at.isoformat() if self.retry_at is not None else None,
+            "detail": self.detail,
+        }
+
+    @classmethod
+    def from_json(cls, data: object) -> NativeOperation | None:
+        """Parse a spooled or sidecar operation; ``None`` on anything malformed."""
+        if not isinstance(data, dict) or data.get("kind") not in ("compacting", "retrying"):
+            return None
+
+        def _at(value: object) -> datetime | None:
+            try:
+                parsed = datetime.fromisoformat(value) if isinstance(value, str) else None
+            except ValueError:
+                return None
+            # Aware only, the sidecar's rule: a naive instant cannot be compared
+            # with the daemon's clock without raising mid-poll.
+            return parsed if parsed is not None and parsed.tzinfo is not None else None
+
+        def _int(value: object) -> int | None:
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+        started_at = _at(data.get("started_at"))
+        if started_at is None:
+            return None
+        detail = data.get("detail")
+        return cls(
+            kind=data["kind"],
+            started_at=started_at,
+            attempt=_int(data.get("attempt")),
+            max_attempts=_int(data.get("max_attempts")),
+            retry_at=_at(data.get("retry_at")),
+            detail=detail if isinstance(detail, str) and detail else None,
+        )
+
+
+@dataclass(slots=True, frozen=True)
 class NativeFacts:
     """What a session's OWNED stream said that no transcript records.
 
@@ -914,6 +985,15 @@ class NativeFacts:
     harness counted none, which is a measurement rather than an absence."""
     subagents_completed: int | None = None
     subagents_failed: int | None = None
+    operation: NativeOperation | None = None
+    """The transitional step in progress, or ``None`` when the turn is plainly
+    generating or idle. Unlike every field above it is CLEARED explicitly by the
+    owner, never merely left unstated, so it cannot outlive what it names."""
+    compact_error: str | None = None
+    """The provider's reason the last compaction FAILED, verbatim; ``None`` once
+    one succeeds or a new one starts. Measured on 2.1.280: ``Error during
+    compaction: summarization produced empty response`` — without it the only
+    trace of a failed ``/compact`` was a toast that had said "delivered"."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -1409,6 +1489,11 @@ class DigestEntry:
     tool: ToolCall | None = None
     compaction: CompactionBoundary | None = None
     mailbox: MailboxMessage | None = None
+    at: datetime | None = None
+    """When the message this entry rode in on was written — the same clock
+    ``ToolCall.duration_ms`` starts from, so a call's span is ``at`` to
+    ``at + duration_ms``. Stamped by the turn builders, never by the digest;
+    ``None`` where the provider recorded no time."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -1629,7 +1714,9 @@ ControlKind = Literal["command", "skill", "mcp_server"]
 # Where a scanned control was found. A display-only origin hint (a project
 # worktree's ``.claude/``, the user config dir, a tool built-in); never drives
 # behaviour, so a Literal closed set is enough.
-ControlScope = Literal["project", "user", "builtin", "dynamic"]
+# `grove` is a Grove command from the config cascade (`/grove:<name>`), which
+# the engine runs itself rather than handing to the agent.
+ControlScope = Literal["project", "user", "builtin", "dynamic", "grove"]
 
 
 @dataclass(slots=True, frozen=True)

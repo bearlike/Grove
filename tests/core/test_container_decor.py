@@ -325,7 +325,12 @@ def test_resources_reads_a_cgroup_v1_tree(tmp_path: Path) -> None:
     (cgroup / "cpuacct" / "cpuacct.usage").write_text("2000000000\n", encoding="utf-8")
     code, second = _run(script, env=env)
     assert code == 0
-    assert second.strip() == "cpu 100% mem 512M"  # 1s of CPU over 2s at a 0.5 cap
+    # 1s of CPU over 2s at a 0.5 cap is 100%, but a range for the reason the v2
+    # test above gives: the window ends at the script's own clock read, so a
+    # loaded runner widens it and 100% reads as 66%.
+    assert second.strip().endswith("mem 512M")
+    percent = int(second.strip().split("%", 1)[0].removeprefix("cpu ").strip())
+    assert 50 <= percent <= 100, second
 
 
 def test_an_uncapped_cgroup_reports_against_the_cpus_it_may_actually_use(tmp_path: Path) -> None:

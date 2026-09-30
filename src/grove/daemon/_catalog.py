@@ -35,6 +35,24 @@ from grove.core.gallery import DiagramGallery, GalleryItem
 from grove.core.sessions import CatalogEntry, SessionCatalog
 from grove.core.turn_count import CountFillResult
 
+_TURN_COUNT_IDLE_PER_BUSY = 1.0
+"""Seconds the turn-count worker idles per second it spent parsing.
+
+The parse is pure Python and holds the GIL; everything else in the daemon —
+notably the ``/usage/*`` SQLite reads, which release the GIL per row step and
+must queue to get it back — convoys behind it. Measured on a synthetic corpus
+(160 sessions of ~0.9 MB, a 200k-row read repeated 20 times): 2.67 s quiet,
+23.88 s beside an unpaced pass, 5.83 s at this ratio, 3.60 s at 3.0. A FIXED
+sleep between sessions does not work, because the starvation happens INSIDE
+each parse: ``sleep(0)`` changed nothing (10.25 s against 10.33 s for a
+200k-row read) and 5 ms per session still left it 25x slow. Only an idle
+proportional to the parse bounds the share the pass may take. 1.0 halves a
+cold pass's throughput for a ~4x faster neighbour; 3.0 buys the last 2 s at an
+8x longer pass, which would keep the column empty for minutes on a real host.
+A named constant rather than config: nobody has a reason to tune it per host,
+and the invariant — the pass never holds more than half the GIL — is the point.
+"""
+
 
 class _CatalogMemo:
     """An event-owned, complete ``SessionCatalog`` snapshot.
@@ -253,8 +271,19 @@ class _CatalogMemo:
             return False
         return path is None or row.ref.transcript_path == path
 
+    def _pace(self, busy_seconds: float) -> None:
+        """Give the GIL back after one parse, for a share of its own duration.
+
+        The DAEMON owns this policy rather than ``TurnCountCache`` because the
+        daemon is the process with neighbours: a one-shot warm-up (the screenshot
+        planter) runs the same fill with nothing beside it and should not pay a
+        doubled wall time. Waiting on the stop event rather than ``time.sleep``
+        keeps shutdown prompt — ``close`` must never sit out a pacing interval.
+        """
+        self._stopped.wait(busy_seconds * _TURN_COUNT_IDLE_PER_BUSY)
+
     def _count_turns(self, rows: tuple[CatalogEntry, ...]) -> CountFillResult:
-        result = self._catalog.count_turn_facts(rows, stop=self._stopped.is_set)
+        result = self._catalog.count_turn_facts(rows, stop=self._stopped.is_set, pace=self._pace)
         if result.counted:
             logger.debug("counted turns for {} session(s)", result.counted)
         return result

@@ -23,7 +23,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | One agent, one worktree | Each workspace is its own git worktree, branch and tmux session. | [Workspace lifecycle](features-workspace-lifecycle.md) |
 | Pause, resume, respawn, kill | Pause drops the worktree and keeps the branch. Kill deletes only branches Grove created. | [Workspace lifecycle](features-workspace-lifecycle.md) |
 | Branch provenance | Grove records whether it made a branch or you attached one, and kill honours it. | [Branch provenance](features-branch-provenance.md) |
-| Containers | A workspace runs inside the project's devcontainer with its own egress policy. | [Containerized agents](features-containers.md) |
+| Containers | Run each agent in a containerized sandbox for its task. Set resource limits to protect the rest of the fleet. | [Containerized agents](features-containers.md) |
 | Init scripts | A script prepares each new worktree, on the host or in the container. | [Init scripts](configure-init-scripts.md) |
 | Root placement | A workspace can run in the repo root on the branch already checked out. | [Workspace lifecycle](features-workspace-lifecycle.md#root-workspaces) |
 | Status semantics | Three axes, workspace, agent activity and task phase, each answering a different question. | [Status semantics](features-status.md) |
@@ -45,6 +45,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Codex adapter | Turn steering with expected turn checks, plus command and file change approvals over JSON RPC. | [Codex](agents-codex.md) |
 | OpenCode adapter | A Grove owned HTTP server, per session event filtering and a read only shared transcript database. | [OpenCode](agents-opencode.md) |
 | Compaction record | Each context cut reports the tokens dropped, its duration and the model that compacted. | [Agent activity](features-activity.md#where-the-context-was-compacted) |
+| Grove commands | `/grove:<name>` runs a configured chain of session controls in order, such as compacting on a fast model and switching back. | [Choosing an agent](configure-agents.md#grove-commands) |
 | Peek rail | Read the selected pane live without attaching. | [Peek rail](features-activity.md#the-peek-rail) |
 
 ## Trackers
@@ -65,7 +66,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Activity dashboard | Which agent is working, waiting, blocked or idle, across every repo. | [Agent activity](features-activity.md) |
 | Session catalog | Every agent session on the host, including work Grove did not launch. | [Agent activity](features-activity.md#the-session-catalog-every-session-on-this-host) |
 | Session recovery | Sessions re-adopt across daemon restarts and a stale pointer remaps in a click. | [Workspace lifecycle](features-workspace-lifecycle.md#recovery-from-a-vanished-session) |
-| Telemetry | One session becomes one trace, sent to Langfuse or any OTLP backend. | [Telemetry](features-telemetry.md) |
+| Telemetry | Send each turn to an OTLP backend. With Langfuse, rate answers in Grove for reviews and LLM judge calibration. | [Telemetry](features-telemetry.md) |
 | Usage audit | Tokens, time, cost and subscription windows projected from transcripts on disk. | [Web dashboard](use-webapp.md#the-usage-audit) |
 | Push notifications | A push when an agent finishes a turn or needs an answer. | [Push notifications](features-notifications.md) |
 | Public share links | A read only transcript link with an expiry and an optional passcode. | [Web dashboard](use-webapp.md#working-in-a-session) |

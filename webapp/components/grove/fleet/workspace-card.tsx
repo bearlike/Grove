@@ -5,7 +5,7 @@ import { AgentMark } from "@/components/grove/agent-mark";
 import { SectionCard } from "@/components/grove/card";
 import { BranchLabel, PROJECT_MIN_WIDTH, ProjectLabel } from "@/components/grove/entity";
 import { RelativeTime } from "@/components/grove/relative-time";
-import { OverflowText } from "@/components/grove/overflow-text";
+import { LoopingText, OverflowText, ScannedTextScope } from "@/components/grove/overflow-text";
 import { WorkingMark } from "@/components/grove/working-loader";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -56,8 +56,13 @@ export function WorkspaceCard({
       className={cn(isInactive(workspace) && "opacity-80")}
       icon={<AgentMark agentName={state.agent_name} />}
       title={
+        // The workspace's name loops like the rail's rather than resting on an
+        // ellipsis; the status line below keeps the bounded pass, because it
+        // is a sentence read once rather than a name (`overflow-text.tsx`).
         <Link href={`/w/${state.id}`} className="block min-w-0 text-content-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2">
-          <OverflowText>{state.title}</OverflowText>
+          <ScannedTextScope>
+            <LoopingText>{state.title}</LoopingText>
+          </ScannedTextScope>
         </Link>
       }
       description={

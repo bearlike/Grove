@@ -9,9 +9,16 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+import pytest
 
-from grove.core.config import GiteaTicketConfig, GitHubTicketConfig, TicketsConfig
+from grove.core.config import (
+    GiteaTicketConfig,
+    GitHubTicketConfig,
+    LinearTicketConfig,
+    TicketsConfig,
+)
 from grove.core.contracts.watches import CiPredicate
+from grove.core.errors import WatchUnobservable
 from grove.core.tickets.registry import TicketProviderRegistry
 from grove.core.watches.ci import CiWatcher
 
@@ -80,6 +87,55 @@ def _registry(
         transport=httpx.MockTransport(handler),
     )
     return registry, requests
+
+
+def _admitting(tickets: TicketsConfig, env: dict[str, str]) -> CiWatcher:
+    return CiWatcher(TicketProviderRegistry(tickets, env=env))
+
+
+def test_a_forge_the_daemon_has_not_enabled_is_refused_at_admission() -> None:
+    """The incident: a GitHub CI watch on a daemon that enables only Gitea.
+
+    Admitted, it was probed every interval for an hour and could only ever
+    expire, reporting "condition NOT met" about a CI run that had passed.
+    """
+    watcher = _admitting(
+        TicketsConfig(gitea=GiteaTicketConfig(enabled=True, token_env="TOKEN")),
+        {"TOKEN": "test"},
+    )
+
+    with pytest.raises(WatchUnobservable, match=r"tickets\.github"):
+        watcher.admit(_predicate())
+
+
+def test_a_forge_with_no_credential_is_refused_at_admission() -> None:
+    """Enabled but tokenless would fail every probe the same way."""
+    watcher = _admitting(
+        TicketsConfig(github=GitHubTicketConfig(enabled=True, token_env="TOKEN")), {}
+    )
+
+    with pytest.raises(WatchUnobservable, match=r"tickets\.github\.token_env"):
+        watcher.admit(_predicate())
+
+
+def test_a_tracker_that_cannot_read_checks_is_refused_at_admission() -> None:
+    """Linear is enabled and credentialed here, so only the capability refuses."""
+    watcher = _admitting(
+        TicketsConfig(linear=LinearTicketConfig(enabled=True, token_env="TOKEN")),
+        {"TOKEN": "test"},
+    )
+
+    with pytest.raises(WatchUnobservable, match="cannot read CI checks"):
+        watcher.admit(CiPredicate(provider="linear", owner="acme", repo="api", head_sha=SHA))
+
+
+def test_an_enabled_credentialed_forge_is_admitted() -> None:
+    watcher = _admitting(
+        TicketsConfig(github=GitHubTicketConfig(enabled=True, token_env="TOKEN")),
+        {"TOKEN": "test"},
+    )
+
+    watcher.admit(_predicate())
 
 
 def _predicate(*, provider: str = "github", sha: str = SHA) -> CiPredicate:

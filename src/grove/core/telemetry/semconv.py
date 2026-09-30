@@ -120,6 +120,7 @@ class LangfuseAttr:
     OBSERVATION_COMPLETION_START_TIME: Final = "langfuse.observation.completion_start_time"
 
     SESSION_ID: Final = "langfuse.session.id"
+    USER_ID: Final = "langfuse.user.id"
     TRACE_NAME: Final = "langfuse.trace.name"
     TRACE_TAGS: Final = "langfuse.trace.tags"
     RELEASE: Final = "langfuse.release"
@@ -412,6 +413,10 @@ class TraceIdentity(BaseModel):
     orchestrator_version: str = ""
     ticket_ids: tuple[str, ...] = ()
     phase: str = ""
+    user: str = ""
+    """The person the fleet runs for — the host account the daemon runs as.
+    Langfuse's own user axis, so a reviewer can narrow to one person's work and
+    a human annotation sits beside the user it came from."""
 
     _ATTRIBUTE_FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (
         (GroveIdentityAttr.WORKSPACE_ID, "workspace_id"),
@@ -476,6 +481,8 @@ class TraceIdentity(BaseModel):
             resolved[GroveIdentityAttr.TICKET_IDS] = ",".join(self.ticket_ids)
         if self.orchestrator_version:
             resolved[LangfuseAttr.RELEASE] = self.orchestrator_version
+        if self.user:
+            resolved[LangfuseAttr.USER_ID] = self.user
         return resolved
 
     def tags(self) -> tuple[str, ...]:

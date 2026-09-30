@@ -373,12 +373,16 @@ class DigestEntryView(BaseModel):
     tool: ToolCallView | None = None
     compaction: CompactionView | None = None
     mailbox: MailboxMessageView | None = None
+    at: datetime | None = None
+    """When the entry's message was written; a tool call spans ``at`` to
+    ``at + tool.duration_ms``. ``None`` where the provider stamped no time."""
 
     @classmethod
     def from_entry(cls, e: DigestEntry, anchor: str | None = None) -> DigestEntryView:
         return cls(
             role=e.role,
             text=e.text,
+            at=e.at,
             question=AgentQuestionView.from_question(e.question) if e.question else None,
             file_edit=FileEditView.from_edit(e.file_edit, anchor) if e.file_edit else None,
             todo=TodoListView.from_todo(e.todo) if e.todo else None,
@@ -720,7 +724,7 @@ class SessionControlView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
-    scope: Literal["project", "user", "builtin", "dynamic"]
+    scope: Literal["project", "user", "builtin", "dynamic", "grove"]
     detail: str | None = None
 
     @classmethod

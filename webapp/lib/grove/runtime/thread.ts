@@ -8,6 +8,7 @@ import {
   type AssistantRuntime,
   type AttachmentAdapter,
   type ExternalStoreThreadListAdapter,
+  type FeedbackAdapter,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 
@@ -21,6 +22,7 @@ import {
 import type {
   AgentQuestionView,
   DashboardSnapshotView,
+  NativeOperationView,
   QuestionAnswerItem,
   SessionSummaryView,
   SessionTurnView,
@@ -33,9 +35,11 @@ import {
   useSessionTurns,
   useTranscriptInvalidation,
   useWorkspaceQueue,
+  useWhoami,
   useWorkspaceTodo,
 } from "@/lib/grove/hooks";
 import { attachmentIds, groveAttachmentAdapter } from "./attachments";
+import { type TurnFeedbackControls, useTurnFeedback } from "./feedback";
 import {
   acknowledgeComposerDraft,
   beginComposerDraftSubmission,
@@ -57,6 +61,9 @@ import { sessionThreadList } from "./thread-list";
 /** A no-op store setter: message branching is not a Grove concept (the daemon
  * owns the transcript), but the adapter still wants the seam. */
 const NO_SET_MESSAGES = (): void => {};
+
+/** Stable empty list, so a whoami still loading does not re-mint the adapter. */
+const NO_REASONS: readonly string[] = [];
 
 /** A composer that can never fire — a read-only transcript renders none. */
 const NO_SEND = async (): Promise<void> => {};
@@ -102,6 +109,13 @@ export interface TranscriptRuntimeOptions {
    * honestly pass none.
    */
   attachments?: AttachmentAdapter;
+  /** Omit to render no thumbs. `stamp` re-applies the votes the adapter
+   * recorded, because a transcript poll re-supplies every message without
+   * them — see `./feedback`. */
+  feedback?: {
+    adapter: FeedbackAdapter | undefined;
+    stamp: (messages: ThreadMessageLike[]) => ThreadMessageLike[];
+  };
 }
 
 /**
@@ -122,17 +136,25 @@ export function useTranscriptRuntime({
   readOnly = false,
   threadList,
   attachments,
+  feedback,
 }: TranscriptRuntimeOptions): { runtime: AssistantRuntime; messageCount: number } {
-  const messages = useMemo(() => messagesFromTurns(turns ?? []), [turns]);
+  const mapped = useMemo(() => messagesFromTurns(turns ?? []), [turns]);
+  const stamp = feedback?.stamp;
+  const messages = useMemo(() => (stamp ? stamp(mapped) : mapped), [mapped, stamp]);
+  const feedbackAdapter = feedback?.adapter;
 
   // One object, memoised, for the same reason `convertMessage` is a module
   // constant: the store compares adapter identity across updates.
   const adapters = useMemo(
     () =>
-      threadList || attachments
-        ? { ...(threadList ? { threadList } : {}), ...(attachments ? { attachments } : {}) }
+      threadList || attachments || feedbackAdapter
+        ? {
+            ...(threadList ? { threadList } : {}),
+            ...(attachments ? { attachments } : {}),
+            ...(feedbackAdapter ? { feedback: feedbackAdapter } : {}),
+          }
         : undefined,
-    [threadList, attachments],
+    [threadList, attachments, feedbackAdapter],
   );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
@@ -163,6 +185,9 @@ export interface PendingQuestionGroup {
 
 export interface GroveThreadState {
   runtime: AssistantRuntime;
+  /** Provide through `TurnFeedbackContext` around the thread; `null` when
+   * ratings are off. */
+  feedback: TurnFeedbackControls | null;
   /** True when there is no transcript AND no live question — the empty state. */
   isEmpty: boolean;
   /**
@@ -194,6 +219,13 @@ export interface GroveThreadState {
    * `working` here with no second read. See `core/agents/claude_code.py`.
    */
   working: boolean;
+  /**
+   * The native step behind `working` when the harness announced one — a
+   * compaction or a retry wait — and `null` while it is plainly generating.
+   * Read off the same snapshot row as `working`, so the two cannot disagree
+   * about which session they describe.
+   */
+  operation: NativeOperationView | null;
   interrupt: () => void;
   /** Submit one batch's answers. */
   answer: (groupId: string, answers: QuestionAnswerItem[]) => void;
@@ -358,21 +390,34 @@ export function useGroveThread({
     [workspaceId],
   );
 
+  const whoami = useWhoami();
+  const negativeReasons = whoami.data?.feedback_reasons ?? NO_REASONS;
+  const positiveReasons = whoami.data?.positive_feedback_reasons ?? NO_REASONS;
+  // One object per pair of lists, so the adapter is not re-minted per render.
+  const reasons = useMemo(
+    () => ({ negative: negativeReasons, positive: positiveReasons }),
+    [negativeReasons, positiveReasons],
+  );
+  const feedback = useTurnFeedback(workspaceId, sessionId, reasons, setNotice);
+
   const { runtime, messageCount } = useTranscriptRuntime({
     turns,
     onNew,
     onCancel,
     attachments,
+    feedback,
     ...(threadList ? { threadList } : {}),
   });
 
   return {
     runtime,
+    feedback: feedback.controls,
     isEmpty: messageCount === 0 && pending.length === 0,
     pending,
     todo,
     notice,
     working: agentIsWorking(snapshot, workspaceId, sessionId),
+    operation: agentOperation(snapshot, workspaceId, sessionId),
     interrupt: useCallback(() => void onCancel(), [onCancel]),
     answer,
     answering: answerMutation.isPending || answerMutation.isSuccess,
@@ -440,18 +485,33 @@ export function pendingContentKey(groups: readonly PendingQuestionGroup[]): stri
   return JSON.stringify(groups.map(({ groupId, presentation }) => ({ groupId, presentation })));
 }
 
+function sessionActivity(
+  snapshot: DashboardSnapshotView | null,
+  workspaceId: string,
+  sessionId: string | null,
+) {
+  if (!sessionId) return undefined;
+  for (const project of snapshot?.projects ?? []) {
+    for (const workspace of project.workspaces) {
+      if (workspace.state.id !== workspaceId) continue;
+      return workspace.sessions.find((entry) => entry.session.session_id === sessionId)?.activity;
+    }
+  }
+  return undefined;
+}
+
 function agentIsWorking(
   snapshot: DashboardSnapshotView | null,
   workspaceId: string,
   sessionId: string | null,
 ): boolean {
-  if (!sessionId) return false;
-  for (const project of snapshot?.projects ?? []) {
-    for (const workspace of project.workspaces) {
-      if (workspace.state.id !== workspaceId) continue;
-      const match = workspace.sessions.find((entry) => entry.session.session_id === sessionId);
-      return match?.activity.state === "working";
-    }
-  }
-  return false;
+  return sessionActivity(snapshot, workspaceId, sessionId)?.state === "working";
+}
+
+function agentOperation(
+  snapshot: DashboardSnapshotView | null,
+  workspaceId: string,
+  sessionId: string | null,
+): NativeOperationView | null {
+  return sessionActivity(snapshot, workspaceId, sessionId)?.native?.operation ?? null;
 }

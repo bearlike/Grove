@@ -73,6 +73,11 @@ grove watch timer 20                                        # wake me in 20 minu
 grove watch cmd -- <command>                                # exits when it is done
 ```
 
+A watch Grove could never observe is refused on the spot with
+`watch_unobservable`, and nothing is recorded. The usual cause is a `ci` watch
+whose `--provider` the daemon has not enabled or holds no token for. Read the
+message, which names the setting, and do not end your turn on a refusal.
+
 `grove watch ls` shows everything pending, `grove watch cancel <id>` withdraws
 one. Over MCP: `grove_register_watch`, `grove_list_watches`,
 `grove_cancel_watch`. The recipient defaults to your own workspace, read from
@@ -114,7 +119,8 @@ confirm a cause, land a fix, or open a pull request.
 
 If nothing about your work should be public, raise that with whoever created the
 workspace; do not silently stop reporting. If you are instead DRIVING a fleet,
-use `using-grove`. For installation configuration, use `configuring-grove`. For
+use `using-grove`, and if you LEAD teammates toward one deliverable, use
+`leading-in-grove`. For installation configuration, use `configuring-grove`. For
 an existing `.drawio` file being edited with a person, use
 `collaborating-on-diagrams` rather than ordinary shell writes. For a frontend
 change that needs a picture approved before code, use `mocking-up-in-grove`.

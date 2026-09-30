@@ -1,7 +1,8 @@
 """mkdocs hook: render `configure-reference.md` from `docs/grove.schema.json`.
 
-Runs at the `on_files` event so the generated page lives only inside the
-build, never on disk between runs. The schema file itself is regenerated
+Runs at the `on_files` event. The page IS written into `docs_dir` (it is
+git-ignored), and only when its content changed, because that directory is
+what `mkdocs serve` watches. The schema file itself is regenerated
 by `make docs-schema` locally and by the CI workflow before `mkdocs build`.
 
 If the schema file is missing (fresh clone, regeneration failed), the
@@ -40,7 +41,18 @@ def on_files(files: Files, config: dict[str, Any], **_: Any) -> Files:
     body = _render(_SCHEMA_PATH) if _SCHEMA_PATH.exists() and _SCHEMA_PATH.stat().st_size else _DEGRADED
 
     out_path = docs_dir / _TARGET
-    out_path.write_text(body, encoding="utf-8")
+    # WRITE ONLY ON CHANGE, or `mkdocs serve` never stops rebuilding. The page
+    # lands inside `docs_dir`, which the dev server watches, so an unconditional
+    # write IS a change: every build rewrote it, the watcher saw the write,
+    # started another build, and so on every few seconds with nothing edited.
+    # Measured on a host where one such server ran for 90 minutes: a rebuild
+    # every ~6 s at 85% CPU, and 34.5 GB resident by the end.
+    try:
+        current = out_path.read_text(encoding="utf-8")
+    except OSError:
+        current = None
+    if current != body:
+        out_path.write_text(body, encoding="utf-8")
     existing = files.get_file_from_path(_TARGET)
     if existing is not None:
         files.remove(existing)

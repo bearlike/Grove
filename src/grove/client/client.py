@@ -192,12 +192,7 @@ class GroveClient:
         if self._config.ssh_target is None:
             from grove.core.auth import SessionStore  # noqa: PLC0415
 
-            store = SessionStore()
-            label = f"local-{self._config.label}"
-            challenge = store.pair_init(label=label)
-            store.pair_approve(challenge.challenge_id)
-            _, token = store.pair_poll(challenge.challenge_id)
-            return token
+            return SessionStore().mint_local(f"local-{self._config.label}")
         raise NeedsPairingError(
             self._config.label,
             daemon_http_url=self._transport.http_url,
@@ -515,6 +510,12 @@ class GroveClient:
         try:
             async with client.stream("GET", path, headers=headers, timeout=None) as response:
                 if not response.is_success:
+                    # A streamed body is unread until asked for. Without this,
+                    # the error path's `resp.json()` raised httpx's
+                    # ResponseNotRead — a RuntimeError, outside both
+                    # GroveClientError and httpx.HTTPError — and a refused
+                    # stream crashed the TUI dashboard instead of retrying.
+                    await response.aread()
                     self._raise_for_status(response)
                 event_name: str | None = None
                 data: list[str] = []

@@ -9,11 +9,13 @@ import re
 import secrets
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 import httpx
 
+from grove.core.agents.model import NativeOperation
 from grove.core.agents.native_owner import (
     AskRecorder,
     FrameTrace,
@@ -54,6 +56,7 @@ class OpencodeNativeOwner:
         self._agent: str | None = None
         self._asked: dict[str, str] = {}
         self._question_options: dict[str, tuple[tuple[str, ...], ...]] = {}
+        self._operation: NativeOperation | None = None
 
     async def start(self, initial_prompt: str) -> str:
         """Launch the server, create its owned session, and send an optional prompt."""
@@ -157,6 +160,15 @@ class OpencodeNativeOwner:
         except (httpx.HTTPError, RuntimeError):
             return False
         return True
+
+    async def run_command(self, command: str) -> bool:
+        """Unmeasured: a Grove command waits on completion, which this owner cannot yet report."""
+        del command
+        return False
+
+    @property
+    def current_model(self) -> str | None:
+        return None
 
     async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool:
         """Resolve a held permission or question through its provider-owned route."""
@@ -315,6 +327,13 @@ class OpencodeNativeOwner:
         kind = frame.get("type")
         if kind == "message.part.updated":
             self._updated_text(properties)
+            self._compaction_part(properties)
+        elif kind == "session.status":
+            self._session_status(properties)
+        elif kind == "session.compacted":
+            self._publish_operation(None, compact_error=None)
+        elif kind == "session.error":
+            self._session_error(properties)
         elif kind == "message.part.delta":
             self._text_delta(properties)
         elif kind == "permission.asked":
@@ -327,6 +346,75 @@ class OpencodeNativeOwner:
         text = part.get("text") if isinstance(part, dict) and part.get("type") == "text" else None
         if isinstance(text, str) and text and self.emit is not None:
             self.emit(text)
+
+    def _compaction_part(self, properties: dict[str, Any]) -> None:
+        """A ``compaction`` part opening is the start of a compaction.
+
+        Measured on 1.18.31: ``POST /summarize`` writes a message whose part is
+        ``{"type": "compaction", "auto": false}`` before the summary runs, and
+        ``session.compacted`` (or a ``session.error``) ends it. The server also
+        writes this part when IT decides to compact (``auto: true``), which is
+        the case nothing else would reveal.
+        """
+        part = properties.get("part")
+        if (
+            isinstance(part, dict)
+            and part.get("type") == "compaction"
+            and (self._operation is None or self._operation.kind != "compacting")
+        ):
+            self._publish_operation(
+                NativeOperation(kind="compacting", started_at=datetime.now(UTC)),
+                compact_error=None,
+            )
+
+    def _session_status(self, properties: dict[str, Any]) -> None:
+        """``session.status``: ``busy`` / ``idle`` / ``retry`` for this session.
+
+        ``retry`` carries the attempt, the provider's message and ``next`` — an
+        absolute epoch-ms instant (OpenCode's own UI counts down to
+        ``next - Date.now()``). ``idle`` ends whatever step was running; ``busy``
+        says nothing about one and changes nothing.
+        """
+        status = properties.get("status")
+        if not isinstance(status, dict):
+            return
+        kind = status.get("type")
+        if kind == "idle":
+            if self._operation is not None:
+                self._publish_operation(None)
+        elif kind == "retry":
+            attempt = status.get("attempt")
+            nxt = status.get("next")
+            message = status.get("message")
+            self._publish_operation(
+                NativeOperation(
+                    kind="retrying",
+                    started_at=datetime.now(UTC),
+                    attempt=attempt
+                    if isinstance(attempt, int) and not isinstance(attempt, bool)
+                    else None,
+                    retry_at=datetime.fromtimestamp(nxt / 1000, tz=UTC)
+                    if isinstance(nxt, int) and not isinstance(nxt, bool) and nxt > 0
+                    else None,
+                    detail=message if isinstance(message, str) and message else None,
+                )
+            )
+
+    def _session_error(self, properties: dict[str, Any]) -> None:
+        """A ``session.error`` during a compaction is that compaction failing."""
+        if self._operation is None or self._operation.kind != "compacting":
+            return
+        error = properties.get("error")
+        data = error.get("data") if isinstance(error, dict) else None
+        message = data.get("message") if isinstance(data, dict) else None
+        self._publish_operation(
+            None, compact_error=message if isinstance(message, str) and message else "failed"
+        )
+
+    def _publish_operation(self, operation: NativeOperation | None, **also: object) -> None:
+        self._operation = operation
+        if self._asks is not None:
+            self._asks.facts(operation=operation, **also)
 
     def _text_delta(self, properties: dict[str, Any]) -> None:
         delta = properties.get("delta") if properties.get("field") == "text" else None

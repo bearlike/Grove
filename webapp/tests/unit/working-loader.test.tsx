@@ -56,10 +56,32 @@ describe("WorkingLoader", () => {
     );
   });
 
-  it("is mounted only while the agent is working", async () => {
+  it("is mounted only while the agent is working, carrying the native step", async () => {
     const transcript = await source(TRANSCRIPT);
 
-    expect(transcript).toContain("{working && <WorkingLoader />}");
+    expect(transcript).toContain("{working && <WorkingLoader operation={operation} />}");
+  });
+
+  it("names a native step instead of the bare word, without a live region ticking", () => {
+    const html = renderToStaticMarkup(
+      <WorkingLoader operation={{ kind: "compacting", started_at: "2026-09-23T19:04:27Z" }} />,
+    );
+
+    expect(html).toContain('data-operation="compacting"');
+    expect(html).toContain('aria-label="Compacting context"');
+    // The label ticks every second once mounted; a polite region would
+    // re-announce each tick, so it is switched off and named instead.
+    expect(html).toContain('aria-live="off"');
+    // Server markup holds the plain word: the clock starts only after mount,
+    // so hydration has nothing to disagree about.
+    expect(html).toContain("Working");
+  });
+
+  it("stays an ordinary polite status when the agent is plainly generating", () => {
+    const html = renderToStaticMarkup(<WorkingLoader />);
+
+    expect(html).not.toContain("aria-live");
+    expect(html).not.toContain("data-operation");
   });
 
   it("exempts a vendored variant's value from lint:styling, and nothing else", async () => {

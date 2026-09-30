@@ -56,6 +56,7 @@ Decision and I/O are split the way the broker splits them:
 from __future__ import annotations
 
 import contextlib
+import getpass
 import hashlib
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -95,6 +96,11 @@ from grove.core.usage.pricing_sources import PricingCatalog
 from grove.core.workspace import WorkspaceState
 
 _CONTEXT_SPAN_NAME = "grove:context"
+
+# Resolved once: the account cannot change under a running daemon, and this is
+# read per session per tick. `getpass` reads the environment before the passwd
+# database, so it answers without a lookup in the common case.
+_HOST_USER = getpass.getuser()
 """Stable name for the enriched root span. Deliberately not derived from the
 workspace title: a renamed workspace must not read as a different observation."""
 
@@ -494,6 +500,7 @@ class TraceForwarder:
             agent_kind=session.session.adapter_kind,
             orchestrator_version=__version__,
             ticket_ids=tuple(ref.id for ref in state.ticket_refs),
+            user=_HOST_USER,
             phase=row.phase.phase if row.phase is not None else "",
         )
 

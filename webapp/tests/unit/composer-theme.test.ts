@@ -172,7 +172,7 @@ describe("the composer theme seam speaks in TOKENS", () => {
     expect(shelf).toContain("var(--surface-sunken)");
     expect(shelf).toMatch(/border:\s*1px solid var\(--border\)/);
     const bar = RULES.find((rule) => rule.selector === '[data-slot="composer-bar"]' && /border-color:/.test(rule.body));
-    expect(bar?.body, "the composer bar has no outline of its own").toMatch(/var\(--border-source\) 36%/);
+    expect(bar?.body, "the composer bar has no outline of its own").toMatch(/var\(--border-source\) 43%/);
     expect(shelf).toMatch(/border-radius:\s*var\(--radius-lg\)/);
     expect(shelf, "the inset is the caller's").not.toMatch(
       /\b(margin|padding|width|height|inset)\b/,
@@ -230,7 +230,10 @@ describe("the decorative brand field is decoration and nothing else", () => {
 
   it("exists and draws from the ladder's edge token, adding no palette", () => {
     expect(FIELD, ".launch-brand-field is missing").not.toBeNull();
-    expect(FIELD).toContain("var(--surface-edge)");
+    // The opaque source rather than the 30%-alpha hairline token: the field
+    // must be visible, and the hairline token stacked under its own alpha was
+    // not. Either is the ladder's own edge neutral.
+    expect(FIELD).toMatch(/var\(--surface-edge(?:-source)?\)/);
     // A hex, a palette hue or a bare colour function here is a new palette
     // entry smuggled in as decoration — what `lint:styling` stops Grove code
     // doing and what the design system's ADD table exists to make deliberate.

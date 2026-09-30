@@ -1,0 +1,81 @@
+name: Screenshots
+
+# Regenerate the committed documentation images and publish the site that shows
+# them. Its OWN pipeline, deliberately outside ci.yml: it used to be the last
+# link of that chain, so it waited ~73 minutes behind unrelated tests and was
+# cancelled by every newer merge before it ever reached the capture.
+#
+# Two properties keep this safe to run on every push to main:
+#   - It cannot trigger itself. Gitea ignores events whose doer is the Actions
+#     user, so the commit this workflow pushes starts no workflow at all. That is
+#     also why the docs deploy is CALLED from here rather than triggered by the
+#     push: nothing else would ever publish the new images.
+#   - Nothing cancels a capture in flight — not even a newer screenshot run. A
+#     capture is ~45 minutes, and a busy day lands a picture-relevant commit
+#     more often than that, so cancel-in-progress meant no capture ever finished
+#     (run 7967 died with all TUI shots written, 7 minutes into the web seed).
+#     A newer run waits in the concurrency group instead. The push step rebases its images-only commit over whatever main gained
+#     meanwhile, and that queued run redraws them against the newer code.
+
+on:
+  push:
+    branches: [main]
+    # Changes that cannot alter a picture. Everything else might.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "tests/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/nightly.yml"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Branch the regenerated images are committed to"
+        type: string
+        required: false
+        default: "main"
+      source:
+        description: "Branch supplying the capture tooling; empty reuses the target"
+        type: string
+        required: false
+        default: ""
+      shots:
+        description: "all | subset of tui,webapp"
+        type: string
+        required: false
+        default: "all"
+      dry_run:
+        description: "'true' captures and diffs but never pushes or publishes"
+        type: string
+        required: false
+        default: "false"
+
+concurrency:
+  group: screenshots-${{ inputs.target || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: Capture
+    permissions:
+      contents: write
+    uses: ./.github/workflows/_docs-screenshots.yml
+    with:
+      target: ${{ inputs.target || 'main' }}
+      source: ${{ inputs.source || '' }}
+      shots: ${{ inputs.shots || 'all' }}
+      dry_run: ${{ inputs.dry_run || 'false' }}
+
+  publish:
+    name: Publish docs
+    needs: capture
+    # Only when the capture actually landed a commit on main. A dry run, an
+    # unchanged tree, or a feature-branch target publishes nothing.
+    if: >-
+      needs.capture.outputs.pushed == 'true' &&
+      (inputs.target || 'main') == 'main'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/_docs-deploy.yml
+    with:
+      ref: main

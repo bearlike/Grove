@@ -3,9 +3,9 @@
 # command (`grove`). `grove` on PyPI is an unrelated log-collection framework
 # we do not own, so publishing under it is impossible and a bare
 # `uv tool install grove` fetches the wrong product entirely.
-name = "grove-crew"
-version = "0.0.10"
-description = "Tend multiple git worktrees like branches in a forest — TUI workspace manager for AI coding agents."
+name = "grove-factory"
+version = "0.0.11"
+description = "A software factory for the coding agents you already use. Give each task a workspace, guide the work with files and diagrams, and follow delivery from ticket to trace."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Krishnakanth Alagiri" }]
@@ -50,33 +50,36 @@ dependencies = [
     # defensively so an older install keeps working rather than failing to
     # start.
     "truststore>=0.9,<1",
-]
-
-[project.optional-dependencies]
-daemon = [
+    # ── Every surface ships in the base install ──────────────────────────────
+    # A plain `uv tool install grove-factory` (or `uvx grove-factory`) must
+    # give the daemon, the MCP server, the SSH client and telemetry with no
+    # extra to remember: an extra left off is a surface that fails on first
+    # use, far from the install that caused it. Python packaging cannot
+    # SUBTRACT a dependency, so there is no lean install from the index any
+    # more.
+    #
+    # web dashboard: Node itself, from PyPI, so `grove web` and the dashboard
+    # build never depend on whatever Node the host has (usually an nvm default
+    # older than Next 16's floor). This is the established way to ship Node
+    # through PyPI (basedpyright hard-depends on the same binaries). The
+    # `nodejs-wheel` wrapper, not the bare `-binaries`, because only it
+    # installs working `node`/`npm`/`npx` console scripts; the binaries' own
+    # `bin/npm` is a copied symlink that cannot resolve its module. Per-platform
+    # wheels, ~60 MB. Capped so a Node major lands deliberately.
+    "nodejs-wheel>=22,<25",
+    # daemon
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
-]
-client = [
-    "httpx>=0.27,<1",
+    # client (the SSH transport)
     "asyncssh>=2.14,<3",
-]
-mcp = [
-    # Official MCP Python SDK (stdio server). Rides on the client extra:
-    # the MCP server is a thin adapter over GroveClient.
-    #
-    # Capped <2: SDK 2.0.0 deleted mcp.server.fastmcp entirely (Grove's
-    # whole MCP surface is built on FastMCP + mcp.server.lowlevel.Server),
-    # so an uncapped `uv tool install` silently shipped a dead grove-mcp.
+    # MCP. Capped <2: SDK 2.0.0 deleted mcp.server.fastmcp entirely (Grove's
+    # whole MCP surface is built on FastMCP + mcp.server.lowlevel.Server), so
+    # an uncapped install silently shipped a dead grove-mcp.
     "mcp>=1.2,<2",
-    "grove-crew[client]",
-]
-telemetry = [
-    # LangFuse ingestion via raw OTLP — deliberately NOT the
+    # telemetry: LangFuse ingestion via raw OTLP — deliberately NOT the
     # `langfuse` SDK package (its `start_observation()` has no `start_time`
-    # param, so it can't backfill a session that already happened). Off by
-    # default: `TelemetryConfig.enabled` gates it, and `grove.core.trace`
-    # imports these lazily so core stays importable without the extra.
+    # param, so it can't backfill a session that already happened). Inert
+    # until `TelemetryConfig.enabled`; `grove.core.trace` imports it lazily.
     "opentelemetry-sdk>=1.27,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.27,<2",
     # Otherwise arrives only transitively via opentelemetry-sdk; declared
@@ -87,17 +90,17 @@ telemetry = [
     # and its `_incubating` path is expected to move.
     "opentelemetry-semantic-conventions>=0.64b0,<1",
 ]
-all = [
-    "grove-crew[daemon]",
-    "grove-crew[client]",
-    "grove-crew[mcp]",
-    # `telemetry` is in here because leaving it out made `telemetry.enabled`
-    # a knob that could not work on a standard install: `grove.core.trace`
-    # imports the exporter lazily and degrades to a silent no-op, so a
-    # deployment that turned tracing on saw a healthy fleet exporting nothing
-    # and no error anywhere. The packages are small and inert while disabled.
-    "grove-crew[telemetry]",
-]
+
+# Empty on purpose: every one of these is now in the base install. They stay
+# declared so the `grove-factory[all]` / `[daemon]` specs already written into
+# docs, installers and people's shell history keep resolving instead of
+# warning about an unknown extra.
+[project.optional-dependencies]
+daemon = []
+client = []
+mcp = []
+telemetry = []
+all = []
 
 [project.scripts]
 grove = "grove.cli:app"
@@ -118,6 +121,19 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/grove"]
+# The prebuilt web dashboard (`make webapp-bundle`) is gitignored build output,
+# which hatch skips by default; this puts it back into the wheel. Absent from a
+# plain checkout, so a wheel built without the bundle step simply has no
+# webapp and `grove web` says how to get one.
+artifacts = ["src/grove/_webapp/**"]
+
+# The sdist is what `pip install` falls back to when no wheel fits, so it needs
+# the package and nothing else. Hatch's default is the whole tracked tree —
+# docs videos, screenshots, the webapp sources — measured at 152 MB, past
+# PyPI's 100 MB per-file limit, so the upload itself would be refused.
+[tool.hatch.build.targets.sdist]
+only-include = ["src/grove", "README.md", "LICENSE", "pyproject.toml"]
+exclude = ["src/grove/_webapp"]
 
 [dependency-groups]
 dev = [
@@ -127,9 +143,8 @@ dev = [
     "mypy>=1.11,<2.0",
     "import-linter>=2.0",
     "textual-dev>=1.5",
-    # Out-of-process surfaces — pinned in dev so the test matrix runs
-    # without manually installing extras. Production users opt in via
-    # `pip install grove[daemon|client|all]`.
+    # Out-of-process surfaces — duplicated from the base install so the dev
+    # group alone stays a complete test environment.
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
     "httpx>=0.27,<1",
@@ -143,6 +158,9 @@ dev = [
     # under `docs` is what forced the gates to sync that group at all. Never a
     # runtime dependency: nothing under src/grove imports Pillow.
     "Pillow>=11,<12",
+    # tests/test_ci_components.py parses the workflow files. Declared rather
+    # than inherited, because it only arrived through uvicorn[standard].
+    "pyyaml>=6,<7",
 ]
 docs = [
     "mike",

@@ -1,4 +1,4 @@
-import type { MailboxContact } from "@/lib/grove/api";
+import type { MailboxContact, SessionControlView } from "@/lib/grove/api";
 
 /**
  * What the workspace composer's `/` and `@` triggers offer, as pure data.
@@ -13,22 +13,28 @@ import type { MailboxContact } from "@/lib/grove/api";
 /**
  * A slash command the composer knows how to deliver.
  *
- * A closed set on purpose: the agent's own command list is already one click
- * away on the Controls tab, and the composer carries only the commands that
- * change the session the reader is typing into. `compact` is the one today —
- * the engine gives a native session its own `compact` verb rather than typing
- * `/compact` as prose (`WorkspaceManager.invoke_control`).
+ * Deliberately NOT the agent's whole command list, which is one click away on
+ * the Controls tab: the composer carries only commands that change the session
+ * the reader is typing into — `compact`, plus the Grove commands this host's
+ * config declares (`/grove:<name>`), which the engine runs itself.
  */
 export interface ComposerCommand {
   /** The control name `POST /controls/invoke` takes, without the slash. */
-  readonly id: "compact";
+  readonly id: string;
   readonly description: string;
 }
 
-/** Every command the `/` menu lists, in display order. */
+/** The built-in `/` commands, listed before configured Grove commands. */
 export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
   { id: "compact", description: "Summarize the conversation to free context" },
 ];
+
+/** Config-declared Grove commands, in the control route's display order. */
+export function grovePaletteCommands(controls: readonly SessionControlView[]): readonly ComposerCommand[] {
+  return controls
+    .filter((control) => control.scope === "grove")
+    .map((control) => ({ id: control.name, description: control.detail ?? "Grove command" }));
+}
 
 /** One `@` mention: a live peer agent, addressed exactly as the mailbox names it. */
 export interface ComposerMention {

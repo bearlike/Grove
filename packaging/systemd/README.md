@@ -5,7 +5,7 @@ User-scope (`systemd --user`) unit files, installed via the repo `Makefile`.
 | Unit | Default | Purpose |
 |---|---|---|
 | `grove-daemon.service` | always installed by `make systemd` | runs `grove daemon serve` on `127.0.0.1:7421` |
-| `grove-webapp.service` | **opt-in** via `WITH_WEBAPP=1 make systemd` | runs `npm run start` for the assistant-ui front end, binds `0.0.0.0:3000` for LAN access |
+| `grove-webapp.service` | **opt-in** via `WITH_WEBAPP=1 make systemd` | runs `grove web`, the prebuilt dashboard on Grove's bundled Node, bound to `0.0.0.0:3000` for LAN access |
 | `grove-mcp.service` | **opt-in** via `WITH_MCP=1 make systemd` | runs `grove-mcp` over Streamable HTTP on `127.0.0.1:7431` for long-lived MCP clients |
 
 ## Quick reference
@@ -46,13 +46,11 @@ Anything baked into the unit file is exposed as a Make variable:
 
 | Variable | Default | Where it lands |
 |---|---|---|
-| `GROVE_BIN` | `command -v grove` | daemon ExecStart |
+| `GROVE_BIN` | `command -v grove` | daemon and webapp ExecStart |
 | `DAEMON_PATH` | invoking shell's `$PATH` | daemon `Environment=PATH=` |
 | `DAEMON_HOST` | `127.0.0.1` | daemon `--host` |
-| `DAEMON_PORT` | `7421` | daemon `--port`, webapp `GROVE_DAEMON_URL` |
-| `WEBAPP_DIR` | `<repo>/webapp` | webapp `WorkingDirectory` |
-| `WEBAPP_NPM_BIN` | `NPM_BIN` (`command -v npm`) | webapp ExecStart — needs a Node >= 22 npm (Next 16) |
-| `WEBAPP_HOST` | `0.0.0.0` | webapp `--hostname` (LAN reachable) |
+| `DAEMON_PORT` | `7421` | daemon `--port`, webapp `--daemon-url` |
+| `WEBAPP_HOST` | `0.0.0.0` | webapp `--host` (LAN reachable) |
 | `WEBAPP_PORT` | `3000` | webapp `--port` |
 | `MCP_BIN` | `command -v grove-mcp` | MCP ExecStart |
 | `MCP_HOST` | `127.0.0.1` | MCP `--host` (loopback only) |
@@ -80,14 +78,13 @@ tmux new-session -d -s survive && \
 
 ## First-time webapp setup
 
-The webapp service runs in production mode (`npm run start`), which needs a build artifact:
+The webapp unit runs `grove web`, which serves the dashboard that ships in the package on the Node that ships with it. Nothing needs building:
 
 ```bash
-make webapp-build       # one-shot: npm ci + npm run build
-WITH_WEBAPP=1 make systemd-enable
+WITH_WEBAPP=1 make systemd-enable   # refuses first if `grove web --check` fails
 ```
 
-Re-run `make webapp-build` after pulling webapp changes; the service does not rebuild on its own.
+After `uv tool upgrade grove-factory`, restart the unit. From a checkout, `./reinstall.sh` rebuilds the bundle and restarts it, and migrates a unit written for the older `npm run start` layout, restoring it if the migrated one does not serve.
 
 ## First-time MCP setup
 
@@ -123,5 +120,5 @@ Lingering is host-level, set once, independent of these unit files.
 - **MCP opt-in, and loopback by default.** Most users get MCP the stdio way, spawned per connection with no unit involved. When you do run it as a service, `MCP_HOST` defaults to `127.0.0.1` — deliberately unlike `WEBAPP_HOST=0.0.0.0`. The webapp needs a human at a browser to do anything; the MCP surface is a machine-callable API that can create, kill, and message workspaces unattended, so exposing it off-host is a higher-stakes, explicit operator decision, taken behind a tunnel, VPN, or TLS-terminating proxy.
 - **No PATH bake on the MCP unit.** The daemon unit needs `Environment=PATH=` because it runs user-authored init scripts (issue #9). The MCP server only serves HTTP and proxies to the daemon — it shells out to nothing, so it inherits systemd's minimal environment without trouble.
 - **`Wants=` not `Requires=`.** Daemon failure doesn't tear the webapp down. The webapp's status bar already surfaces "daemon unreachable" — failing closed loses signal without buying anything.
-- **Production `npm run start`, not dev.** Dev mode runs hot-reload + telemetry overhead. For a host service you want the static-route, prebuilt bundle.
-- **PATH baked into the units.** systemd-user inherits a minimal environment; the `Environment=PATH=...` lines are what make user-managed toolchains resolvable. The webapp unit needs `node`/`npm`; the daemon unit needs the *whole* dev PATH because it runs user-authored init scripts (pyenv/nvm/asdf shims and all — a bare PATH made `uv`/`npm` resolve to stale system binaries and rolled workspace creates back, issue #9). The daemon PATH is a snapshot of the shell that ran `make systemd`: re-run `make systemd` after toolchain moves (e.g. an nvm default-version bump), or pin one explicitly with `DAEMON_PATH=... make systemd`.
+- **`grove web`, not `npm run start` from a checkout.** The unit names no npm, no Node and no working directory, so a toolchain move or an nvm default bump cannot break it, and it always serves the installed version. `grove web` execs the real Node binary, so systemd's stop signal reaches Node, not a wrapper.
+- **PATH baked into the units.** systemd-user inherits a minimal environment; the `Environment=PATH=...` line is what makes user-managed toolchains resolvable. Only the daemon unit carries one; it needs the *whole* dev PATH because it runs user-authored init scripts (pyenv/nvm/asdf shims and all — a bare PATH made `uv`/`npm` resolve to stale system binaries and rolled workspace creates back, issue #9). The daemon PATH is a snapshot of the shell that ran `make systemd`: re-run `make systemd` after toolchain moves (e.g. an nvm default-version bump), or pin one explicitly with `DAEMON_PATH=... make systemd`.

@@ -1,21 +1,33 @@
 name: Webapp e2e (reusable)
 
-# Playwright, SHARDED from the outset.
+# ONE Playwright shard per call. Callers fan out by calling this once per shard
+# as separate jobs (ci.yml does four), because that is the only form that runs
+# in parallel here: on this Gitea (1.26) a matrix inside a reusable workflow is
+# one job, and the runner executes its legs one after another in one container.
+# Measured on run 7912 — four "parallel" shards ran back to back for 36 minutes.
+# `max-parallel` is only enforced server-side from Gitea 1.27.
 #
-# Sharding is not an optimization here, it is what makes the job viable: the
-# suite was measured at ~1.0 hour on a developer host and the act_runner config
-# sets `timeout: 1h`, so an unsharded run would be killed at the ceiling and
-# report as a failure rather than a timeout. Playwright's own `--shard=i/n`
-# splits by spec file across parallel legs.
+# Sharding stays mandatory: the whole suite measures ~30-60 minutes serially and
+# the runner kills any job at 1 hour, which would report as a failure rather
+# than a timeout. Playwright's `--shard=i/n` splits by spec file.
 #
-# This is also the single biggest host-load win available: before this file,
-# e2e had no CI home at all and every run competed with the user's own work.
+# IF SHARDS FAIL TOGETHER, READ WHICH TESTS BEFORE HOW MANY. On a 2-slot runner
+# with 2.5 GB jobs, four concurrent shards starved each other: 38 failed / 3
+# passed, every failure a 90s `locator.click` timeout and not one assertion. A
+# uniform timeout on every click is a machine that cannot paint. The current
+# runner has 8 slots of 4 GB; if that signature returns, run fewer shards at
+# once (dispatch them individually) rather than reading it as 49 broken specs.
 
 on:
   workflow_call:
     inputs:
+      shard:
+        description: "Which shard to run (1-based)"
+        type: number
+        required: false
+        default: 1
       shards:
-        description: "Number of parallel shards"
+        description: "Total number of shards the suite is split into"
         type: number
         required: false
         default: 4
@@ -31,46 +43,11 @@ on:
         default: ""
 
 jobs:
-  # Playwright wants `--shard=i/n` with a literal i, and a matrix cannot be
-  # built from an arithmetic range in an expression — so materialize the index
-  # list as JSON here and fan out over it.
-  plan:
-    name: Plan shards
-    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
-    outputs:
-      shards: ${{ steps.plan.outputs.shards }}
-    steps:
-      - id: plan
-        run: |
-          set -euo pipefail
-          n=${{ inputs.shards }}
-          echo "shards=$(seq -s, 1 "$n" | sed 's/^/[/;s/$/]/')" >> "$GITHUB_OUTPUT"
-
   e2e:
-    name: playwright ${{ matrix.shard }}/${{ inputs.shards }}
-    needs: plan
+    name: playwright ${{ inputs.shard }}/${{ inputs.shards }}
     runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
-    strategy:
-      # A failure in shard 2 says nothing about shard 3, and cancelling the rest
-      # would hide how broad a regression is.
-      fail-fast: false
-      # ONE SHARD AT A TIME, because sharding here buys parallelism the runner
-      # cannot supply. Each shard is an `npm ci`, a Chromium install and a Next
-      # server inside a job container capped at `--memory=2560m` (and `/tmp` is
-      # RAM-backed), on a runner whose own `capacity` is 2 — so four at once
-      # starved each other and every spec died on the same 90s `locator.click`
-      # timeout: 38 failed / 3 passed, then 49 failed / 2 passed, with zero
-      # assertion failures among them. A uniform timeout on every click is a
-      # machine that cannot paint, not 49 broken specs.
-      #
-      # Serial shards keep the same total work and the same per-shard verdicts;
-      # they only stop the shards competing. Same argument as chaining the
-      # uv-using gates and chaining e2e behind the webapp gate — this runner
-      # serializes one way or another, and doing it explicitly is the only way
-      # the result describes the code.
-      max-parallel: 1
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    # A shard measures 8-10 minutes including setup.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,8 +55,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: webapp/package-lock.json
       - name: Install
         working-directory: webapp
         run: npm ci
@@ -94,7 +69,7 @@ jobs:
           E2E_GREP: ${{ inputs.grep }}
         run: |
           set -euo pipefail
-          args=(--shard=${{ matrix.shard }}/${{ inputs.shards }})
+          args=(--shard=${{ inputs.shard }}/${{ inputs.shards }})
           if [ -n "$E2E_GREP" ]; then args+=(--grep "$E2E_GREP"); fi
           npx playwright test "${args[@]}"
       # Traces are retained on failure by playwright.config.ts; without this
@@ -116,7 +91,7 @@ jobs:
         working-directory: webapp
         run: |
           set -uo pipefail
-          echo "── failed specs (shard ${{ matrix.shard }}/${{ inputs.shards }}) ──"
+          echo "── failed specs (shard ${{ inputs.shard }}/${{ inputs.shards }}) ──"
           # The JSON report is not enabled, so read the trace dirs Playwright
           # writes per failing test; each directory name is the spec + title.
           ls -1 test-results 2>/dev/null | head -40 || true

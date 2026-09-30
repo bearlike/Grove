@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
 from uuid import uuid4
+
+from grove.core.agents.model import NativeOperation
+
+#: The facts whose ``None`` is a statement, not an absence: the host sidecar
+#: clears them on it (`hook._CLEARABLE_FACTS` reads the same keys back).
+_CLEARED_BY_NONE: Final = frozenset({"context_state", "operation", "compact_error"})
 
 #: One protocol frame as it crosses the owner's stdio, in either direction.
 #: ``"send"`` is a frame the owner wrote to the provider, ``"recv"`` one it
@@ -70,6 +77,21 @@ class NativeOwner(Protocol):
         """Invoke one provider-native named command, or refuse when unsupported."""
         ...
 
+    async def run_command(self, command: str) -> bool:
+        """Run one slash command and return once the provider says it FINISHED.
+
+        ``True`` only when the provider reported the command completed;
+        ``False`` when it was cancelled, the provider cannot report completion,
+        or the transport is gone. A Grove command waits on this between steps,
+        so a provider that cannot answer must refuse rather than guess.
+        """
+        ...
+
+    @property
+    def current_model(self) -> str | None:
+        """The model the session reports it is on, in the ``--model`` vocabulary."""
+        ...
+
     async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool: ...
 
     async def wait_closed(self) -> None:
@@ -125,9 +147,15 @@ class AskRecorder:
         cost never blanks an exit code the previous ``item/completed`` set.
         ``context_state`` is also retained when it explicitly clears a prior
         context — absence would mean an older producer that must invalidate it.
+        ``operation`` and ``compact_error`` are set-or-clear rather than
+        accumulated, so an explicit ``None`` for them is kept as a clear.
         """
         self._drop(
-            {k: v for k, v in stated.items() if v is not None or k == "context_state"},
+            {
+                k: v.to_json() if isinstance(v, NativeOperation) else v
+                for k, v in stated.items()
+                if v is not None or k in _CLEARED_BY_NONE
+            },
             suffix=self.FACTS_SUFFIX,
         )
 
@@ -138,7 +166,12 @@ class AskRecorder:
         payload = {"session_id": self._session_id, key: body}
         try:
             self._spool_dir.mkdir(parents=True, exist_ok=True)
-            target = self._spool_dir / f"{uuid4().hex}{suffix or self.SUFFIX}"
+            # The drain folds in (mtime, name) order, and mtimes COLLIDE: six
+            # drops written back to back measured two distinct mtimes. A random
+            # name then orders a step's start and its end by chance, and folding
+            # them reversed leaves the step standing forever. A time-ordered
+            # prefix makes the tie-break the write order.
+            target = self._spool_dir / f"{time.time_ns():020d}-{uuid4().hex}{suffix or self.SUFFIX}"
             tmp = target.with_suffix(".tmp")
             tmp.write_text(json.dumps(payload), encoding="utf-8")
             tmp.replace(target)

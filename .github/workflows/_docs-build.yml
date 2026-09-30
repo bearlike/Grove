@@ -1,0 +1,38 @@
+name: Docs build (reusable)
+
+# Build the site with `--strict` and run the docs tests, publishing nothing. The
+# PR-time half of _docs-deploy.yml, which builds AND publishes on a push to main — so a
+# broken link or a missing nav entry is caught before merge, not after deploy.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Ref to check out; empty uses the triggering ref"
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: mkdocs build --strict
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      # `dev` only through the frozen sync: the docs theme must be re-resolved
+      # BEFORE it is installed, for the reason _docs-deploy.yml states — its moving
+      # release tag carries exactly one wheel, so a frozen sync of a stale lock
+      # entry 404s. Refreshing only that package keeps everything else pinned.
+      - uses: ./.github/actions/setup-python-env
+      - name: Refresh the docs theme and install it
+        run: |
+          uv lock --upgrade-package mkdocs-shadcn-mewbo
+          uv sync --group dev --group docs
+      - name: docs tests
+        run: uv run pytest tests/docs -q
+      - name: Build
+        run: make docs-build

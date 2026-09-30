@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 import subprocess
 from collections.abc import AsyncIterator, Iterator
@@ -59,6 +60,13 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_repo
     config_home.mkdir()
     monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    # The client mints its bearer into the auth store IN this process and the
+    # daemon validates it in the child, so both must read one file. The autouse
+    # sandbox moves the in-process path elsewhere; the child only ever sees
+    # XDG_CONFIG_HOME, so point this side back at the file the child resolves.
+    monkeypatch.setattr(
+        "grove.core.paths.user_auth_path", lambda: config_home / "grove" / "auth.json"
+    )
     # Pin this file's sessions to their OWN tmux server. A tmux server is
     # started once and then outlives every client, keeping the environment of
     # whichever process happened to start it -- so a server born here would
@@ -127,7 +135,7 @@ def isolated_grove_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tmp_repo
 
 
 @pytest.fixture
-def cleanup_tmux() -> Iterator[None]:
+def cleanup_tmux(isolated_grove_env: Path) -> Iterator[None]:
     """Leave no session, and no SERVER, behind -- even on failure.
 
     Sessions go through `grove.core.tmux.kill_session` rather than bare
@@ -143,8 +151,28 @@ def cleanup_tmux() -> Iterator[None]:
     control-mode clients forked (a `tpm` plugin run, a prompt daemon). With a
     per-test socket there is nothing else on this server to protect, so the
     server is ours to end.
+
+    ONLY if it is provably ours. `kill-server` addresses whatever socket tmux
+    resolves, and `$TMUX` outranks `TMUX_TMPDIR`, so inside a developer's pane
+    it resolved the REAL server and killed every session on the host
+    (2026-09-23). The autouse `_no_inherited_tmux_client` clears `$TMUX`. This
+    guard asks tmux which socket it would use and refuses unless that socket
+    lives under this test's `TMUX_TMPDIR`, so a future fixture-ordering change
+    fails the test instead of the host.
     """
+    del isolated_grove_env  # ordering only: its TMUX_TMPDIR must be set first
+    tmpdir = os.environ.get("TMUX_TMPDIR", "")
+    assert tmpdir, "cleanup_tmux requires isolated_grove_env's private TMUX_TMPDIR"
+    assert "TMUX" not in os.environ, "an inherited $TMUX outranks TMUX_TMPDIR"
     yield
+    socket = subprocess.run(
+        ["tmux", "display-message", "-p", "#{socket_path}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if socket and not Path(socket).resolve().is_relative_to(Path(tmpdir).resolve()):
+        pytest.fail(f"refusing to clean up tmux server {socket!r}: not this test's private socket")
     out = subprocess.run(
         ["tmux", "list-sessions", "-F", "#{session_name}"],
         capture_output=True,

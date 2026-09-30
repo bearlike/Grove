@@ -272,9 +272,11 @@ const RAIL_PILL = "h-5 gap-1 overflow-visible px-1.5 py-0 [&>svg]:size-3";
 
 const ROW_RESTING = "border-surface-edge hover:border-edge-control";
 const ROW_SELECTED = "border-edge-control";
+// Fills live on `.rail-row` in globals.css as one interaction ladder (rest →
+// hover → selected), never keyed on what a row reports; the border steps with
+// it. The link stays transparent so it cannot paint over the card's fill.
 const ROW_STATES = cn(
   "bg-transparent",
-  "hover:bg-surface-base dark:hover:bg-surface-base",
   "active:bg-accent dark:active:bg-accent",
   "focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
 );
@@ -324,8 +326,8 @@ function WorkspaceRow({
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <CardShell
           className={cn(
-            "group relative min-w-0 border has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring",
-            active ? ROW_SELECTED : cn(ROW_RESTING, "opacity-95 hover:opacity-100 focus-within:opacity-100"),
+            "rail-row group relative min-w-0 border has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring",
+            active ? ROW_SELECTED : ROW_RESTING,
           )}
           data-testid="fleet-row"
           data-workspace-id={state.id}
@@ -358,17 +360,13 @@ function WorkspaceRow({
                       `right-1.5` is the card's last 34px, and the link's own
                       `p-3` already covers ~10 of those. Measured, not computed
                       from the class names. */}
+                  {/* The title line holds the name and nothing else, so the
+                      whole width left of the options corner is the name's —
+                      a long title loops through it rather than truncating. */}
                   <header className="flex min-h-[28px] min-w-0 items-center gap-2 pr-9 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:pr-11">
                     <LoopingText className="min-w-0 flex-1 text-base font-medium text-content-primary">
                       {state.title}
                     </LoopingText>
-                    {/* LAST on the title line: the one mark that says something
-                        is happening RIGHT NOW, which is why it moves and the
-                        pills below do not. Rendered only while working — an
-                        absent claim takes no space (design system §7). */}
-                    {agentState === "working" ? (
-                      <WorkingMark className="shrink-0" />
-                    ) : null}
                     {!grouped ? <span className="sr-only">Project: {row.repoName}</span> : null}
                   </header>
                   <SessionMetadata
@@ -412,6 +410,13 @@ function WorkspaceRow({
                             <span>{phaseText}</span>
                           </Badge>
                         ) : null}
+                        {/* LAST in the context row: the claims say what the
+                            workspace IS, the mark says something is happening
+                            RIGHT NOW, so it follows them. Rendered only while
+                            working — an absent claim takes no space (§7). */}
+                        {agentState === "working" ? (
+                          <WorkingMark className="shrink-0" />
+                        ) : null}
                       </div>
                     }
                   />
@@ -436,20 +441,23 @@ function WorkspaceRow({
             <span
               aria-hidden
               data-testid="fleet-row-marker"
-              className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-primary"
+              className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-primary"
             />
           ) : phase?.phase === "handoff" && !phase.blocked ? (
             <span
               aria-hidden
               data-testid="fleet-row-done-edge"
-              className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-success"
+              className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-success"
             />
           ) : null}
+          {/* Visible at rest, in the quiet tier: an empty title corner that
+              only fills on hover read as a card missing a piece, and touch
+              already had to show it. */}
           <DropdownMenuTrigger asChild>
             <TooltipIconButton
               tooltip="Workspace options"
               aria-label="Workspace options"
-              className="invisible absolute top-2.5 right-1.5 min-h-[28px] min-w-[28px] [@media(pointer:coarse)]:visible [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11 group-focus-within:visible group-hover:visible"
+              className="absolute top-2.5 right-1.5 min-h-[28px] min-w-[28px] text-content-tertiary hover:text-content-primary [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11"
               onClick={stopMenuButtonNavigation}
               onPointerDown={stopMenuButtonNavigation}
             >

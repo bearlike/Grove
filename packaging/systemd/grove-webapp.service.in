@@ -9,13 +9,10 @@ After=grove-daemon.service network.target
 
 [Service]
 Type=simple
-WorkingDirectory=@WEBAPP_DIR@
-# Production mode: requires `npm run build` to have happened. The Makefile
-# target `make webapp-build` does this; CI does it too.
-ExecStart=@NPM_BIN@ run start -- --hostname @WEBAPP_HOST@ --port @WEBAPP_PORT@
-Environment=NODE_ENV=production
-Environment=GROVE_DAEMON_URL=@DAEMON_URL@
-Environment=PATH=@NODE_BIN_DIR@:/usr/local/bin:/usr/bin:/bin
+# `grove web` serves the prebuilt dashboard that ships in the package, on the
+# Node that ships with it, so this unit names no npm, no Node and no checkout.
+# An upgrade is `uv tool upgrade grove-factory` plus a restart of this unit.
+ExecStart=@GROVE_BIN@ web --host @WEBAPP_HOST@ --port @WEBAPP_PORT@ --daemon-url @DAEMON_URL@
 Restart=on-failure
 RestartSec=2
 StandardOutput=journal

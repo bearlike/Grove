@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -52,6 +53,39 @@ for raw in sys.stdin:
     finally:
         await owner.close()
     assert process is not None and process.returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_session_with_no_first_prompt_starts_on_the_pinned_id(
+    tmp_path: Path,
+) -> None:
+    """A create with no task must not wait for a `system/init` that never comes.
+
+    `claude -p` stays silent until its first user turn, so a fresh
+    `--session-id` launch with nothing to say timed out at start and the pane
+    showed `Grove mailbox worker stopped: TimeoutError`. The child here answers
+    ONLY the initialize handshake, exactly like the real CLI before a turn.
+    """
+    child = r"""
+import json, sys
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame['type'] == 'control_request':
+        assert frame['request']['subtype'] in {'initialize', 'get_context_usage'}
+        print(json.dumps({'type':'control_response','response':{
+            'subtype':'success','request_id':frame['request_id'],'response':{}}}), flush=True)
+    else:
+        print(json.dumps({'type':'user','uuid':frame['uuid']}), flush=True)
+"""
+    sid = "99887766-1122-4344-8566-112233445566"
+    owner = ClaudeNativeOwner(
+        (*_command(child), "--session-id", sid), tmp_path, timeout_seconds=0.5
+    )
+    try:
+        assert await owner.start("") == sid
+        assert (await owner.send("mbx_" + "b" * 32, "the real task")).stage == "delivered"
+    finally:
+        await owner.close()
 
 
 @pytest.mark.asyncio
@@ -716,3 +750,233 @@ for raw in sys.stdin:
     assert ("recv", "system") in traced
     assert ("recv", "something_new") in traced
     assert traced.count(("send", "user")) == 2  # the initial prompt and the send
+
+
+def _drops(spool: Path) -> list[dict[str, Any]]:
+    """Every facts drop the owner wrote, in the order it wrote them."""
+    paths = sorted(spool.glob("*.facts.json"))
+    return [json.loads(p.read_text())["facts"] for p in paths]
+
+
+@pytest.mark.asyncio
+async def test_a_compaction_is_published_from_status_frames_and_closed_by_its_result(
+    tmp_path: Path,
+) -> None:
+    """The stream's own status channel is the only live witness of a compaction.
+
+    The sequence is the one a real manual compaction produced on 2.1.280:
+    `status: compacting` repeated as a 30 s heartbeat, then `status: null`
+    carrying `compact_result`. The heartbeat must NOT restart the step's clock,
+    and the closing frame must clear it — a clearing drop that the host could
+    mistake for "unstated" would pin "Compacting" forever.
+    """
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") != "user":
+        continue
+    for status in ("compacting", "compacting"):
+        print(json.dumps({"type": "system", "subtype": "status", "status": status}), flush=True)
+    print(json.dumps({"type": "system", "subtype": "status", "status": None,
+        "compact_result": "success"}), flush=True)
+"""
+    spool = tmp_path / "spool"
+    asks = AskRecorder(spool)
+    asks.bind("s")
+    owner = ClaudeNativeOwner(_command(child), Path.cwd(), timeout_seconds=2, asks=asks)
+    try:
+        await owner.start("initial")
+        for _ in range(100):
+            if len(_drops(spool)) >= 2:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await owner.close()
+    opened, closed = _drops(spool)
+    assert opened["operation"]["kind"] == "compacting"
+    assert opened["compact_error"] is None  # a new compaction clears the last failure
+    assert closed == {"operation": None}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_compaction_publishes_the_providers_reason(tmp_path: Path) -> None:
+    """Measured 2.1.280: a failing `/compact` closes with `compact_result: failed`
+    and the provider's sentence; that sentence is the only record of the failure."""
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+for raw in sys.stdin:
+    if json.loads(raw).get("type") != "user":
+        continue
+    print(json.dumps({"type": "system", "subtype": "status", "status": "compacting"}), flush=True)
+    print(json.dumps({"type": "system", "subtype": "status", "status": None,
+        "compact_result": "failed",
+        "compact_error": "Error during compaction: summarization produced empty response"}),
+        flush=True)
+"""
+    spool = tmp_path / "spool"
+    asks = AskRecorder(spool)
+    asks.bind("s")
+    owner = ClaudeNativeOwner(_command(child), Path.cwd(), timeout_seconds=2, asks=asks)
+    try:
+        await owner.start("initial")
+        for _ in range(100):
+            if len(_drops(spool)) >= 2:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await owner.close()
+    assert _drops(spool)[-1] == {
+        "operation": None,
+        "compact_error": "Error during compaction: summarization produced empty response",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_api_retry_publishes_a_countdown_and_the_next_reply_clears_it(
+    tmp_path: Path,
+) -> None:
+    """`api_retry` never reaches the transcript; the owner states the attempt and
+    an absolute retry instant, and the root reply that follows ends the wait."""
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+for raw in sys.stdin:
+    if json.loads(raw).get("type") != "user":
+        continue
+    print(json.dumps({"type": "system", "subtype": "api_retry", "attempt": 2,
+        "max_retries": 10, "retry_delay_ms": 8000, "error_status": 529,
+        "error": "overloaded"}), flush=True)
+    print(json.dumps({"type": "assistant", "parent_tool_use_id": None,
+        "message": {"content": [{"type": "text", "text": "back"}]}}), flush=True)
+"""
+    spool = tmp_path / "spool"
+    asks = AskRecorder(spool)
+    asks.bind("s")
+    owner = ClaudeNativeOwner(_command(child), Path.cwd(), timeout_seconds=2, asks=asks)
+    try:
+        await owner.start("initial")
+        for _ in range(100):
+            if any(d.get("operation") is None and "operation" in d for d in _drops(spool)):
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await owner.close()
+    operations = [d["operation"] for d in _drops(spool) if "operation" in d]
+    retry = operations[0]
+    assert retry["kind"] == "retrying"
+    assert (retry["attempt"], retry["max_attempts"]) == (2, 10)
+    assert retry["detail"] == "overloaded (529)"
+    delay = datetime.fromisoformat(retry["retry_at"]) - datetime.fromisoformat(retry["started_at"])
+    assert delay.total_seconds() == pytest.approx(8.0)
+    assert operations[-1] is None
+
+
+@pytest.mark.asyncio
+async def test_compact_is_sent_as_a_slash_command_user_turn(tmp_path: Path) -> None:
+    """There is no compaction control_request; `/compact` as stream-json input
+    runs natively (measured 2.1.280: `status: compacting` follows at once), so
+    `compact()` must write exactly that — not refuse, which left every native
+    Claude `/compact` a silent no-op behind a "delivered" toast."""
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") == "user" and frame["message"]["content"] == "/compact":
+        print(json.dumps({"type": "user", "uuid": frame["uuid"], "echo": "compact"}), flush=True)
+"""
+    seen: list[dict[str, Any]] = []
+    owner = ClaudeNativeOwner(
+        _command(child),
+        Path.cwd(),
+        timeout_seconds=2,
+        trace=lambda direction, frame: seen.append(dict(frame)) if direction == "recv" else None,
+    )
+    try:
+        await owner.start("initial")
+        assert await owner.compact() is True
+        for _ in range(100):
+            if any(f.get("echo") == "compact" for f in seen):
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await owner.close()
+    assert any(f.get("echo") == "compact" for f in seen)
+
+
+# ─── Grove commands: one slash command, awaited on its own lifecycle ────────
+
+
+_LIFECYCLE_CHILD = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s",
+                  "model": "anthropic-opus-5-5[1m]"}), flush=True)
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") == "control_request":
+        print(json.dumps({"type": "control_response", "response": {
+            "subtype": "success", "request_id": frame["request_id"]}}), flush=True)
+        continue
+    if frame.get("type") != "user" or "uuid" not in frame:
+        continue
+    uid, text = frame["uuid"], frame["message"]["content"]
+    # An unrelated input's end first: completion is matched by uuid, never order.
+    print(json.dumps({"type": "command_lifecycle", "command_uuid": "other",
+                      "state": "completed"}), flush=True)
+    print(json.dumps({"type": "command_lifecycle", "command_uuid": uid,
+                      "state": "started"}), flush=True)
+    if text.startswith("/model "):
+        print(json.dumps({"type": "system", "subtype": "init", "session_id": "s",
+                          "model": text.split(" ", 1)[1]}), flush=True)
+    end = "cancelled" if text == "/bad" else "completed"
+    print(json.dumps({"type": "command_lifecycle", "command_uuid": uid,
+                      "state": end}), flush=True)
+"""
+
+
+@pytest.mark.asyncio
+async def test_run_command_returns_on_its_own_lifecycle_end() -> None:
+    """`run_command` resolves on the `command_lifecycle` terminal state carrying
+    ITS input uuid (measured 2.1.283): `completed` is True, `cancelled` is False,
+    and another input's end does not release it."""
+    owner = ClaudeNativeOwner(_command(_LIFECYCLE_CHILD), Path.cwd(), timeout_seconds=2)
+    try:
+        await owner.start("initial")
+        assert await _eventually(owner.run_command("/compact"), timeout=3) is True
+        assert await _eventually(owner.run_command("/bad"), timeout=3) is False
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_current_model_follows_init_and_an_acknowledged_set_model() -> None:
+    """The model is read in the switch vocabulary: `system/init.model`, and the id
+    a `set_model` just acknowledged (init re-reports only on the next turn)."""
+    owner = ClaudeNativeOwner(_command(_LIFECYCLE_CHILD), Path.cwd(), timeout_seconds=2)
+    try:
+        await owner.start("initial")
+        assert owner.current_model == "anthropic-opus-5-5[1m]"
+        assert await owner.set_model("anthropic-gemini-3.8-flash") is True
+        assert owner.current_model == "anthropic-gemini-3.8-flash"
+        assert await _eventually(owner.run_command("/model default"), timeout=3) is True
+        assert owner.current_model == "default"
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_run_command_on_a_dead_owner_is_false_not_a_hang() -> None:
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+sys.stdin.readline()
+"""
+    owner = ClaudeNativeOwner(_command(child), Path.cwd(), timeout_seconds=1)
+    try:
+        await owner.start("initial")
+        assert await _eventually(owner.run_command("/compact"), timeout=3) is False
+    finally:
+        await owner.close()

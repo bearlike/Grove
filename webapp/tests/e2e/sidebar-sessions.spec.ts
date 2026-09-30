@@ -309,13 +309,29 @@ test.describe("the native sidebar row keeps identity, context and figures distin
     expect(first.contextIcons[0]).toBeCloseTo(dp(14), 0);
     expect(first.contextIcons[1]).toBeCloseTo(dp(12), 0);
 
-    // A measured-zero workspace still has its created age but no fictional
-    // change figures.
+    // A measured-zero workspace keeps its three zeros, so every card in the
+    // column has one anatomy (#876) — a zero is a measurement, not an absence.
     const clean = await geometry(page, ROWS[1].id);
-    expect(clean.dirty).toBeNull();
-    expect(clean.added).toBeNull();
-    expect(clean.removed).toBeNull();
+    expect(clean.dirty).not.toBeNull();
+    expect(clean.added).not.toBeNull();
+    expect(clean.removed).not.toBeNull();
     expect(clean.created).not.toBeNull();
+    expect(clean.ledgerLine!.y).toBeCloseTo(first.ledgerLine!.y, 0);
+
+    // The divider spans the text column only — it starts at the title's left
+    // edge, right of the tile — and sits between context and ledger.
+    const divider = await page.evaluate((workspaceId) => {
+      const row = document.querySelector<HTMLElement>(`[data-workspace-id="${workspaceId}"]`)!;
+      const box = row.getBoundingClientRect();
+      const rule = row.querySelector<HTMLElement>('[data-testid="rail-divider"]')!.getBoundingClientRect();
+      const bars = [...row.querySelectorAll<HTMLElement>('[data-testid="rail-ledger"] [data-orientation="vertical"]')];
+      return { x: rule.x - box.x, y: rule.y - box.y, height: rule.height, bars: bars.length };
+    }, ROWS[0].id);
+    expect(divider.x).toBeCloseTo(first.header!.x, 0);
+    expect(divider.height).toBe(1);
+    expect(divider.y).toBeGreaterThan(first.context!.y + first.context!.height - 1);
+    expect(divider.y).toBeLessThan(first.ledgerLine!.y + 1);
+    expect(divider.bars).toBe(2);
   });
 
   test("keeps the title's left edge fixed when context marks are absent", async ({ page }) => {
@@ -346,9 +362,9 @@ test.describe("the native sidebar row keeps identity, context and figures distin
     await page.waitForTimeout(600);
 
     const cells = await measurements(page);
-    // Three changed rows per populated workspace plus each workspace's age:
+    // Three figures plus the age on every workspace, clean ones included:
     // assert the census so an empty selector cannot report a false clean pass.
-    expect(cells).toHaveLength(9);
+    expect(cells).toHaveLength(12);
     for (const cell of cells) {
       expect(cell.clipped, `${cell.id} "${cell.text}" is clipped`).toBe(false);
       expect(cell.loops, `${cell.id} "${cell.text}" is scrolling`).toBe(false);
@@ -633,6 +649,45 @@ test.describe("overflowing sidebar text loops, and a still frame cannot prove it
 });
 
 test.describe("the row keeps its states, menu and destination", () => {
+  test("steps the card fill rest → hover → selected, lighter each step, in both themes", async ({ page }) => {
+    await useFleet(page, ROWS);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const theme of ["dark", "light"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.goto(`/w/${ROWS[0].id}`);
+      const selected = page.locator(`[data-workspace-id="${ROWS[0].id}"]`);
+      const resting = page.locator(`[data-workspace-id="${ROWS[1].id}"]`);
+      await expect(selected).toHaveAttribute("data-selected", "true");
+      await expect(resting).toHaveAttribute("data-selected", "false");
+
+      // Luminance through the browser's own colour maths: paint the computed
+      // fill onto a canvas and read the pixel back — the theme resolves to
+      // oklab()/lab(), which a string parse would get confidently wrong.
+      const lum = (locator: Locator) =>
+        locator.evaluate((el) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = 1;
+          const ctx = canvas.getContext("2d")!;
+          ctx.fillStyle = getComputedStyle(el).backgroundColor;
+          ctx.fillRect(0, 0, 1, 1);
+          const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        });
+
+      await page.mouse.move(0, 0);
+      const rest = await lum(resting);
+      const full = await lum(selected);
+      await resting.hover();
+      await page.waitForTimeout(150);
+      const hover = await lum(resting);
+
+      // Dark: the card rises off a darker rail, so each step is LIGHTER. Light:
+      // the rail is darker than the card too, so the ladder runs the same way.
+      expect(hover, `${theme}: hover must sit above rest`).toBeGreaterThan(rest);
+      expect(full, `${theme}: selected must sit above hover`).toBeGreaterThan(hover);
+    }
+  });
+
   test("keeps its CardShell edge and geometry through selected, hover and keyboard focus", async ({
     page,
   }) => {
@@ -700,7 +755,7 @@ test.describe("the row keeps its states, menu and destination", () => {
     const row = page.locator(`[data-workspace-id="${ROWS[0].id}"]`);
     await expect(row).toBeVisible();
 
-    await row.hover();
+    // Visible at REST, before any hover (#876): the title corner is never empty.
     const options = row.getByRole("button", { name: "Workspace options" });
     await expect(options).toBeVisible();
     await options.click();

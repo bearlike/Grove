@@ -294,3 +294,7 @@ src/grove/core/data/devcontainer-lock.json
 # Note the trade-off: a Grove workspace is a git worktree and sees only
 # committed files, so an ignored config does NOT propagate into worktrees.
 /.codex/
+
+# The prebuilt dashboard `make webapp-bundle` stages for the wheel.
+/src/grove/_webapp/
+/src/grove/_webapp.old/

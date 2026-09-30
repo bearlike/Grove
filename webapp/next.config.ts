@@ -1,7 +1,19 @@
 import { withAui } from "@assistant-ui/next";
 import type { NextConfig } from "next";
 
+/**
+ * `make webapp-bundle` sets this to build the copy that ships inside the Python
+ * wheel. `standalone` traces the server into a self-contained folder that runs
+ * as `node server.js` with no `npm ci`. Unoptimized images drop the only native
+ * module in the trace (sharp's per-platform binaries, 46 MB measured), so ONE
+ * pure-JS wheel serves every OS instead of one wheel per platform. The images
+ * are local logos, so nothing is lost. The systemd build (`next start` over
+ * `.next`) leaves this unset and is unchanged.
+ */
+const bundled = process.env.GROVE_WEBAPP_BUNDLE === "1";
+
 const nextConfig: NextConfig = {
+  ...(bundled ? { output: "standalone", images: { unoptimized: true } } : {}),
   /**
    * Next 16 blocks cross-origin requests for `/_next/*` dev resources, and it
    * counts a bare IP or hostname as cross-origin even when it is this same

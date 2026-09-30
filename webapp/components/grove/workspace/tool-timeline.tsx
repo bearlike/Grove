@@ -91,19 +91,31 @@ function ToolIconStack({ icons, open }: { icons: readonly string[]; open: boolea
   return (
     <span className="tool-icon-stack flex shrink-0 items-center" data-state={open ? "open" : "closed"} data-testid="tool-timeline-icons" aria-hidden>
       <span className="tool-icon-stack-row flex items-center">
-        {shown.map(slug => (
-          <span
-            key={slug}
-            className="tool-icon-stack-disc flex items-center justify-center"
-            style={{ "--tool-stack-tint": iconTint(slug) ?? undefined } as CSSProperties}
-          >
+        {shown.map((slug, order) => (
+          <StackCoin key={slug} order={order} tint={iconTint(slug)}>
             <AppIcon slug={slug} className="size-3.5 shrink-0" />
-          </span>
+          </StackCoin>
         ))}
         {overflow > 0 ? (
-          <span className="tool-icon-stack-disc tool-icon-stack-more flex items-center justify-center tabular-nums">+{overflow}</span>
+          <StackCoin order={shown.length} className="tool-icon-stack-more tabular-nums">+{overflow}</StackCoin>
         ) : null}
       </span>
+    </span>
+  );
+}
+
+/** One coin in the stack. `order` is its depth — the first coin sits on top.
+ * `globals.css` paints only the coin's body at that depth, so the artwork
+ * inside still clears every neighbouring rim. */
+function StackCoin({
+  order, tint, className, children,
+}: PropsWithChildren<{ order: number; tint?: string | null; className?: string }>): ReactNode {
+  return (
+    <span
+      className={cn("tool-icon-stack-disc flex items-center justify-center", className)}
+      style={{ "--tool-stack-order": order, "--tool-stack-tint": tint ?? undefined } as CSSProperties}
+    >
+      {children}
     </span>
   );
 }

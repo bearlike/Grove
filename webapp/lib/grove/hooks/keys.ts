@@ -35,6 +35,10 @@ export const groveKeys = {
     ["grove", "workspaces", id, "sessions", "candidates"] as const,
   turns: (id: string, sessionId: string) =>
     ["grove", "workspaces", id, "sessions", sessionId, "turns"] as const,
+  // Nested under `turns` so invalidating a session's transcript reaches it too;
+  // the fingerprint is the child's progress, so a new step is a new entry.
+  trajectoryTurns: (id: string, sessionId: string, fingerprint: string) =>
+    ["grove", "workspaces", id, "sessions", sessionId, "turns", "trajectory", fingerprint] as const,
   // Keyed by the CALL, not by the transcript: a body is immutable once the call
   // settles (it is only fetchable because it settled), so one opened disclosure
   // caches independently of the turn window that named it and survives every

@@ -19,6 +19,7 @@ export {
   useAgents,
   useBranches,
   useCatalogTurns,
+  useChildTurns,
   useDiagramWriter,
   useWorkspaceDiagram,
   useHealth,

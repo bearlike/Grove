@@ -320,6 +320,9 @@ class OwnerSteerClient:
     def invoke_control(self, state: WorkspaceState, name: str) -> None:
         self._control(state, "command", name)
 
+    def run_macro(self, state: WorkspaceState, macro: str) -> None:
+        self._control(state, "macro", macro)
+
     def answer(self, state: WorkspaceState, plan: str) -> None:
         self._control(state, "answer", plan)
 

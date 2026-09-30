@@ -10,7 +10,7 @@
 #   2. Installs Grove as a uv tool, straight from the repo.
 #   3. Verifies the install and prints where Grove keeps its files.
 #
-# Grove's distribution name is `grove-crew`: the name `grove` on PyPI
+# Grove's distribution name is `grove-factory`: the name `grove` on PyPI
 # belongs to an unrelated log-collection framework, so a bare
 # `uv tool install grove` installs the wrong product. This script always
 # installs from the repo; use --git=<spec> or the env knobs to point

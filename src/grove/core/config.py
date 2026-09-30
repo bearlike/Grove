@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Final, Literal
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -1986,6 +1986,36 @@ class TelemetryConfig(EnvSourceConfig):
     tuple to hand a name back to the agent; empty it to reserve nothing.
     """
 
+    feedback_reasons: tuple[str, ...] = (
+        "Unnecessary actions",
+        "Unnecessary testing",
+        "Wasted time",
+        "Ran slow commands without need",
+        "Cluttered the context",
+        "Missed the goal",
+    )
+    """What a thumbs-down in the webapp may name, recorded as the categorical
+    ``user-feedback-reason`` score in Langfuse. The defaults name ways a turn
+    cost more steps, time or context than its outcome needed. Keep the Langfuse
+    score config's categories in step when you change this list: the daemon
+    only accepts reasons listed here, and Langfuse only renders reasons listed
+    there.
+    """
+
+    positive_feedback_reasons: tuple[str, ...] = (
+        "Reached the goal directly",
+        "No wasted steps",
+        "Tested only what mattered",
+        "Clear explanation",
+        "Stayed in scope",
+    )
+    """What a thumbs-up in the webapp may name, recorded as the categorical
+    ``user-feedback-praise`` score in Langfuse. The defaults name what made a
+    turn efficient, the mirror image of ``feedback_reasons``. The same rule
+    applies: keep the Langfuse score config's categories identical to this
+    list.
+    """
+
     content_owner: dict[AgentKind, ContentOwner] = Field(default_factory=dict)
     """Which side emits each runtime's prompt and response content, per agent kind, so a
     turn is never recorded twice or not at all.
@@ -2388,6 +2418,45 @@ class ModelsConfig(BaseModel):
         the engine is how two surfaces come to print one model two ways.
         """
         return self.display_names.get(model_id)
+
+
+class MacroSpec(BaseModel):
+    """One Grove command: an ordered list of session controls run as ``/grove:<name>``.
+
+    Each step is one slash-command line delivered to the agent, and the next
+    step starts only once the agent reports the previous one finished. That
+    ordering is the point: firing ``/model``, ``/compact`` and ``/model`` back to
+    back lets the switch back land before the compaction runs. ``{model}``
+    expands to the model the session was on when the command started, so a
+    command can switch away and come back. Runs on native Claude Code
+    sessions, the one runtime that reports when each step completes.
+    """
+
+    model_config = _FROZEN
+
+    description: str = ""
+    """One line shown beside the command in the composer's ``/`` menu and the Controls tab."""
+
+    steps: list[str] = Field(min_length=1, max_length=20)
+    """Slash-command lines run in order: ``/model <id>``, ``/compact``, ``/model {model}``."""
+
+    @field_validator("steps")
+    @classmethod
+    def _steps_are_agent_commands(cls, value: list[str]) -> list[str]:
+        for step in value:
+            stripped = step.strip()
+            # A step is typed into the agent verbatim, so it must be one line and
+            # an agent command; a nested Grove command would recurse.
+            if not stripped.startswith("/") or "\n" in stripped:
+                raise ValueError(f"a Grove command step must be one slash-command line: {step!r}")
+            if stripped.startswith(MACRO_PREFIX):
+                raise ValueError(f"a Grove command step cannot run another Grove command: {step!r}")
+        return [step.strip() for step in value]
+
+
+#: What marks text as a Grove command rather than agent input.
+MACRO_PREFIX: Final = "/grove:"
+_MACRO_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
 class ModelPriceConfig(BaseModel):
@@ -3399,6 +3468,18 @@ class DeclaredEnvVars:
         return layer
 
     @classmethod
+    def names(cls, model: type[BaseModel]) -> frozenset[str]:
+        """Every variable the model tree declares — the census `layer` walks."""
+        found: set[str] = set()
+        for field in model.model_fields.values():
+            annotation = field.annotation
+            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                found |= cls.names(annotation)
+            elif variable := cls.declared(field):
+                found.add(variable)
+        return frozenset(found)
+
+    @classmethod
     def declared(cls, field: FieldInfo) -> str | None:
         """The variable one field declares, if it declares a usable one."""
         extra = field.json_schema_extra
@@ -3535,6 +3616,19 @@ class GroveConfig(BaseModel):
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     usage: UsageConfig = Field(default_factory=UsageConfig)
+    macros: dict[str, MacroSpec] = Field(default_factory=dict)
+    """Grove commands by name, run as ``/grove:<name>``. A map, so every layer adds or
+    replaces commands by name; none ship built in, because which model is fast is a fact
+    about your fleet."""
+
+    @field_validator("macros")
+    @classmethod
+    def _macro_names_are_slugs(cls, value: dict[str, MacroSpec]) -> dict[str, MacroSpec]:
+        # A name is typed after `/grove:`, so it must survive being a word in a prompt.
+        bad = sorted(name for name in value if not _MACRO_NAME.fullmatch(name))
+        if bad:
+            raise ValueError(f"Grove command names must be lowercase slugs: {', '.join(bad)}")
+        return value
 
     @model_validator(mode="after")
     def _panel_names_are_unique(self) -> GroveConfig:

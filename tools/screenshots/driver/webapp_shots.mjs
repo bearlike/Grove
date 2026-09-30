@@ -1,6 +1,6 @@
 // Capture the Grove web dashboard documentation screenshots.
 //
-// Driven by tools/screenshots/webapp_capture.py, which stands up a sandbox
+// Driven by tools/screenshots/capture.py, which stands up a sandbox
 // daemon (identity patched to fictional values) + `next start` against the
 // synthetic demo fleet and hands this script the base URL plus the sandbox
 // env. The script pairs a headless browser through the real /login flow
@@ -74,6 +74,13 @@ const sandboxEnv = {
  * five. Re-derive this number if the engine changes again rather than nudging
  * it: a wait that no longer relates to a measurement is a wait nobody can
  * justify tightening.
+ *
+ * MEASURE WITH THE PAGE'S OWN FILTERS. Those figures were taken unbounded, and
+ * the page sends `since=` a year back — which, while the bound also sat in the
+ * event WHERE, cost 15-16s per activity read instead of 2s, took the
+ * serialized page to ~85s locally and ~127s on CI, and failed this wait on
+ * every CI run (2026-09-29). `calendar_scope` in `core/usage/query.py` is the
+ * fix; re-measured with the real filters, the page's reads now sum to ~12s.
  */
 const DATA_WAIT_MS = 90_000;
 
@@ -120,6 +127,21 @@ function reportPageFaults(page, label) {
   page.on("pageerror", (err) => console.error(`[${label}] page error: ${String(err).slice(0, 400)}`));
   page.on("console", (msg) => {
     if (msg.type() === "error") console.error(`[${label}] console: ${msg.text().slice(0, 400)}`);
+  });
+  // A console "404" names no URL, and a request that never answers logs
+  // nothing at all — which is how a stalled section read as a slow backend.
+  // Say which API call failed or was slow, and how long it took.
+  const started = new Map();
+  page.on("request", (req) => started.set(req, Date.now()));
+  page.on("requestfinished", async (req) => {
+    const res = await req.response();
+    const ms = Date.now() - (started.get(req) ?? Date.now());
+    if (res && (res.status() >= 400 || ms > 5000)) {
+      console.error(`[${label}] ${req.method()} ${req.url()} -> ${res.status()} in ${ms}ms`);
+    }
+  });
+  page.on("requestfailed", (req) => {
+    console.error(`[${label}] ${req.method()} ${req.url()} FAILED: ${req.failure()?.errorText}`);
   });
 }
 
@@ -177,7 +199,9 @@ async function forceDark(ctx) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ headless: true });
+  // Docker gives a container a 64 MB /dev/shm; Chromium stalls rendering when
+  // it fills. /tmp has no such cap.
+  const browser = await chromium.launch({ headless: true, args: ["--disable-dev-shm-usage"] });
 
   // ── Phase 1: pairing on a phone-sized viewport (login is unchanged) ───
   const pairCtx = await browser.newContext({
@@ -539,7 +563,7 @@ async function main() {
   // The usage audit: what the fleet spent, derived from the same synthetic
   // transcripts the rest of the fleet renders.
   //
-  // NO REFRESH IS ISSUED FROM HERE, DELIBERATELY. `webapp_capture.py` projects
+  // NO REFRESH IS ISSUED FROM HERE, DELIBERATELY. `capture.py` projects
   // the corpus in process before it starts the daemon, so the cache is already
   // warm. This used to POST `/api/grove/usage/refresh`, which was fine while
   // the demo history was a month long; at a full year the projection takes
@@ -548,7 +572,7 @@ async function main() {
   // not this client's, so no timeout set here could ever have reached it.
 
   // Quota is genuinely populated now, not just the projection-derived
-  // sections: `webapp_capture.py`'s daemon wrapper patches the Claude
+  // sections: `driver/webapp.py`'s daemon wrapper patches the Claude
   // provider's ONE network call to a fixed, plainly synthetic Max 20x
   // window (its credential-store read is real; only the HTTP call is
   // faked), and Codex reads its window for real off the demo fleet's own
@@ -611,7 +635,9 @@ async function main() {
     }
     // And what the engine itself answered, so a slow or empty daemon is never
     // mistaken for a broken page.
-    const probe = await ctx.request.get(`${BASE}/api/grove/usage/activity?metric=tokens`);
+    const probe = await ctx.request.get(`${BASE}/api/grove/usage/activity?metric=tokens`, {
+      timeout: DATA_WAIT_MS,
+    });
     console.error(`activity api ${probe.status()}: ${(await probe.text()).slice(0, 300)}`);
     throw err;
   }
@@ -623,12 +649,26 @@ async function main() {
   // capture that produces no screenshots and names no cause — which is
   // exactly what it did once. Wait for ANY of the three states so the count
   // is not a race, then say which one we got and carry on.
-  await d
-    .locator(
-      '[data-testid="usage-quota-card"], [data-testid="usage-quota-empty"], [data-testid="usage-quota-failed"]',
-    )
-    .first()
-    .waitFor({ timeout: DATA_WAIT_MS });
+  //
+  // A timeout here is REPORTED too, never thrown: the comment above always said
+  // quota is not a precondition, while the code threw — so one quota section
+  // that never settled cost every webapp screenshot on CI (run 7917). Log what
+  // the quota route itself answered, then keep capturing.
+  try {
+    await d
+      .locator(
+        '[data-testid="usage-quota-card"], [data-testid="usage-quota-empty"], [data-testid="usage-quota-failed"]',
+      )
+      .first()
+      .waitFor({ timeout: DATA_WAIT_MS });
+  } catch {
+    const t = Date.now();
+    const probe = await ctx.request
+      .get(`${BASE}/api/grove/usage/quotas`, { timeout: DATA_WAIT_MS })
+      .then(async (r) => `${r.status()}: ${(await r.text()).slice(0, 300)}`)
+      .catch((e) => `no answer: ${e}`);
+    console.error(`usage quota: section never settled; quotas api in ${Date.now() - t}ms -> ${probe}`);
+  }
   const quotaCards = await d.getByTestId("usage-quota-card").count();
   if (quotaCards > 0) {
     console.log(`usage quota: ${quotaCards} account card(s) rendered`);

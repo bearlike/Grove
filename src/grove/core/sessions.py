@@ -801,6 +801,15 @@ class SessionExplorer:
                 self._session_cwd(listing), listing.summary.session_id, last=last
             )
 
+    def messages_for(self, listing: SessionListing) -> tuple[AgentMessage, ...]:
+        """The raw message spine for an already-resolved listing — what the
+        trace replay reads, under the same config-dir scope as :meth:`turns_for`."""
+        adapter = get_adapter(listing.summary.adapter_kind)
+        with self._manager.transcript_config_dir_scope(
+            listing.summary.adapter_kind, self._transcript_config_dir(listing)
+        ):
+            return adapter.read_messages(self._session_cwd(listing), listing.summary.session_id)
+
     def fleet_activity(
         self, workspace_id: str, session_id: str | None = None
     ) -> tuple[str | None, bool, tuple[SessionActivity, ...]]:
@@ -1224,10 +1233,18 @@ class SessionCatalog:
         return self._turn_counts.fill([e.ref for e in entries], stop=stop)
 
     def count_turn_facts(
-        self, entries: Sequence[CatalogEntry], *, stop: Callable[[], bool] | None = None
+        self,
+        entries: Sequence[CatalogEntry],
+        *,
+        stop: Callable[[], bool] | None = None,
+        pace: Callable[[float], None] | None = None,
     ) -> CountFillResult:
-        """Fill facts and state whether every eligible row is now measured."""
-        return self._turn_counts.fill_result([e.ref for e in entries], stop=stop)
+        """Fill facts and state whether every eligible row is now measured.
+
+        ``pace`` is :meth:`TurnCountCache.fill`'s per-session GIL yield — pass
+        one whenever anything else in the process must stay responsive.
+        """
+        return self._turn_counts.fill_result([e.ref for e in entries], stop=stop, pace=pace)
 
     @staticmethod
     def fold_liveness(

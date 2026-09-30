@@ -32,7 +32,7 @@ from grove.core.watches.log import WatchLog
 from grove.core.watches.scheduler import WatchScheduler
 from grove.core.watches.subscriptions import TicketSubscriptions
 from grove.core.watches.ticket import TicketWatcher
-from grove.core.watches.watcher import WatcherRegistry
+from grove.core.watches.watcher import TimerWatcher, Watcher, WatcherRegistry
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
 
 WS = "c" * 32
@@ -94,6 +94,22 @@ class Forge:
         )
 
 
+class NeverSettles(Watcher[CiPredicate]):
+    """Stands in for the daemon's CI watcher, so every kind can be registered."""
+
+    kind = "ci"
+
+    def observe(self, predicate, now):
+        return None
+
+
+class CommandNeverSettles(Watcher[CommandPredicate]):
+    kind = "command"
+
+    def observe(self, predicate, now):
+        return None
+
+
 class Courier:
     def __init__(self) -> None:
         self.sent: list[WatchOutcome] = []
@@ -110,7 +126,16 @@ def _rig(tmp_path, forge: Forge | None = None):
     reads = TicketReads(clock=clock)
     scheduler = WatchScheduler(
         log=WatchLog(tmp_path / "watches.json"),
-        watchers=WatcherRegistry([TicketWatcher(lambda _p: forge, reads)]),
+        # Every kind the daemon serves, because registration now refuses a kind
+        # with no watcher and the reconciliation tests register all four.
+        watchers=WatcherRegistry(
+            [
+                TicketWatcher(lambda _p: forge, reads),
+                NeverSettles(),
+                CommandNeverSettles(),
+                TimerWatcher(),
+            ]
+        ),
         deliver=courier,
         clock=clock,
     )

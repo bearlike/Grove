@@ -5,6 +5,7 @@ import { MenuIcon, PanelLeftIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { LoopingText, ScannedTextScope } from "@/components/grove/overflow-text";
 import { sectionFor } from "@/components/grove/shell/nav";
 import { useSidebarUi } from "@/components/grove/shell/sidebar-state";
 
@@ -74,10 +75,24 @@ export function ShellHeader({
         a 32px chrome strip whose own rule closes it. An 18px title would be the
         largest thing on a workspace page, above the transcript prose it frames.
         The table is reconciled where it is written rather than here.
+
+        A title LOOPS rather than truncating: it is the workspace's name, and
+        an ellipsis deletes the tail that usually tells two tasks apart. Its
+        own scope keeps the rest of the header ordinary, and the rail's pause
+        control governs it too (`overflow-text.tsx`).
+
+        `flex-1` (a ZERO basis), never `flex-[0_1_auto]`: an auto basis is the
+        content's width, and a looping track is two copies wide, so the title
+        grew until it fit, stopped looping, shrank until it overflowed, and
+        started again — measured flipping between 242px and 335px on one page.
+        The title takes what the actions leave, and its width never depends on
+        whether it loops.
       */}
-      <span className="min-w-0 truncate text-base font-medium">
-        {title ?? sectionFor(pathname).label}
-      </span>
+      <ScannedTextScope>
+        <LoopingText className="flex-1 text-base font-medium">
+          {title ?? sectionFor(pathname).label}
+        </LoopingText>
+      </ScannedTextScope>
 
       {actions ? <div className="workspace-header-actions ml-auto flex min-w-0 items-center gap-2 self-stretch">{actions}</div> : null}
     </header>

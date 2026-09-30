@@ -339,6 +339,9 @@ schema before supplying flags.
 
 ## The other Grove skills
 
+- **`leading-in-grove`** — the judgement on top of these verbs when you lead a
+  fleet toward one deliverable: splitting the work, onboarding and check-ins,
+  answering teammates, verifying what lands, and teardown.
 - **`working-in-grove`** — the same fleet seen from the inside, including a
   mailbox worker's peer-message workflow. Point a workspace agent at it rather
   than restating the phase or mailbox contract in every prompt.

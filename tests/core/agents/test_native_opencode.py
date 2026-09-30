@@ -347,3 +347,74 @@ async def test_close_reaps_the_server_child(opencode_server: _Server, tmp_path: 
     await owner.close()
 
     assert process is not None and process.returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_compaction_and_retry_steps_follow_the_session_event_bus(
+    opencode_server: _Server, tmp_path: Path
+) -> None:
+    """Measured on 1.18.31: a `compaction` part opens a compaction and
+    `session.error` during it is that compaction failing; `session.status:
+    retry` carries an absolute `next` (OpenCode's own UI counts down to
+    `next - Date.now()`), and `idle` ends any step. A foreign session's retry on
+    the same server-wide bus must not reach this owner."""
+    opencode_server.events = [
+        {
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses-foreign",
+                "status": {"type": "retry", "attempt": 9, "message": "not ours", "next": 1},
+            },
+        },
+        {
+            "type": "message.part.updated",
+            "properties": {"sessionID": "ses-1", "part": {"type": "compaction", "auto": False}},
+        },
+        {
+            "type": "session.error",
+            "properties": {
+                "sessionID": "ses-1",
+                "error": {"name": "UnknownError", "data": {"message": "summary failed"}},
+            },
+        },
+        {
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses-1",
+                "status": {
+                    "type": "retry",
+                    "attempt": 2,
+                    "message": "rate limited",
+                    "next": 1_790_000_000_000,
+                },
+            },
+        },
+        {
+            "type": "session.status",
+            "properties": {"sessionID": "ses-1", "status": {"type": "idle"}},
+        },
+    ]
+    spool = tmp_path / "spool"
+    asks = AskRecorder(spool)
+    owner = OpencodeNativeOwner(
+        _command(opencode_server), tmp_path, {}, asks=asks, timeout_seconds=1
+    )
+    try:
+        asks.bind(await owner.start(""))
+        for _ in range(100):
+            if len(list(spool.glob("*.facts.json"))) >= 4:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await owner.close()
+    drops = [json.loads(p.read_text())["facts"] for p in sorted(spool.glob("*.facts.json"))]
+    assert [d["operation"] and d["operation"]["kind"] for d in drops] == [
+        "compacting",
+        None,
+        "retrying",
+        None,
+    ]
+    assert drops[1]["compact_error"] == "summary failed"
+    retry = drops[2]["operation"]
+    assert (retry["attempt"], retry["detail"]) == (2, "rate limited")
+    assert retry["retry_at"] == "2026-09-21T14:13:20+00:00"

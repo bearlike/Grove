@@ -54,6 +54,7 @@ from grove.core.contracts.diagrams import (
     DiagramStopRequest,
     DiagramUpdateRequest,
 )
+from grove.core.contracts.feedback import TurnFeedbackRequest
 from grove.core.contracts.gallery import (
     GalleryDocumentView,
     GalleryItemView,
@@ -218,6 +219,7 @@ __all__ = [
     "TicketSelector",
     "TokenClassesView",
     "TrackRemoteBranch",
+    "TurnFeedbackRequest",
     "UpdateWorkspaceRequest",
     "UsageActivityBucketView",
     "UsageActivityView",

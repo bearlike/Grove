@@ -229,6 +229,20 @@ class TicketNotAttached(GroveError):
     """
 
 
+# ─── watch errors (raised by grove.core.watches) ────────────────────────────
+
+
+class WatchUnobservable(GroveError):
+    """A watch names a subject this daemon can never observe, so it is refused.
+
+    Raised at registration, never at probe time. The agent that registers a
+    watch halts on it, so accepting one that can only expire costs the whole
+    deadline and then reports "condition NOT met" about a subject nobody looked
+    at. The message names the setting to change. No retry of the same request
+    can succeed until the configuration does.
+    """
+
+
 # ─── notification errors (raised by grove.core.notifications) ───────────────
 
 
@@ -270,6 +284,10 @@ class SteeringUnsupported(GroveError):
     cannot succeed. Raised for interrupt on tmux-hosted agents (no safe
     generic interrupt exists).
     """
+
+
+class MacroNotFound(GroveError):
+    """``/grove:<name>`` names no command declared under ``macros`` in the config cascade."""
 
 
 class CapabilityUnavailable(GroveError):

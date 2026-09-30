@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { compactToolTarget, toolPresentation, toolTimelineStats, toolTimelineSummary } from "@/lib/grove/adapters/tool-catalog";
+import {
+  compactToolTarget,
+  toolPresentation,
+  toolTimelineStats,
+  toolTimelineSummary,
+  UNKNOWN_SERVER_ICON,
+  UNKNOWN_TOOL_ICON,
+} from "@/lib/grove/adapters/tool-catalog";
 
 describe("compact action targets", () => {
   it("shows only the command prefix while leaving full invocation data intact", () => {
@@ -81,8 +88,8 @@ describe("tool presentation catalog", () => {
   });
 
   it("ignores inherited keys in supplementary server mappings", () => {
-    expect(toolPresentation("mcp__constructor__run").icon).toBe("flat-color-icons:services");
-    expect(toolPresentation("mcp__toString__run").icon).toBe("flat-color-icons:services");
+    expect(toolPresentation("mcp__constructor__run").icon).toBe(UNKNOWN_SERVER_ICON);
+    expect(toolPresentation("mcp__toString__run").icon).toBe(UNKNOWN_SERVER_ICON);
   });
   it("labels real command arguments rather than a digest or tool name", () => {
     expect(toolPresentation("Bash", { command: "npm test", description: "Run tests" }, "digest"))
@@ -100,7 +107,7 @@ describe("tool presentation catalog", () => {
   it("gives a synthetic mailbox delivery its dedicated mark", () => {
     expect(toolPresentation("Mailbox")).toMatchObject({
       verb: "Received message",
-      icon: "flat-color-icons:sms",
+      icon: "fluent-color:mail-24",
       kind: "tool",
     });
   });
@@ -108,12 +115,12 @@ describe("tool presentation catalog", () => {
   it("resolves a configured MCP server without confusing its function with a builtin", () => {
     expect(toolPresentation("mcp__docs__Read", { query: "API" }, "", { docs: "simple-icons:readthedocs" }))
       .toMatchObject({ verb: "Called", chip: "docs / Read", icon: "simple-icons:readthedocs", kind: "tool" });
-    expect(toolPresentation("mcp__other__Read", null, "", { docs: "lucide:book" }).icon).toBe("flat-color-icons:services");
+    expect(toolPresentation("mcp__other__Read", null, "", { docs: "lucide:book" }).icon).toBe(UNKNOWN_SERVER_ICON);
   });
 
   it("retains unknown names and digest-only targets without inventing details", () => {
     expect(toolPresentation("FutureTool", null, "some target"))
-      .toMatchObject({ verb: "Called", chip: "FutureTool · some target", icon: "flat-color-icons:settings" });
+      .toMatchObject({ verb: "Called", chip: "FutureTool · some target", icon: UNKNOWN_TOOL_ICON });
     expect(toolPresentation("Read", null, "src/main.ts"))
       .toMatchObject({ chip: "src/main.ts", filePath: null });
   });
@@ -128,7 +135,48 @@ describe("tool presentation catalog", () => {
     ];
     expect(toolTimelineSummary(steps)).toEqual({
       label: "5 steps · 1 command · 2 files read",
-      icons: ["flat-color-icons:document", "material-icon-theme:console"],
+      icons: ["fluent-color:book-open-24", "material-icon-theme:console"],
     });
   });
+
+  it("gives reading, writing and editing a file three different marks", () => {
+    // Three verbs on one noun were three look-alike page glyphs, so a run of
+    // reads and edits read as one repeated action. The shapes must differ, not
+    // only the tints: a reader scanning a stack sees silhouette first.
+    const marks = ["Read", "Write", "Edit"].map(name => toolPresentation(name, { file_path: "a.ts" }).icon);
+    expect(new Set(marks).size).toBe(3);
+  });
 });
+
+describe("MCP server marks", () => {
+  const icon = (name: string, overrides: Record<string, string> = {}) => toolPresentation(name, null, "", overrides).icon;
+
+  it("recognizes a well-known server by name, whatever its spelling", () => {
+    expect(icon("mcp__github__create_issue")).toBe("simple-icons:github");
+    expect(icon("mcp__google-calendar__list_events")).toBe(icon("mcp__GoogleCalendar__list_events"));
+    expect(icon("mcp__deepwiki__ask_question")).toBe("logos:devin");
+    expect(icon("mcp__grove__grove_list_workspaces")).toBe("grove:grove");
+  });
+
+  it("finds the service inside a server name the user chose", () => {
+    // A plugin prefixes its server, and a user suffixes a database with the
+    // instance it points at; both still name a service the catalog knows.
+    expect(icon("mcp__plugin_playwright_playwright__browser_click")).toBe("logos:playwright");
+    expect(icon("mcp__postgresql_mifflin__execute_sql")).toBe("logos:postgresql");
+  });
+
+  it("falls back to the tool's leading word for a gateway fronting many services", () => {
+    expect(icon("mcp__assistant__Gmail-search")).toBe("logos:google-gmail");
+    expect(icon("mcp__assistant__Calendar-CreateEvent")).toBe("fluent-color:calendar-24");
+    expect(icon("mcp__assistant__archive_thread")).toBe(UNKNOWN_SERVER_ICON);
+  });
+
+  it("lets a known server keep its own mark over a tool name that names another", () => {
+    expect(icon("mcp__github__slack_notify")).toBe("simple-icons:github");
+  });
+
+  it("lets the host's own mapping override the catalog", () => {
+    expect(icon("mcp__github__create_issue", { github: "logos:github-icon" })).toBe("logos:github-icon");
+  });
+});
+

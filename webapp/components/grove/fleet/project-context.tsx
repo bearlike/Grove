@@ -188,8 +188,11 @@ export function ProjectContextPicker({
           aria-expanded={open}
           aria-controls={listId}
           data-testid="rail-project-context"
-          // Match the action row while retaining the touch target.
-          className="h-6 min-h-[24px] w-full justify-start gap-1.5 px-2 text-sm [@media(pointer:coarse)]:min-h-11"
+          // Match the action row while retaining the touch target. Transparent
+          // with the resting control edge, like every other rail control: the
+          // vendored outline's dark `bg-input/30` made this the brightest fill
+          // in the rail, above the selected row it merely filters.
+          className="bg-transparent dark:bg-transparent border-edge-control h-6 min-h-[24px] w-full justify-start gap-1.5 px-2 text-sm [@media(pointer:coarse)]:min-h-11"
         >
           <FolderGit2Icon className="size-3.5 shrink-0" aria-hidden />
           <span className="min-w-0 flex-1 truncate text-left">{label}</span>

@@ -134,6 +134,11 @@ def test_read_turns_groups_replies_under_the_prompt(
         ("assistant", "I'll add the endpoint."),
         ("tool", "exec_command"),
     ]
+    # Each entry carries the clock of the spine message it was projected
+    # from, for a trace's time axis — never a record the projector folded away.
+    (reply,) = [m for m in adapter.read_messages(BASIC_CWD, BASIC_SID) if m.role == "assistant"]
+    assert reply.timestamp is not None
+    assert [e.at for e in turn.entries] == [reply.timestamp, reply.timestamp]
 
 
 # ─── agent questions (MCP-bridged question tool in the rollout) ─────────────
@@ -918,6 +923,57 @@ def test_usage_lands_on_the_tool_call_a_request_produced(
     assert response.content[1].tool_name == "exec"
     assert response.usage is not None
     assert response.usage.output == 109
+
+
+def test_an_mcp_call_keeps_its_server(adapter: CodexAdapter, codex_home: Path) -> None:
+    """Codex records an MCP call's server in ``namespace`` beside a bare
+    ``name``. Joined, it reads ``mcp__<server>__<tool>`` exactly as Claude
+    records it, so no reader mistakes it for an unknown builtin. A non-MCP
+    namespace names a first-party tool and leaves the name alone."""
+    sid = "99999999-9999-7999-8999-999999999998"
+    cwd = "/home/dev/work/mcpcall"
+
+    def call(call_id: str, namespace: str, name: str) -> str:
+        payload = {
+            "type": "function_call",
+            "namespace": namespace,
+            "name": name,
+            "arguments": "{}",
+            "call_id": call_id,
+        }
+        return (
+            json.dumps(
+                {
+                    "timestamp": "2026-04-28T20:00:02.000Z",
+                    "type": "response_item",
+                    "payload": payload,
+                }
+            )
+            + "\n"
+        )
+
+    _install_text(
+        codex_home,
+        sid,
+        _usage_rollout(
+            sid,
+            cwd,
+            call("c1", "mcp__postgresql_mifflin__", "PostgreSQL_mifflin_execute_sql")
+            + call("c2", "mcp__codex_apps__linear__legacy", "__search_issues")
+            + call("c3", "collaboration", "spawn_agent"),
+        ),
+    )
+    names = [
+        block.tool_name
+        for message in adapter.read_messages(Path(cwd), sid)
+        for block in message.content
+        if block.type == "tool_use"
+    ]
+    assert names == [
+        "mcp__postgresql_mifflin__PostgreSQL_mifflin_execute_sql",
+        "mcp__codex_apps__linear__legacy__search_issues",
+        "spawn_agent",
+    ]
 
 
 def test_usage_groups_response_fragments_into_one_generation(tmp_path: Path) -> None:

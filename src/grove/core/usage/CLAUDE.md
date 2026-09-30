@@ -608,6 +608,43 @@ survived that verdict and are now closed:
     than as a slow one — the client gives up and renders its empty branch, which
     is indistinguishable from *no tokens were measured*. **When a surface fans
     out over a shared lock, budget against the serialized total.**
+  - **That 12.6 s was measured UNBOUNDED, and the page sends `since=`, so the
+    number the budget rested on was the one path it never takes.** A
+    `session_filter_sql` bound on `e.ts` beside the spine join is redundant (the
+    join already confines each event to its day), and it is what the planner
+    picks to drive `ix_events_ts` — so a bounded year-wide read walked every
+    event after `since` once PER BUCKET: **14.4 s bounded against 1.3 s
+    unbounded, for the same 1,261 rows.** `EXPLAIN QUERY PLAN` prints the SAME
+    plan text for both, because it names the index and not which of two range
+    constraints drives it, so the plan cannot find this; only timing the query
+    with the caller's real filters can. It stalled the serialized usage page to
+    ~85 s locally and ~127 s on CI and failed the screenshot capture's 90 s wait
+    on every run. `calendar_scope` is the one window both calendar reads
+    (`query.py` and `series.py`) compile: the bound lives only in the spine,
+    whose first and last buckets are CLAMPED to it (a spine covers whole days,
+    so an unclamped mid-day `since` would admit the rest of its first day), and
+    a bucket the bound excludes stays at zero width rather than being dropped
+    (an empty `VALUES` is invalid SQL). Moving the bound exposed a second
+    defect: `activity` ignored `day=` when choosing its axis and relied on the
+    WHERE to narrow a whole-history spine, so it returned 365 zero buckets
+    around the requested day while `series._spine` — whose docstring claims the
+    two agree — returned one. **Measure a query with the filters its real caller
+    sends, and when a range bound is enforced by a join, do not enforce it again
+    in the WHERE.**
+- **A fast query can still be a slow READ when the daemon is parsing in the
+  background, and a probe that times the query alone cannot see it.** The
+  usage reads share a process with the session catalog's turn-count pass, a
+  pure-Python full parse that holds the GIL; SQLite releases the GIL on every
+  row step and queues to get it back, so a many-row read crawls while that pass
+  runs. Measured on the 1.3M-event capture corpus: the usage page's reads took
+  19 s quiet and 146 s right after one `GET /sessions` started the pass, which
+  is what failed the CI screenshot capture for a day after `calendar_scope` had
+  already fixed the query. **Reproduce a slow page with the navigation that
+  PRECEDES it, not just its own requests** — here, the page before it was the
+  cause. The capture now warms `TurnCountCache` at seed, and the daemon's pass
+  now paces itself so that it holds at most half the GIL (see
+  [core](../CLAUDE.md), SessionCatalog). On a cold host the column still fills
+  slowly, but it no longer stalls the usage page.
 - **`_workspace_id(ref)` used to re-walk the whole fleet PER SESSION inside
   the refresh loop** — `RepoRegistry.get(root)` → `manager.list()` per known
   root, i.e. live git/tmux reconciliation, profiled at 394 `manager.list()`

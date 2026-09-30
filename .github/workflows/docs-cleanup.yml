@@ -1,13 +1,13 @@
 name: Docs Cleanup
 
 # GitHub Pages (mike) version cleanup. Both jobs are guarded to github.com; on
-# the internal mirror they no-op (preview cleanup lives in docs.yml).
+# the internal mirror they no-op (preview cleanup lives in _docs-deploy.yml).
 #
 # These jobs only DELETE published versions, so the theme looks irrelevant to
 # them — but `mike` parses mkdocs.yml before doing anything, and that config
 # names `theme: shadcn`, so an absent theme aborts even `mike list` with
 # "Unrecognised theme name". They therefore install the docs group and need the
-# same theme lock-refresh as the build (see docs.yml for why a stale entry 404s
+# same theme lock-refresh as the build (see _docs-deploy.yml for why a stale entry 404s
 # rather than merely going stale).
 on:
   pull_request:

@@ -26,7 +26,7 @@ is pull, then refresh each surface that needs it.
 | **Package — CLI + TUI** | the `grove` command and its Textual UI | a fresh `grove` invocation (editable install) OR a `uv tool install --reinstall` when deps changed |
 | **Daemon** | `grove daemon serve`, the loopback HTTP + tmux service (default `127.0.0.1:7421`) | **service restart** (it is long-lived) |
 | **Native workers** | per-workspace tmux processes owning headless Claude Code / Codex app-server | deliberately **survive daemon restarts**; worker code changes apply on the next workspace launch |
-| **Webapp** | the Next.js dashboard (default `:3000`) | **rebuild `.next` THEN restart** the webapp service |
+| **Webapp** | the Next.js dashboard (default `:3000`), served by `grove web` on Grove's bundled Node | **rebuild the bundle THEN restart** the webapp service (a PyPI upgrade ships a new bundle, so only a restart) |
 | **MCP server** (opt-in) | `grove-mcp` (MCP client → `grove-mcp` → daemon REST → core), in one of **two** transports | depends entirely on the transport — see below |
 
 **Do not restart healthy native workspaces as part of an update.** The tmux worker
@@ -90,13 +90,21 @@ Confirm what you are dealing with:
 
 ```bash
 which grove                                   # usually ~/.local/bin/grove (a uv shim)
-readlink -f "$(which grove)"                  # -> ~/.local/share/uv/tools/grove/bin/grove
+venv="$(dirname "$(dirname "$(readlink -f "$(which grove)")")")"
+echo "$venv"                                  # -> ~/.local/share/uv/tools/grove-factory
 # Is it editable, and where does it point?
-cat ~/.local/share/uv/tools/grove/lib/python*/site-packages/grove-*.dist-info/direct_url.json
+cat "$venv"/lib/python*/site-packages/grove_factory-*.dist-info/direct_url.json
 #   {"url":"file:///path/to/checkout","dir_info":{"editable":true}}  <- editable
 # Prove the running code resolves to the checkout:
-~/.local/share/uv/tools/grove/bin/python3 -c "import grove,os;print(os.path.realpath(grove.__file__))"
+"$venv/bin/python3" -c "import grove,os;print(os.path.realpath(grove.__file__))"
 ```
+
+**The venv is named for the DISTRIBUTION (`grove-factory`), not the command.** A
+host installed before the rename also carries an orphaned `uv/tools/grove` env
+that no shim points at. Anything that spells that path checks the wrong venv
+and still passes. Resolve the venv through the shim, as above, and
+`uv tool uninstall grove` the orphan. That uninstall deletes the shared
+`~/.local/bin` shims both envs claimed, so reinstall straight after it.
 
 If `direct_url.json` shows `editable:true`, source pulls are live on next launch.
 If it is a plain (non-editable) wheel install, EVERY code change needs a
@@ -123,29 +131,23 @@ git diff --stat <previously-installed-commit>..HEAD -- pyproject.toml uv.lock
 
 ```bash
 cd <repo>
-uv tool install --reinstall --force --editable '.[all]'
+uv tool install --reinstall --force --editable .      # from a checkout
+uv tool upgrade grove-factory                         # from PyPI
 ```
 
-Prefer `'.[all]'` (daemon + client + mcp) as the default — it's the only one
-that leaves **every** console script working, including `grove-mcp`. The extras
-are load-bearing in different ways:
-
-- `[daemon]` (fastapi + uvicorn) — without it `grove daemon` fails with "No such
-  command" because the Typer mount is gated by an optional import.
-- `[mcp]` (the `mcp` SDK, riding on `[client]`) — what `grove-mcp` needs.
-  `grove-mcp` is **always installed** as a script regardless of extras, so
-  installing `.[daemon]` alone leaves it present but **broken**: it crashes at
-  import with `ModuleNotFoundError: No module named 'mcp'`. If you want only the
-  daemon plus a working MCP server, the narrower `'.[daemon,mcp]'` also does it.
-- `[telemetry]` (the OpenTelemetry exporter) is **not** part of `[all]`. A
-  deployment setting `telemetry.enabled` needs it named explicitly, e.g.
-  `'.[all,telemetry]'`.
+There are no extras to choose: every surface is a base dependency, including
+the MCP SDK, telemetry, and the Node.js runtime the dashboard runs on
+(`nodejs-wheel`, which puts `node` and `npm` in the tool venv). An install from
+before that change can still lack pieces. `grove-mcp` failing with
+`ModuleNotFoundError: No module named 'mcp'`, or `grove web --check` naming no
+Node, both mean "reinstall", not "add an extra". The old extras names still
+resolve as empty aliases, so `'.[all]'` is harmless.
 
 > **A reinstall that dies with a bare `Permission denied` is almost always a
 > Grove entrypoint that was once run as root** — CPython wrote uid-0 bytecode
 > into the tool venv and the checkout's `__pycache__`, and uv's message names
 > whatever dependency it hit first, never root. Diagnose by ownership
-> (`find "$(uv tool dir)/grove" ! -user "$(id -un)"`), not by the message.
+> (`find "$(uv tool dir)/grove-factory" ! -user "$(id -un)"`), not by the message.
 > `reinstall.sh` preflights this and prints the remedy.
 
 The shim path (`~/.local/bin/grove`) is unchanged by a reinstall, so the systemd
@@ -159,16 +161,21 @@ unit and any PATH drop-in keep working untouched.
 The checkout's own `./reinstall.sh` does the reinstall, the webapp rebuild, the
 restarts and the verification pass below in one run, recovering ports and unit
 names live (`--no-reinstall` / `--no-webapp` / `--no-daemon` / `--no-mcp` narrow
-it, `--extras` overrides `'.[all]'`). Work the steps by hand when Grove is not
-under systemd here, or when you are diagnosing rather than updating.
+it). It builds on the Node inside Grove's venv, never the host's, and it is safe
+to run unattended: the new dashboard is built beside the live one and swapped in
+only on success, and a webapp unit from the older `npm run start` layout is
+migrated to `grove web` and restored automatically if it does not serve. Work
+the steps by hand when Grove is not under systemd here, or when you are
+diagnosing rather than updating.
 
 ```bash
 # Daemon — always restart after a code update that touches the daemon/engine:
 systemctl --user restart grove-daemon
 
-# Webapp — rebuild THEN restart, or the redesign is silently absent.
-# `next start` serves the prebuilt .next; new components don't exist until rebuilt:
-cd <repo> && make webapp-build && systemctl --user restart grove-webapp
+# Webapp — rebuild the bundle THEN restart, or the redesign is silently absent.
+# `grove web` serves the prebuilt bundle; new components don't exist until rebuilt.
+# The Make target defaults to the npm in the checkout's .venv (Grove's own Node):
+cd <repo> && make webapp-bundle && systemctl --user restart grove-webapp
 
 # Networked MCP — ONLY if a grove-mcp unit exists (stdio needs nothing).
 # Skipping this is silent: the server keeps serving the previous build, so a
@@ -201,8 +208,7 @@ curl -s http://127.0.0.1:7421/openapi.json | python3 -c \
 grove debug            # expect config_loaded: true
 grove config show      # must parse (a ConfigError here = bad config, not a stale install)
 
-# MCP server importable? (only if you installed an MCP-capable extra)
-# A ModuleNotFoundError for 'mcp' here means the `[mcp]` extra is missing — reinstall with '.[all]':
+# MCP server importable? A ModuleNotFoundError for 'mcp' means a pre-change install; reinstall:
 grove-mcp --help       # prints usage = the `mcp` SDK resolved
 
 # Networked MCP actually serving the NEW build? Importability proves nothing here:
@@ -213,9 +219,10 @@ port=$(systemctl --user cat grove-mcp | sed -n 's/.*--port[= ]\([0-9]\{1,\}\).*/
 curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:${port}/mcp"
 # 401/405/406 = healthy (the endpoint wants POST + auth); 000 = nothing listening.
 
-# Webapp build freshness — BUILD_ID mtime should be AFTER your rebuild,
-# and the service start AFTER that:
-cat <repo>/webapp/.next/BUILD_ID ; stat -c '%y' <repo>/webapp/.next/BUILD_ID
+# Webapp: which bundle and which Node the service will use, then freshness —
+# BUILD_ID mtime should be AFTER your rebuild, and the service start AFTER that:
+grove web --check      # dashboard: <path>   node: <…/nodejs_wheel/bin/node>
+b=$(grove web --check | sed -n 's/^dashboard: *//p'); cat "$b/.next/BUILD_ID"; stat -c '%y' "$b/.next/BUILD_ID"
 systemctl --user show grove-webapp -p ActiveEnterTimestamp --value
 curl -s -o /dev/null -w "webapp %{http_code}\n" http://127.0.0.1:3000/   # 200/302/307 = up
 ```
@@ -246,15 +253,17 @@ attached to live agent/workspace sessions; that is the user's call.
 
 Check the layers in order — server-side first, then client:
 
-1. **Stale `.next` build.** `next start` serves whatever was last built. If you
+1. **Stale bundle.** `grove web` serves whatever was last bundled. If you
    restarted the webapp without rebuilding, the redesign is absent. Confirm the
-   build is fresh (Section 5), and if not: `make webapp-build && systemctl --user
+   build is fresh (Section 5), and if not: `make webapp-bundle && systemctl --user
    restart grove-webapp`. To prove the *new feature* is actually compiled in,
-   grep the built bundle for a marker unique to the new code (e.g. a new
+   grep the served bundle for a marker unique to the new code (e.g. a new
    dependency or component name):
    ```bash
-   grep -rl '<new-marker>' <repo>/webapp/.next/static | head   # e.g. 'xterm'
+   grep -rl '<new-marker>' "$(grove web --check | sed -n 's/^dashboard: *//p')/.next/static" | head
    ```
+   A unit whose `ExecStart` still reads `npm run start` predates `grove web` and
+   serves `webapp/.next` instead; `./reinstall.sh` migrates it.
 2. **Build is fresh but the browser still shows old.** New behavior with an old
    *layout* is the classic signature of a **cached HTML document / stylesheet**.
    Next.js content-hashes CSS, but a browser that served the whole page from

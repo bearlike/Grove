@@ -29,7 +29,7 @@ describe("dense workspace scan contracts", () => {
     expect(row).toContain("<CardShell");
     expect(row).toContain("<Link");
     expect(row).not.toContain('variant="secondary"');
-    expect(row).toContain("active ? ROW_SELECTED : cn(ROW_RESTING,");
+    expect(row).toContain("active ? ROW_SELECTED : ROW_RESTING,");
     expect(row).toContain('data-testid="fleet-row-marker"');
     expect(row).toContain('aria-current={active ? "page" : undefined}');
     expect(row).not.toContain("opacity-80");

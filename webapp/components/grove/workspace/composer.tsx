@@ -25,11 +25,12 @@ import {
 import { ContextDisplay } from "@/components/elements/context-display";
 import { ExpandedComposer } from "@/components/grove/composer";
 import { useWorkspaceOnboardingDemands } from "@/components/grove/onboarding";
-import { COMPOSER_COMMANDS, mentionsFromContacts } from "@/lib/grove/adapters";
+import { COMPOSER_COMMANDS, grovePaletteCommands, mentionsFromContacts } from "@/lib/grove/adapters";
 import {
   useInterrupt,
   useInvokeControl,
   useMailboxContacts,
+  useSessionControls,
   useWorkspaceActivity,
   useWorkspacePeek,
 } from "@/lib/grove/hooks";
@@ -177,15 +178,13 @@ function WorkspaceComposer({
   );
 }
 
-/**
- * The `/` menu: Grove's closed command set, delivered through the same control
- * route the Controls tab uses, with the typed `/compact` stripped on execute.
- */
+/** The `/` menu: built-in and config-declared Grove commands via the control route. */
 function useComposerCommands(workspaceId: string) {
   const invoke = useInvokeControl(workspaceId);
+  const controls = useSessionControls(workspaceId);
   const commands = useMemo(
     () =>
-      COMPOSER_COMMANDS.map((command) => ({
+      [...COMPOSER_COMMANDS, ...grovePaletteCommands(controls.data?.commands ?? [])].map((command) => ({
         id: command.id,
         description: command.description,
         icon: "command",
@@ -197,7 +196,7 @@ function useComposerCommands(workspaceId: string) {
             onError: (error) => toast.error(`Couldn’t deliver /${command.id}`, { description: error.message }),
           }),
       })),
-    [invoke],
+    [controls.data?.commands, invoke],
   );
   return unstable_useSlashCommandAdapter({ commands, removeOnExecute: true });
 }

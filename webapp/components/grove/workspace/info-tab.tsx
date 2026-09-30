@@ -422,6 +422,17 @@ export function InfoTab({
               </span>
             </CardField>
           )}
+          {/* A failed compaction leaves no boundary in the transcript and the
+              `/compact` toast only ever said "delivered", so this is the one
+              place the provider's reason is visible. Cleared by the stream
+              when a later compaction starts or succeeds. */}
+          {native?.compact_error && (
+            <CardField label="Last compaction">
+              <span className="text-destructive" data-testid="native-compact-error">
+                Failed — {native.compact_error}
+              </span>
+            </CardField>
+          )}
         </CardFields>
       </SectionCard>
 

@@ -287,6 +287,11 @@ class GroveTools:
         omit it and an open-ended watch gives up after 15 minutes, while a
         timer defaults to its own time. ``every`` is seconds between checks
         (minimum 15).
+
+        A watch Grove could never observe is refused here with
+        ``watch_unobservable``, before anything is recorded: a ``ci`` watch on a
+        forge the daemon has not enabled or holds no token for. Read the message,
+        which names the setting to change, and do not halt on a refusal.
         """
         return await self._client.register_watch(request)
 

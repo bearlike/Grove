@@ -402,12 +402,26 @@
 }
 
 .dark {
-  --surface-header-start: oklch(0.303142 0.006 286);
-  --surface-header-end: oklch(0.255779 0.006 286);
-  --surface-header-highlight: oklch(0.350505 0.006 286);
+  --surface-header-start: oklch(0.238649 0.006 286);
+  --surface-header-end: oklch(0.201374 0.006 286);
+  --surface-header-highlight: oklch(0.275924 0.006 286);
   /* Dark keeps its own ladder. The card body is the `raised` rung above the
      page; popovers retain the overlay rung. Every content tier clears AA
-     across the ladder, including the header's darker stop. */
+     across the ladder, including the header's darker stop.
+
+     QUIET BY LUMINANCE, NOT BY L. Every dark fill here — the ladder, the header
+     band, and the `muted`/`accent`/`secondary` washes — sits at 75% of the WCAG
+     relative luminance it had when work-panel cards, their cells and the rail
+     picker read as louder than the content they frame. Luminance, because a
+     fixed ΔL darkens the near-black rungs far less than the bright ones. The
+     one exception is `sunken`, held at 0.0905 so `sunken → base` keeps the
+     0.05 L floor; foreground text still clears 14:1 on every rung.
+
+     THE CARD TIER GOES FURTHER, to 65% of that again: `raised`, the header
+     band and the `muted`/`accent`/`secondary` washes. Card structure is meant
+     to recede into the page, not be read, so `base → raised` is 0.027 L —
+     deliberately UNDER the 0.05 floor. The card's edge and radius carry its
+     boundary, which is the redundancy §4.3 specifies for exactly this case. */
   --background: var(--surface-base);
   --foreground: oklch(0.985 0 0);
   --card: var(--surface-raised);
@@ -421,11 +435,11 @@
   --primary-foreground: oklch(0.21 0.006 285.885);
   --warning: oklch(0.72 0.16 75);
   --warning-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
+  --secondary: oklch(0.215714 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
+  --muted: oklch(0.215714 0.006 286.033);
   --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
+  --accent: oklch(0.215714 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   /* The surface below supplies the other 70% of every decorative seam; keeping
@@ -444,19 +458,19 @@
      against the dark --background: 19.06:1, 12.34:1, 7.59:1. */
   --content-secondary: oklch(0.845 0.01 286);
   /*
-   * The ladder, DARK. Every step clears the 0.05 floor (0.055 / 0.058152 / 0.071848)
-   * because dark mode has headroom in both directions and does not need shadow
-   * to carry elevation — which is why `surface-raised`'s shadow resolves to
-   * `none` here while the tonal step does the lifting.
+   * The ladder, DARK. Two steps clear the 0.05 floor (sunken→base 0.050352,
+   * raised→overlay 0.091141); base→raised is 0.026975 BY DECISION, see above.
+   * Dark mode still carries no shadow — `surface-raised`'s shadow resolves to
+   * `none` here — so the small tonal step plus the edge does the lifting.
    *
    * The same OKLCH delta buys LESS WCAG contrast near black: `sunken → base` is
-   * 0.055 L and only 1.05:1, where a comparable step in light mode reaches
+   * 0.050 L and only 1.04:1, where a comparable step in light mode reaches
    * 1.21:1. Never treat a lightness delta as if it were a contrast ratio.
    */
-  --surface-sunken: oklch(0.1 0.005 286);
-  --surface-base: oklch(0.155 0.005 286);
-  --surface-raised: oklch(0.213152 0.006 286);
-  --surface-overlay: oklch(0.285 0.006 286);
+  --surface-sunken: oklch(0.0905 0.005 286);
+  --surface-base: oklch(0.140852 0.005 286);
+  --surface-raised: oklch(0.167827 0.006 286);
+  --surface-overlay: oklch(0.258968 0.006 286);
   /* This remains the source for attachment fills; only its edge output below
      becomes translucent. */
   --surface-edge-source: oklch(0.36 0.008 286);
@@ -491,7 +505,7 @@
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
+  --sidebar-accent: oklch(0.215714 0.006 286.033);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   /* Sidebar divisions share the decorative edge output. */
   --sidebar-border: var(--border);
@@ -751,10 +765,15 @@
 .workspace-header-actions:has(.workspace-pane-actions) {
   flex: 0 1 26rem;
 }
+/* The strip scrolls SIDEWAYS only, as the last resort after icon-only. A lone
+   `overflow-x: auto` computes `overflow-y` to `auto` too, so any 1px overhang
+   became a vertical scrollbar in both bands. And no `scrollbar-width` here:
+   Chromium drops the global `::-webkit-scrollbar` treatment for any element
+   that sets it, which is what drew a stepper-arrow track on these strips. */
 .workspace-tab-strip {
   --tab-target: 24px;
   overflow-x: auto;
-  scrollbar-width: thin;
+  overflow-y: hidden;
 }
 .workspace-work-tabs {
   min-height: 32px;
@@ -781,9 +800,13 @@
   transition-property: color;
   outline-offset: -2px;
 }
+/* `bottom` is measured from the trigger's padding box, inside its 1px transparent
+   border: -1px ends the mark flush on the closing rule and keeps it inside the
+   strip's scrollport. -2px hung a pixel past it, clipped half the mark, and was
+   the overflow that made each strip scroll vertically. */
 .workspace-tab-list [role="tab"]::after {
   inset-inline: -1px;
-  bottom: -2px;
+  bottom: -1px;
   height: 2px;
   transition: none;
   pointer-events: none;
@@ -984,6 +1007,35 @@
   }
 }
 
+/*
+ * THE TRANSCRIPT'S READING RHYTHM. The workspace transcript is the one surface
+ * read end to end rather than scanned, so it gets more air than the ramp's
+ * paired `text-base` line height: prose lines at an absolute 1.8125rem, and each
+ * TURN separated from the next by more than the rows inside it are from each
+ * other. Scoped to the message group so plan and mailbox Markdown elsewhere
+ * keep the ramp. The vendored Markdown pins `leading-relaxed` on paragraphs and
+ * list items with no prop reaching it, so the theme boundary is the seam.
+ */
+[data-slot="aui_message-group"] {
+  /* The GAP between lines is what reads as spacing, so that is what was scaled:
+     at 1.5rem over `text-base` (0.875rem) the gap was 0.625rem, and 1.5x that
+     gap is 0.9375rem, i.e. 1.8125rem of line height. */
+  --transcript-leading: 1.8125rem;
+  --transcript-turn-gap: 2.5rem;
+}
+[data-slot="aui_message-group"] :is(.aui-md-p, .aui-md-li, .aui-user-message-content) {
+  line-height: var(--transcript-leading);
+}
+/* A human prompt after the agent's rows starts a new turn: space it apart from
+   the turn before, on top of the group's own row gap. The day separator sits
+   on the same boundary, so it takes the same space and the prompt after it
+   does not add a second one. */
+[data-slot="aui_message-group"]
+  > [data-role="assistant"]
+  + :is([data-role="user"], [data-testid="time-separator"]) {
+  margin-top: var(--transcript-turn-gap);
+}
+
 /* Vendor Markdown fences use literal pixels; tool and diff code already use
    this ramp step. Normalize fences on every surface, including plan/mailbox bodies. */
 .aui-md-pre {
@@ -991,16 +1043,48 @@
   line-height: var(--text-xs--line-height);
 }
 
-/* Glass surrounds the coins; opening fades only that shell, never its artwork. */
+/*
+ * THE TOOL ORB: a frosted capsule holding a stack of glass coins. Hierarchy is
+ * optical depth, not decoration — so nothing here draws a hard border:
+ *   - the capsule is defined by luminance along its perimeter (a bright top
+ *     rim, a darker bottom one) and stays quieter than any coin;
+ *   - each coin concentrates its tint around the glyph and lets it dissipate
+ *     toward a neutral rim, so a row of tools never reads as coloured badges;
+ *   - the first coin sits on top and each one after it tucks behind its left
+ *     neighbour, with a lit rim and a soft cast shadow marking the overlap.
+ * Both themes set only the custom properties below; every rule reads them.
+ * Opening the run fades the capsule alone, never a coin or its artwork.
+ *
+ * THE GLOW IS HELD QUIET: tint, halo reach and the dark capsule's glass and
+ * rim are all 55% of what first shipped, because at full strength a row of
+ * orbs was the loudest thing in the transcript. Only the coin's light is cut.
+ * The glyph is the vendored artwork and is never recoloured or dimmed; that
+ * is what "the icon keeps its fidelity" means here.
+ */
 .tool-icon-stack {
-  --tool-stack-glass: 255 255 255;
-  --tool-stack-disc-base: oklch(0.96 0.006 286);
-  --tool-stack-disc-edge: oklch(0.65 0.02 286 / 0.45);
+  --tool-stack-glass-top: rgb(255 255 255 / 0.55);
+  --tool-stack-glass-bottom: rgb(255 255 255 / 0.18);
+  --tool-stack-rim: rgb(255 255 255 / 0.85);
+  --tool-stack-shade: rgb(15 15 30 / 0.1);
+  --tool-stack-disc-base: oklch(0.975 0.004 286);
+  --tool-stack-disc-tint: 23%;
+  /* The coloured halo each coin casts. Blur and spread are one token so the
+     glow's reach is tuned in one place, the same way its tint is. */
+  --tool-stack-halo: 0 0 2.75px -0.55px;
   position: relative;
   isolation: isolate;
   min-width: 3rem;
   justify-content: center;
   padding: 0.1875rem 0.375rem;
+}
+
+.dark .tool-icon-stack {
+  --tool-stack-glass-top: rgb(255 255 255 / 0.055);
+  --tool-stack-glass-bottom: rgb(255 255 255 / 0.0165);
+  --tool-stack-rim: rgb(255 255 255 / 0.12);
+  --tool-stack-shade: rgb(0 0 0 / 0.35);
+  --tool-stack-disc-base: oklch(0.227 0.008 286);
+  --tool-stack-disc-tint: 25%;
 }
 
 .tool-icon-stack::before {
@@ -1009,41 +1093,52 @@
   inset: 0;
   z-index: -1;
   border-radius: 9999px;
-  background: linear-gradient(180deg, rgb(var(--tool-stack-glass) / 0.28), rgb(var(--tool-stack-glass) / 0.08));
-  border: 1px solid var(--surface-edge);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.35), 0 1px 3px rgb(0 0 0 / 0.1);
-  backdrop-filter: blur(6px);
+  background: linear-gradient(180deg, var(--tool-stack-glass-top), var(--tool-stack-glass-bottom));
+  box-shadow:
+    inset 0 1px 0.5px var(--tool-stack-rim),
+    inset 0 -1px 1px var(--tool-stack-shade),
+    inset 0 0 0 0.5px var(--tool-stack-shade),
+    0 1px 3px var(--tool-stack-shade);
+  backdrop-filter: blur(8px) saturate(1.4);
   opacity: 1;
   transition: opacity 160ms ease;
-}
-
-.dark .tool-icon-stack {
-  --tool-stack-disc-base: oklch(0.22 0.008 286);
-  --tool-stack-disc-edge: oklch(0.7 0.015 286 / 0.4);
-}
-
-.dark .tool-icon-stack::before {
-  background: linear-gradient(180deg, rgb(255 255 255 / 0.09), rgb(255 255 255 / 0.025));
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12), 0 1px 3px rgb(0 0 0 / 0.2);
 }
 
 .tool-icon-stack[data-state="open"]::before {
   opacity: 0.3;
 }
 
+/* Its own stacking context, so the coins' negative depths stay above the
+   capsule while every glyph (z-index 1) still paints over every coin. */
+.tool-icon-stack-row {
+  isolation: isolate;
+}
+
 .tool-icon-stack-disc {
+  --tool-stack-glow: color-mix(in srgb, var(--tool-stack-tint, var(--muted-foreground)) var(--tool-stack-disc-tint), var(--tool-stack-disc-base));
   width: 1.375rem;
   height: 1.375rem;
   flex-shrink: 0;
   position: relative;
+}
+
+/* The coin's body is a pseudo-element so it can sit at its own depth
+   (`--tool-stack-order`, set per coin) without taking the glyph with it. */
+.tool-icon-stack-disc::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: calc(-1 - var(--tool-stack-order, 0));
   border-radius: 50%;
-  border: 1px solid var(--tool-stack-disc-edge);
-  background: linear-gradient(
-    150deg,
-    color-mix(in srgb, var(--tool-stack-tint, var(--muted-foreground)) 12%, var(--tool-stack-disc-base)),
-    color-mix(in srgb, var(--tool-stack-tint, var(--muted-foreground)) 16%, var(--tool-stack-disc-base))
-  );
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 1px 2px rgb(0 0 0 / 0.16);
+  background:
+    radial-gradient(circle at 32% 22%, var(--tool-stack-rim), transparent 42%),
+    radial-gradient(circle, var(--tool-stack-glow) 0%, var(--tool-stack-disc-base) 78%);
+  box-shadow:
+    inset 0 1px 0.5px var(--tool-stack-rim),
+    inset 0 0 1.5px var(--tool-stack-rim),
+    inset 0 -1px 1.5px var(--tool-stack-shade),
+    1.5px 0.5px 2px var(--tool-stack-shade),
+    var(--tool-stack-halo) var(--tool-stack-glow);
 }
 
 /* Preserve the compact, overlapping coin stack; artwork paints above every rim. */
@@ -1057,7 +1152,7 @@
 }
 
 .tool-icon-stack-more {
-  color: var(--content-primary);
+  color: var(--content-secondary);
   font-size: var(--text-xs);
   font-weight: 500;
 }
@@ -1192,6 +1287,27 @@
 .rail-agent-tile:has([data-brand="codex"]) { --agent-hue: #7a9dff; }
 .rail-agent-tile:has([data-brand="gemini"]) { --agent-hue: #3186ff; }
 
+/* A rail row's fill, named by `fleet/fleet-tree.tsx`: one ladder of the card
+   token mixed toward the rail it lies on, stepped by INTERACTION state and
+   never by what a row reports. Resting sits darkest (50%), hover and keyboard
+   focus preview selection at the midpoint (75%), and only the selected row
+   wears the full card fill. Mixed toward the rail's own surface rather than
+   made transparent, so each step is the same wherever the rail is drawn; no
+   other surface token may stand in for a step — `surface-base` lands within
+   0.002 L of the resting mix, so hovering visibly did nothing. Card
+   definition comes from the border, the divider and the ledger rules, so the
+   dimmed rest no longer costs a card its edges; text is never dimmed. */
+.rail-row {
+  background-color: var(--card);
+}
+.rail-row[data-selected="false"] {
+  background-color: color-mix(in oklab, var(--card) 50%, var(--surface-sunken));
+}
+.rail-row[data-selected="false"]:hover,
+.rail-row[data-selected="false"]:focus-within {
+  background-color: color-mix(in oklab, var(--card) 75%, var(--surface-sunken));
+}
+
 /* The landing configuration shelf, below the writing surface: a muted fill
    and a hairline of its own at the decorative tier — one step quieter than the
    composer bar above it, so the bar stays the surface you write in. Its pills
@@ -1202,22 +1318,20 @@
   border-radius: var(--radius-lg);
 }
 
-/* Decorative and static. Markup supplies aria-hidden; the mask softens the grid edge. */
+/* Decorative and static. Markup supplies aria-hidden; the mask softens the grid
+   edge. Drawn from the OPAQUE edge source, not `--surface-edge`: that token is
+   already 30% alpha for hairlines, and a further 70% on top left a 21% line
+   nobody could see. The mask holds the grid solid through its middle third
+   before fading, for the same reason — a fade that starts at the centre spends
+   the whole field fading. Still one neutral from the ladder, still no palette. */
 .launch-brand-field {
+  --launch-grid-line: color-mix(in oklab, var(--surface-edge-source) 75%, transparent);
   background-image:
-    repeating-linear-gradient(
-      to right,
-      color-mix(in oklab, var(--surface-edge) 70%, transparent) 0 1px,
-      transparent 1px 100%
-    ),
-    repeating-linear-gradient(
-      to bottom,
-      color-mix(in oklab, var(--surface-edge) 70%, transparent) 0 1px,
-      transparent 1px 100%
-    );
-  background-size: calc(var(--text-sm) * 2) calc(var(--text-sm) * 2);
+    repeating-linear-gradient(to right, var(--launch-grid-line) 0 1px, transparent 1px 100%),
+    repeating-linear-gradient(to bottom, var(--launch-grid-line) 0 1px, transparent 1px 100%);
+  background-size: calc(var(--text-sm) * 2.75) calc(var(--text-sm) * 2.75);
   /* Alpha only — a mask reads the channel, never the hue. */
-  mask-image: radial-gradient(closest-side, rgb(0 0 0) 0%, rgb(0 0 0 / 0) 100%);
+  mask-image: radial-gradient(closest-side, rgb(0 0 0) 35%, rgb(0 0 0 / 0) 100%);
   pointer-events: none;
 }
 
@@ -1321,9 +1435,10 @@
    while the surrounding transcript or landing surface still has its own rung. */
 [data-slot="composer-bar"] {
   background-color: var(--surface-base);
-  /* 20% more opaque than the decorative tier (36% of the source against
-     `--border`'s 30%), so the one place you write stays findable. */
-  border-color: color-mix(in srgb, var(--border-source) 36%, transparent);
+  /* Its fill is the page's own rung, so this line alone says where the writing
+     surface ends: 43% of the source, ~1.4x the decorative tier's 30%. Still
+     one hairline — a tinted fill instead would fight the vendor's surfaces. */
+  border-color: color-mix(in srgb, var(--border-source) 43%, transparent);
 }
 
 /* An open menu is the overlay rung (§4.3): edge AND shadow, in BOTH themes.
@@ -1422,6 +1537,14 @@
   background-color: var(--surface-base);
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+
+/* The launch page has one object on it, the composer, and the composer bar's
+   fill IS `surface-base` — so on the ordinary panel the page and the bar were
+   the same grey and the whole screen read as the composer. Here the panel sinks
+   to the rail's plane and the bar is the only lifted surface. */
+.shell-panel:has(.launch-surface) {
+  background-color: var(--surface-sunken);
 }
 
 /*
@@ -2132,5 +2255,211 @@
   .phase-note-flash::before {
     animation: none;
     display: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * THE TRAJECTORY WATERFALL
+ *
+ * `@assistant-ui/react-o11y` is headless: its primitives expose
+ * `data-span-status`, `data-span-type`, `data-span-running` and
+ * `data-collapsed`, and every look keys on those here rather than on a
+ * conditional class in the component — the vendor's own recommendation, and the
+ * only place `lint:styling` lets a hue or a radius live.
+ *
+ * STATUS IS THE BAR'S TREATMENT, KIND IS ITS WEIGHT. Four statuses, four
+ * treatments that survive greyscale (§4.7): running is a primary bar with a
+ * travelling sheen, completed a quiet solid, failed a destructive fill, skipped
+ * a hatched outline with no fill at all — so "never ran to completion" reads as
+ * an absence rather than as a short success. The row's glyph and its word carry
+ * the same claim, so the colour is never the only carrier. A turn is the tall
+ * bar, a sub-agent the medium one, a step the thin one; a message or notice has
+ * no duration and draws as a tick.
+ * ------------------------------------------------------------------------- */
+
+.trajectory {
+  --trajectory-row: 1.75rem;
+}
+
+.trajectory-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, 42%) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.trajectory-axis {
+  height: var(--trajectory-row);
+}
+.trajectory-axis > span:last-child {
+  margin-inline-end: 0.75rem;
+}
+
+.trajectory-row {
+  height: var(--trajectory-row);
+  align-items: center;
+  transition: background-color 120ms ease-out;
+}
+.trajectory-row:hover {
+  background-color: color-mix(in oklab, var(--muted) 55%, transparent);
+}
+/* A turn opens a group: a hairline above it separates one prompt's run from
+   the last, and its name steps up to the primary tier. */
+.trajectory-row[data-span-type="turn"] {
+  border-top: 1px solid var(--border);
+}
+.trajectory-row[data-span-type="turn"] .trajectory-name {
+  font-weight: 500;
+}
+.trajectory-row:not([data-span-type="turn"]) .trajectory-name {
+  color: var(--content-secondary);
+}
+
+.trajectory-lane {
+  height: 100%;
+  margin-inline-end: 0.75rem;
+}
+
+.trajectory-toggle {
+  border-radius: var(--radius-sm);
+}
+.trajectory-toggle:hover {
+  background-color: var(--muted);
+  color: var(--foreground);
+}
+.trajectory-toggle svg {
+  transition: transform 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.trajectory-toggle[data-collapsed="false"] svg {
+  transform: rotate(90deg);
+}
+
+/* Status glyphs: the summary line and each row's indicator share one mapping. */
+.trajectory-status[data-span-status="running"] {
+  color: var(--primary);
+}
+.trajectory-status[data-span-status="running"] svg {
+  animation: trajectory-spin 1s linear infinite;
+}
+.trajectory-status[data-span-status="completed"] {
+  color: var(--success);
+}
+.trajectory-status[data-span-status="failed"] {
+  color: var(--destructive);
+}
+.trajectory-status[data-span-status="skipped"] {
+  color: var(--content-tertiary);
+}
+
+/* Axis gridlines run the full height behind every lane. The overlay takes the
+   rows' own grid so its second column IS the lane, whatever width the label
+   column resolves to. */
+.trajectory-gridlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.trajectory-gridlines > span {
+  grid-column: 2;
+  position: relative;
+  margin-inline-end: 0.75rem;
+}
+.trajectory-gridlines > span > span {
+  position: absolute;
+  inset-block: 0;
+  border-inline-start: 1px dashed color-mix(in oklab, var(--border) 70%, transparent);
+}
+.trajectory-tick:first-child {
+  padding-inline-start: 0;
+}
+
+/* THE BAR. `TimelineBar` sets position, start and width inline; everything
+   else is here. Height follows the span's kind, treatment its status. */
+.trajectory-bar {
+  --span-timeline-min-width: 3px;
+  top: 50%;
+  height: 0.375rem;
+  transform: translateY(-50%);
+  border-radius: 9999px;
+  background-color: color-mix(in oklab, var(--content-tertiary) 55%, transparent);
+  transition:
+    inline-size 400ms ease-out,
+    inset-inline-start 400ms ease-out;
+}
+.trajectory-bar[data-span-type="turn"] {
+  height: 0.75rem;
+  border-radius: var(--radius-sm);
+}
+.trajectory-bar[data-span-type="agent"] {
+  height: 0.5625rem;
+}
+.trajectory-bar[data-span-type="message"],
+.trajectory-bar[data-span-type="notice"] {
+  --span-timeline-min-width: 2px;
+  height: 0.625rem;
+  border-radius: 1px;
+}
+
+.trajectory-bar[data-span-status="completed"] {
+  background-color: color-mix(in oklab, var(--success) 70%, var(--surface-base));
+}
+.trajectory-bar[data-span-type="turn"][data-span-status="completed"] {
+  background-color: color-mix(in oklab, var(--content-tertiary) 45%, transparent);
+}
+.trajectory-bar[data-span-type="message"][data-span-status="completed"],
+.trajectory-bar[data-span-type="notice"][data-span-status="completed"] {
+  background-color: var(--content-tertiary);
+}
+.trajectory-bar[data-span-status="failed"] {
+  background-color: var(--destructive);
+}
+.trajectory-bar[data-span-status="skipped"] {
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, var(--content-tertiary) 55%, transparent) 0 2px,
+    transparent 2px 5px
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--content-tertiary) 60%, transparent);
+}
+/* A LOOP, so it stops when the span settles: the primitive drops
+   `data-span-running` the moment `endedAt` lands. */
+.trajectory-bar[data-span-running] {
+  background-color: var(--primary);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--primary-foreground) 45%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: trajectory-sheen 1.6s linear infinite;
+}
+
+@keyframes trajectory-sheen {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes trajectory-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Every cue collapses to its END STATE: a running bar is still a primary bar,
+   it just stops moving; the spinner is still the running glyph. */
+@media (prefers-reduced-motion: reduce) {
+  .trajectory-bar,
+  .trajectory-toggle svg {
+    transition: none;
+  }
+  .trajectory-bar[data-span-running],
+  .trajectory-status[data-span-status="running"] svg {
+    animation: none;
+    background-image: none;
   }
 }

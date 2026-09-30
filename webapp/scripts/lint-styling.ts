@@ -50,6 +50,9 @@ const PORTED_FILES: Record<string, string> = {
   "components/grove/workspace/pending-question.tsx": "components/elements/elicitation-form.tsx",
   // The native timeline has no trigger or row-body slots for tool disclosures.
   "components/grove/workspace/tool-timeline.tsx": "components/elements/tool-timeline.tsx",
+  // The vendored dialog is thumbs-down only (its mark and question are
+  // hard-coded); the port takes the verdict as `tone` and changes nothing else.
+  "components/grove/workspace/feedback-dialog.tsx": "components/elements/feedback-dialog.tsx",
 };
 
 /** Utilities whose value is a colour. */

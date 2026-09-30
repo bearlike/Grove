@@ -79,11 +79,17 @@ describe("the same labelled change vocabulary reaches both surfaces", () => {
     expect(html).not.toContain(">pushes<");
   });
 
-  it("omits the zero change triple while retaining creation age", () => {
+  it("keeps the zero change triple as quiet zeros, so every card has one anatomy", () => {
     const html = renderToStaticMarkup(<SessionMetadata workspace={workspace({ id: "quiet" })} />);
-    expect(html).not.toContain('data-testid="rail-dirty"');
-    expect(html).not.toContain('data-testid="rail-added"');
-    expect(html).not.toContain('data-testid="rail-removed"');
+    for (const id of ["rail-dirty", "rail-added", "rail-removed"]) {
+      const at = html.indexOf(`data-testid="${id}"`);
+      expect(at, id).toBeGreaterThan(-1);
+      // A measured zero is quiet, never toned as a change.
+      expect(html.slice(at, at + 400)).toContain("text-content-tertiary");
+      expect(html.slice(at, at + 400)).not.toMatch(/text-success|text-destructive/);
+    }
+    expect(html).toContain("+0");
+    expect(html).toContain("−0");
     expect(html).toContain('data-testid="rail-ledger"');
     expect(html).toContain('data-testid="rail-created"');
   });

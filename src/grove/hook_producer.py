@@ -20,6 +20,9 @@ _SPOOL_SUFFIX: Final = ".json"
 _STATUSLINE_FLAG: Final = "--statusline"
 _DAEMON_URL_FLAG: Final = "--daemon-url"
 _USER_PROMPT_EVENT: Final = "UserPromptSubmit"
+# The status line's own copy of the quota view, beside the ledger it summarizes.
+# Derived and disposable: deleting it costs one background refresh.
+_STATUSLINE_QUOTAS_FILE: Final = "statusline-quotas.json"
 
 LegacyHandler = Callable[[Sequence[str], bytes], int]
 
@@ -32,7 +35,9 @@ class HookProducer:
     delivery to the persistent process, so an unavailable daemon leaves its
     callback on disk for the next reader. ``UserPromptSubmit`` is the exception:
     Claude Code consumes its stdout synchronously, so that callback lazily
-    re-enters the established handler.
+    re-enters the established handler. The ``--statusline`` arm is the other
+    stdout consumer, and it renders through :mod:`grove.statusline` after
+    spooling.
     """
 
     MAX_STDIN_BYTES: Final = MAX_STDIN_BYTES
@@ -51,7 +56,10 @@ class HookProducer:
             return self._legacy(args, raw)
         payload = self._payload(raw)
         if mode == _STATUSLINE_FLAG:
+            # Spool first: the context-window fold is what this arm exists for,
+            # and a rendering failure must never cost it.
             self._spool(payload, suffix=".statusline.json")
+            self._render_statusline(payload)
             return 0
         if self._event_name(raw) == _USER_PROMPT_EVENT:
             return self._legacy(args, raw)
@@ -91,7 +99,7 @@ class HookProducer:
         return payload if isinstance(payload, dict) else None
 
     @staticmethod
-    def _spool_dir() -> Path:
+    def _state_dir() -> Path:
         """Resolve the lightweight equivalent of Grove's standard state location."""
         configured = os.environ.get(_STATE_HOME_ENV)
         if configured:
@@ -102,7 +110,11 @@ class HookProducer:
             state_home = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         else:
             state_home = Path.home() / ".local" / "state"
-        return state_home / "grove" / "agent-sidecars" / "spool"
+        return state_home / "grove"
+
+    @classmethod
+    def _spool_dir(cls) -> Path:
+        return cls._state_dir() / "agent-sidecars" / "spool"
 
     @classmethod
     def _spool(cls, payload: dict[str, object] | None, *, suffix: str) -> None:
@@ -132,6 +144,21 @@ class HookProducer:
             if staged is not None:
                 with suppress(OSError):
                     staged.unlink(missing_ok=True)
+
+    @staticmethod
+    def _render_statusline(payload: dict[str, object] | None) -> None:
+        """Draw the pane's status row, because Grove's ``statusLine`` replaced the user's.
+
+        Best-effort by contract. Whatever this prints becomes the terminal row,
+        so any failure prints nothing and the row is simply blank, which is what
+        it showed before this arm drew anything at all.
+        """
+        # Deferred like `_run_legacy`: ordinary hook callbacks never render.
+        from grove import statusline  # noqa: PLC0415
+
+        with suppress(Exception):
+            quota_path = HookProducer._state_dir() / _STATUSLINE_QUOTAS_FILE
+            statusline.emit(statusline.render(payload or {}, quota_path=quota_path))
 
     @staticmethod
     def _run_legacy(argv: Sequence[str], raw: bytes) -> int:

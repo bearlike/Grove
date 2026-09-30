@@ -258,9 +258,9 @@ class PublicGroveView(BaseModel):
     #: One sentence, lifted from the project README so the two cannot drift into
     #: two different descriptions of one product.
     tagline: str = (
-        "The terminal workspace manager for AI coding agents. Spin up a forest "
-        "of isolated agent workspaces. Reach any of them asynchronously from "
-        "your terminal, your browser, or another agent."
+        "Grove is a software factory for the coding agents you already use. "
+        "Give each task a workspace. Guide the work with files and diagrams. "
+        "Follow delivery from ticket to trace."
     )
 
 

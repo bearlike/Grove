@@ -15,15 +15,16 @@ default in a container, scoped to the repository it launches from.
 
 ## Install
 
-Grove installs to your user bin (`~/.local/bin`) as `grove`, straight
-from the repo. The `[daemon]` extra adds the web dashboard backend,
-drop it for TUI-only.
+Grove publishes to PyPI as `grove-factory` and installs to your user bin
+(`~/.local/bin`) as `grove`. One package carries the whole factory: the
+TUI, the CLI, the daemon, the MCP server and a prebuilt web dashboard.
+There are no extras to pick.
 
-!!! warning "The distribution is `grove-crew`, not `grove`"
+!!! warning "The distribution is `grove-factory`, not `grove`"
     `grove` on PyPI is an unrelated log-collection framework. A bare
     `uv tool install grove` (or `pipx`, `pip`) installs that instead,
     failing with `Failed to initialise configuration handler`. Grove
-    publishes as **`grove-crew`**; the command it installs is still
+    publishes as **`grove-factory`**. The command it installs is still
     `grove`. See [Troubleshooting](troubleshooting.md) if this happened.
 
 === "uv (recommended)"
@@ -32,11 +33,12 @@ drop it for TUI-only.
     onto your `$PATH`.
 
     ```bash
-    uv tool install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
-    uv tool upgrade grove      # update on demand
-    uv tool uninstall grove    # remove
+    uv tool install grove-factory     # install the latest release
+    uv tool upgrade grove-factory     # pull a newer release later
+    uv tool uninstall grove-factory   # remove
     ```
 
+    To try it once without installing, run `uvx --from grove-factory grove`.
     No uv yet? `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 
 === "pipx"
@@ -44,8 +46,8 @@ drop it for TUI-only.
     No uv required:
 
     ```bash
-    pipx install "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
-    pipx upgrade grove
+    pipx install grove-factory
+    pipx upgrade grove-factory
     ```
 
 === "pip"
@@ -53,11 +55,37 @@ drop it for TUI-only.
     Only Python and pip required:
 
     ```bash
-    pip install --user "grove-crew[daemon] @ git+https://github.com/bearlike/Grove"
+    pip install --user grove-factory
     ```
 
     Re-run with `--upgrade` to update. On an externally managed Python,
     add `--break-system-packages`, or use pipx instead.
+
+### Releases and updates
+
+Every release is cut on GitHub, and publishing it ships the same version
+to PyPI within minutes. `uv tool upgrade grove-factory` pulls the newest
+one, and `uv tool install grove-factory==<version>` pins a specific
+release. The [releases page](https://github.com/bearlike/Grove/releases)
+lists what changed in each.
+
+- **Stable** is PyPI, the default above. It moves only when a release is published.
+- **Bleeding edge** installs straight from the `current` branch with `uv tool install "grove-factory @ git+https://github.com/bearlike/Grove"`. It includes everything merged since the last release, but a git install carries no prebuilt web dashboard.
+- **After an upgrade**, relaunch `grove` and restart a running daemon and dashboard. They are long-lived processes and keep serving the old version until restarted.
+
+### The web dashboard
+
+The dashboard ships inside the package, prebuilt, along with the Node.js
+runtime that serves it. There is nothing else to install, and a Node you
+already have is never touched.
+
+```bash
+grove daemon serve     # terminal 1, the API on 127.0.0.1:7421
+grove web              # terminal 2, the dashboard on 127.0.0.1:3000
+```
+
+Open <http://127.0.0.1:3000> and pair the browser. [Web dashboard](use-webapp.md)
+covers pairing, a phone on the LAN, and running both as services.
 
 ### Tab completion (optional)
 
@@ -89,7 +117,7 @@ layer wins on a shared option.
     configure it with you.
 
     ```text
-    Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a terminal workspace manager for AI coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
+    Read https://raw.githubusercontent.com/bearlike/Grove/current/.claude/skills/configuring-grove/SKILL.md. It is the skill for configuring Grove, a software factory for coding agents. Help me write my Grove user and project config, and verify every field against my installed version with `grove config schema --stdout`.
     ```
 
 !!! note "Or write it yourself"
@@ -148,4 +176,4 @@ Set `GROVE_DEBUG=1` for verbose loguru output on stderr, with one
 - [Daily workflow](use-workflow.md), create, attach, pause, resume, kill.
 - [Agent activity and sessions](features-activity.md), the fleet on one wall, replayed.
 - [Web dashboard](use-webapp.md), the fleet in the browser or your phone.
-- [MCP server](use-mcp.md), for MCP agents (needs `grove-crew[mcp]` or `grove-crew[all]`, not `grove-crew[daemon]`).
+- [MCP server](use-mcp.md), for MCP agents. It ships in the same install as `grove-mcp`.

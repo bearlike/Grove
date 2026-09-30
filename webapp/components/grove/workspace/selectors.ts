@@ -134,6 +134,7 @@ export type ActivityRead = Pick<WorkspaceActivityView, "sessions" | "phase"> & {
  */
 export const PANEL_TAB_VALUES = [
   "terminal",
+  "trajectory",
   "changes",
   "diagram",
   "files",

@@ -48,7 +48,7 @@ check: lint test  ## Run lint + unit tests (no integration)
 
 # ─── docs ───────────────────────────────────────────────────────────────────
 
-.PHONY: docs-schema app-icons docs-screenshots docs-webapp-screenshots docs-frame-webapp-screenshots docs-tour-gif docs-mockups docs-images docs docs-build
+.PHONY: docs-schema app-icons docs-capture docs-screenshots docs-webapp-screenshots docs-frame-webapp-screenshots docs-tour-gif docs-mockups docs-images docs docs-build
 docs-schema:  ## Regenerate docs/grove.schema.json from the Pydantic model
 	$(UV) run grove config schema --stdout > docs/grove.schema.json
 
@@ -58,12 +58,19 @@ docs-schema:  ## Regenerate docs/grove.schema.json from the Pydantic model
 app-icons:  ## Regenerate every app icon from docs/img/grove-logo.svg (needs chromium)
 	$(UV) run --group dev python -m tools.app_icons
 
-# Captures as SVG, then rasterizes and frames in one process — the SVG is a
-# sandbox intermediate and never reaches docs/. Needs `node` plus the webapp's
-# Playwright install for the raster step; `capture.py` preflights both before it
-# plants a fleet.
-docs-screenshots:  ## Regenerate the framed TUI PNG screenshots from the live TUI
-	$(UV) run --group dev python -m tools.screenshots.capture
+# ONE seed serves both halves: `capture.py` plants the demo world once, brings
+# up one sandbox daemon, then shoots the TUI and the web dashboard against it.
+# Seeding is most of the cost (a year of usage history), so `docs-capture` is
+# what CI runs; the two single-half targets exist for iterating on one surface.
+# Needs `node` plus the webapp's Playwright install; `capture.py` preflights
+# both before it plants anything.
+docs-capture: webapp-build  ## Regenerate every TUI + web screenshot from ONE seeded demo world
+	$(UV) run --group dev python -m tools.screenshots.capture --shots tui,webapp
+	$(MAKE) docs-frame-webapp-screenshots
+	$(MAKE) docs-tour-gif
+
+docs-screenshots:  ## Regenerate the framed TUI PNG screenshots only
+	$(UV) run --group dev python -m tools.screenshots.capture --shots tui
 
 # The desktop shots, and only those. Framing is not idempotent — a second
 # pass frames the frame — so the set is named rather than globbed, and it is
@@ -72,8 +79,8 @@ docs-screenshots:  ## Regenerate the framed TUI PNG screenshots from the live TU
 # which supplies its own device shell.
 FRAMED_SHOTS := $(addprefix docs/img/screenshots/,webapp-home.png webapp-composer.png webapp-sessions.png webapp-workspace.png webapp-annotate.png webapp-diagram-split.png webapp-diagram.png webapp-diagram-palette.png webapp-usage.png webapp-usage-detail.png webapp-pair-device.png webapp-pair-code.png)
 
-docs-webapp-screenshots: webapp-build  ## Regenerate the web dashboard PNG screenshots (needs webapp/.next)
-	$(UV) run python -m tools.screenshots.webapp_capture
+docs-webapp-screenshots: webapp-build  ## Regenerate the web dashboard PNG screenshots only (needs webapp/.next)
+	$(UV) run --group dev python -m tools.screenshots.capture --shots webapp
 	$(MAKE) docs-frame-webapp-screenshots
 	$(MAKE) docs-tour-gif
 
@@ -88,7 +95,7 @@ docs-tour-gif:  ## Build the looping web dashboard tour GIF from the framed shot
 docs-mockups:  ## Composite the landing-page device mockups from the latest screenshots
 	$(UV) run python -m tools.screenshots.mockups
 
-docs-images: docs-screenshots docs-webapp-screenshots docs-mockups  ## Regenerate every doc image (TUI + web + mockups)
+docs-images: docs-capture docs-mockups  ## Regenerate every doc image (TUI + web + mockups)
 
 docs: docs-schema  ## Serve the docs site locally (live reload)
 	$(UV) run --group docs mkdocs serve
@@ -152,8 +159,14 @@ MCP_BIN   ?= $(shell command -v grove-mcp 2>/dev/null)
 NPM_BIN   ?= $(shell command -v npm 2>/dev/null)
 NODE_BIN_DIR := $(if $(NPM_BIN),$(dir $(NPM_BIN)),)
 
+# The npm Grove ships (`nodejs-wheel`, a base dependency) sits beside the
+# interpreter in the project venv, so the webapp builds on a known Node 24
+# whatever the host's nvm default is. The shell's npm is only the fallback,
+# for a checkout whose venv has not been synced yet.
+VENV_NPM_BIN := $(wildcard $(CURDIR)/.venv/bin/npm)
+
 WEBAPP_DIR ?= $(CURDIR)/webapp
-WEBAPP_NPM_BIN ?= $(NPM_BIN)
+WEBAPP_NPM_BIN ?= $(or $(VENV_NPM_BIN),$(NPM_BIN))
 WEBAPP_NODE_BIN_DIR := $(if $(WEBAPP_NPM_BIN),$(dir $(WEBAPP_NPM_BIN)),)
 
 # Naming the npm does NOT choose the Node that runs it. Every npm is a
@@ -181,6 +194,45 @@ webapp-test:  ## Run webapp unit + component tests
 
 webapp-gate:  ## Run webapp's full gate (typecheck, registry drift, styling, tests)
 	cd $(WEBAPP_DIR) && $(WEBAPP_NPM) run gate
+
+# The prebuilt dashboard that ships inside the wheel, served by `grove web`.
+#
+# Built in a scratch copy of the COMMITTED webapp (`git ls-files`), never in
+# webapp/ itself: a build rewrites `.next` in place, and that directory may be
+# what a live grove-webapp is serving from this checkout. `node_modules` is
+# hard-linked (Turbopack rejects a symlinked one) so the copy costs no disk.
+#
+# `sharp` is traced even with unoptimized images, and it is the only native
+# code in the bundle: removing it is what lets one pure-JS wheel serve every
+# OS. Its loader is lazy, so nothing touches it once images are unoptimized.
+#
+# The finished bundle is assembled beside the live one and swapped in with two
+# renames, only after the build and the native-module check both pass. An
+# editable install serves src/grove/_webapp directly, so deleting it first (as
+# this recipe once did) left a running `grove web` with no files for the whole
+# build, and a failed build left it with none at all.
+WEBAPP_BUNDLE_OUT := $(CURDIR)/src/grove/_webapp
+WEBAPP_BUNDLE_TMP := $(CURDIR)/build/webapp-bundle
+WEBAPP_BUNDLE_NEW := $(CURDIR)/build/webapp-bundle-out
+
+.PHONY: webapp-bundle
+webapp-bundle: webapp-install  ## Build the standalone dashboard into src/grove/_webapp (shipped in the wheel)
+	rm -rf $(WEBAPP_BUNDLE_TMP) $(WEBAPP_BUNDLE_NEW)
+	mkdir -p $(WEBAPP_BUNDLE_TMP)
+	cd $(WEBAPP_DIR) && git ls-files -z | xargs -0 cp --parents -t $(WEBAPP_BUNDLE_TMP)
+	cp -al $(WEBAPP_DIR)/node_modules $(WEBAPP_BUNDLE_TMP)/node_modules
+	cd $(WEBAPP_BUNDLE_TMP) && GROVE_WEBAPP_BUNDLE=1 $(WEBAPP_NPM) run build
+	cp -a $(WEBAPP_BUNDLE_TMP)/.next/standalone $(WEBAPP_BUNDLE_NEW)
+	cp -a $(WEBAPP_BUNDLE_TMP)/.next/static $(WEBAPP_BUNDLE_NEW)/.next/static
+	cp -a $(WEBAPP_BUNDLE_TMP)/public $(WEBAPP_BUNDLE_NEW)/public
+	rm -rf $(WEBAPP_BUNDLE_NEW)/node_modules/sharp $(WEBAPP_BUNDLE_NEW)/node_modules/@img
+	@if find $(WEBAPP_BUNDLE_NEW) -name '*.node' | grep -q .; then \
+		echo "native module left in the bundle; the wheel would be platform-specific:" >&2; \
+		find $(WEBAPP_BUNDLE_NEW) -name '*.node' >&2; exit 1; fi
+	rm -rf $(WEBAPP_BUNDLE_OUT).old
+	if [ -d $(WEBAPP_BUNDLE_OUT) ]; then mv $(WEBAPP_BUNDLE_OUT) $(WEBAPP_BUNDLE_OUT).old; fi
+	mv $(WEBAPP_BUNDLE_NEW) $(WEBAPP_BUNDLE_OUT)
+	rm -rf $(WEBAPP_BUNDLE_OUT).old $(WEBAPP_BUNDLE_TMP)
 
 # ─── systemd (Linux user-scope) ─────────────────────────────────────────────
 #
@@ -249,25 +301,6 @@ _systemd-precheck:
 	  exit 1; \
 	fi
 	@echo "✓ grove: $(GROVE_BIN)"
-	@if [ -n "$(WITH_WEBAPP)" ]; then \
-	  if [ -z "$(WEBAPP_NPM_BIN)" ]; then \
-	    echo "✗ npm not on PATH (required for WITH_WEBAPP=1)." >&2; exit 1; \
-	  fi; \
-	  if [ ! -d "$(WEBAPP_DIR)" ]; then \
-	    echo "✗ webapp dir not found at $(WEBAPP_DIR) — set WEBAPP_DIR=<path>." >&2; exit 1; \
-	  fi; \
-	  if [ ! -d "$(WEBAPP_DIR)/.next" ]; then \
-	    echo "⚠  $(WEBAPP_DIR)/.next not found — run 'make webapp-build' before 'make systemd-enable'."; \
-	  fi; \
-	  major=$$("$(WEBAPP_NODE_BIN_DIR)node" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo ""); \
-	  if [ -z "$$major" ]; then \
-	    echo "⚠  could not probe Node next to $(WEBAPP_NPM_BIN) — webapp needs Node >= 22 (Next 16)."; \
-	  elif [ "$$major" -lt 22 ]; then \
-	    echo "✗ webapp needs Node >= 22 (Next 16); $(WEBAPP_NPM_BIN) is Node $$major. Set WEBAPP_NPM_BIN=<path to a Node 22+ npm>." >&2; exit 1; \
-	  fi; \
-	  echo "✓ npm: $(WEBAPP_NPM_BIN)"; \
-	  echo "✓ webapp dir: $(WEBAPP_DIR)"; \
-	fi
 	@if [ -n "$(WITH_MCP)" ]; then \
 	  if [ -z "$(MCP_BIN)" ]; then \
 	    echo "✗ grove-mcp not on PATH (required for WITH_MCP=1). Reinstall with the mcp extra: 'uv tool install --reinstall --force --editable .[all]'" >&2; exit 1; \
@@ -285,9 +318,6 @@ _SED_SUBST := sed \
 	-e 's,@DAEMON_PATH@,$(DAEMON_PATH),g' \
 	-e 's,@DAEMON_HOST@,$(DAEMON_HOST),g' \
 	-e 's,@DAEMON_PORT@,$(DAEMON_PORT),g' \
-	-e 's,@WEBAPP_DIR@,$(WEBAPP_DIR),g' \
-	-e 's,@NPM_BIN@,$(WEBAPP_NPM_BIN),g' \
-	-e 's,@NODE_BIN_DIR@,$(WEBAPP_NODE_BIN_DIR:/=),g' \
 	-e 's,@WEBAPP_HOST@,$(WEBAPP_HOST),g' \
 	-e 's,@WEBAPP_PORT@,$(WEBAPP_PORT),g' \
 	-e 's,@MCP_BIN@,$(MCP_BIN),g' \
@@ -301,7 +331,11 @@ _systemd-install-daemon: _systemd-precheck
 	@mv -f "$(SYSTEMD_USER_DIR)/grove-daemon.service.tmp" "$(SYSTEMD_USER_DIR)/grove-daemon.service"
 	@echo "✓ wrote $(SYSTEMD_USER_DIR)/grove-daemon.service"
 
+# Proven against the real install before the unit is written, never in the
+# shared precheck: `systemd-print` is a dry run and must render for any GROVE_BIN.
 _systemd-install-webapp: _systemd-precheck
+	@"$(GROVE_BIN)" web --check >/dev/null || { \
+	  echo "✗ $(GROVE_BIN) cannot serve the web dashboard. Reinstall: 'uv tool install --reinstall grove-factory'." >&2; exit 1; }
 	@mkdir -p "$(SYSTEMD_USER_DIR)"
 	@$(_SED_SUBST) "$(SYSTEMD_TEMPLATE_DIR)/grove-webapp.service.in" > "$(SYSTEMD_USER_DIR)/grove-webapp.service.tmp"
 	@mv -f "$(SYSTEMD_USER_DIR)/grove-webapp.service.tmp" "$(SYSTEMD_USER_DIR)/grove-webapp.service"

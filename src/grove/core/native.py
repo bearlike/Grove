@@ -62,6 +62,10 @@ class NativeSteerClient(Protocol):
 
     def invoke_control(self, state: WorkspaceState, name: str) -> None: ...
 
+    def run_macro(self, state: WorkspaceState, macro: str) -> None:
+        """Run a Grove command's steps in order; ``macro`` is the manager's rendered JSON."""
+        ...
+
     def answer(self, state: WorkspaceState, plan: str) -> None:
         """Resolve the standing ask; ``plan`` is the manager's rendered JSON."""
         ...
@@ -137,6 +141,13 @@ class ChannelSteerClient:
             "the channel receiver carries messages only; commands need a native session"
         )
 
+    def run_macro(self, state: WorkspaceState, macro: str) -> None:
+        del macro
+        self._session_id(state)
+        raise SteeringUnsupported(
+            "the channel receiver carries messages only; Grove commands need a native session"
+        )
+
     def answer(self, state: WorkspaceState, plan: str) -> None:
         del plan
         self._session_id(state)
@@ -198,6 +209,11 @@ class DaemonSteerClient:
     def invoke_control(self, state: WorkspaceState, name: str) -> None:
         self._post(state, "controls/invoke", {"name": name})
 
+    def run_macro(self, state: WorkspaceState, macro: str) -> None:
+        # The daemon route takes the command NAME and resolves it against the
+        # daemon's own config, the one cascade the owner's workspace was built from.
+        self._post(state, "controls/invoke", {"name": f"grove:{json.loads(macro)['name']}"})
+
     def answer(self, state: WorkspaceState, plan: str) -> None:
         # The daemon's answer route takes the wire shape, not the rendered
         # plan, and the manager that called us has already validated it; so
@@ -250,12 +266,7 @@ class DaemonSteerClient:
         if self._token is None:
             from grove.core.auth import SessionStore  # noqa: PLC0415 — off the import path
 
-            store = SessionStore()
-            challenge = store.pair_init(label="local-native-steer")
-            store.pair_approve(challenge.challenge_id)
-            _, token = store.pair_poll(challenge.challenge_id)
-            if token is None:  # pragma: no cover - approve-then-poll always mints
-                raise SteeringUnsupported("could not mint a local daemon session")
+            token = SessionStore().mint_local("local-native-steer")
             self._token = token
         return self._token
 

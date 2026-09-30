@@ -126,6 +126,9 @@ to ACTIVE. If the worktree itself is gone, the workspace is ORPHANED and
   [web dashboard](use-webapp.md)'s home surface, reachable from any device
   over a paired session, never an open port, streaming the focused pane
   live over SSE and running the full lifecycle.
+- **Let an agent lead.** One agent spawns and steers the others over the
+  [MCP server](use-mcp.md) and the mailbox, following the `leading-in-grove`
+  skill.
 - **One agent, one shell.** Spawn an agent workspace and a `shell` workspace
   on the same branch (*Existing local*), one to change code, one to run
   `make test` or `git diff`.

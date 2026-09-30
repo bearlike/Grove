@@ -12,10 +12,16 @@ import { deriveTitle } from "@/lib/grove/adapters/launch";
  * holds its text in plain React state, which is what let it drop the
  * assistant-ui runtime entirely.
  */
-export function LaunchDerivedTitle({ prompt }: { readonly prompt: string }): React.ReactNode {
+export function LaunchDerivedTitle({
+  prompt,
+  salt,
+}: {
+  readonly prompt: string;
+  readonly salt: string;
+}): React.ReactNode {
   if (!prompt.trim()) return null;
 
   return (
-    <p className="text-content-tertiary text-sm">will be called &quot;{deriveTitle(prompt)}&quot;</p>
+    <p className="text-content-tertiary text-sm">will be called &quot;{deriveTitle(prompt, salt)}&quot;</p>
   );
 }

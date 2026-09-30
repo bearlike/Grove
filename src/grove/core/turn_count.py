@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -198,13 +199,29 @@ class TurnCountCache:
                 out[_key(ref)] = entry.facts
         return out
 
-    def fill(self, refs: Sequence[SessionRef], *, stop: Callable[[], bool] | None = None) -> int:
+    def fill(
+        self,
+        refs: Sequence[SessionRef],
+        *,
+        stop: Callable[[], bool] | None = None,
+        pace: Callable[[float], None] | None = None,
+    ) -> int:
         """Measure every ref this cache cannot answer, persisting as it goes.
 
         Blocking and unbounded by contract — a cold pass over a whole host is
         tens of seconds — so it belongs on a background worker, never inside a
         request. ``stop`` is polled between sessions so a shutdown does not wait
         out the pass; whatever was measured before it fired is already durable.
+
+        ``pace`` is called after every session that was actually parsed, with
+        the seconds that parse took, and is where a caller sharing its process
+        gives the GIL back. The parse is pure Python and holds the GIL for
+        long stretches, so without a real sleep between sessions every other
+        thread in the process — a SQLite read stepping rows, a request handler —
+        convoys behind it. Pacing is the CALLER's policy because only the
+        caller knows whether anything else is running: the daemon paces, a
+        one-shot warm-up with nothing beside it should not. Sessions answered
+        from the cache are not paced; they cost a ``stat``.
 
         Takes the WHOLE ref set rather than the misses alone, because the set is
         also what prunes: a session whose transcript is gone is gone from the
@@ -228,7 +245,10 @@ class TurnCountCache:
             before = _fingerprint(ref.transcript_path)
             if before is None:
                 continue
+            started = time.monotonic()
             facts = self._measure(ref)
+            if pace is not None:
+                pace(time.monotonic() - started)
             if facts is None:
                 continue
             measured[key] = _Remembered(
@@ -242,10 +262,14 @@ class TurnCountCache:
         return total
 
     def fill_result(
-        self, refs: Sequence[SessionRef], *, stop: Callable[[], bool] | None = None
+        self,
+        refs: Sequence[SessionRef],
+        *,
+        stop: Callable[[], bool] | None = None,
+        pace: Callable[[float], None] | None = None,
     ) -> CountFillResult:
         """Fill pending rows and say whether this exact snapshot is now complete."""
-        counted = self.fill(refs, stop=stop)
+        counted = self.fill(refs, stop=stop, pace=pace)
         if stop is not None and stop():
             return CountFillResult(counted=counted, complete=False)
         return CountFillResult(counted=counted, complete=not self._pending(refs))

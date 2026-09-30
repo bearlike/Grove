@@ -209,6 +209,11 @@
     "item": "elements-error-state",
     "source": "assistant-ui"
   },
+  "components/elements/feedback-dialog.tsx": {
+    "sha256": "fda6ee57e943fb4bd41189dba8f0003cbe383ab0326106424ea5ae661297d360",
+    "item": "elements-feedback-dialog",
+    "source": "assistant-ui"
+  },
   "components/elements/file-tree.tsx": {
     "sha256": "c30b358044484ca9c128036d4703d4c7489f2e4369945ffa3e70b0d973da91b7",
     "item": "elements-file-tree",

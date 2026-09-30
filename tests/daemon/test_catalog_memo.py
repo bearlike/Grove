@@ -11,6 +11,7 @@ single-flight contract.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import replace
@@ -24,7 +25,7 @@ from grove.core.gallery import GalleryItem
 from grove.core.process import LiveRuntime
 from grove.core.sessions import CatalogEntry
 from grove.core.turn_count import CountFillResult
-from grove.daemon._catalog import _CatalogMemo, _GalleryMemo
+from grove.daemon._catalog import _TURN_COUNT_IDLE_PER_BUSY, _CatalogMemo, _GalleryMemo
 
 
 def _entry(
@@ -59,15 +60,21 @@ class _CountingCatalog:
         self.release = threading.Event()
         self.entered = threading.Event()
         self.finished = threading.Event()
+        self.pace: Callable[[float], None] | None = None
 
     def scan(self, *, limit: int | None = None) -> tuple[CatalogEntry, ...]:
         self.scans += 1
         return self.rows if limit is None else self.rows[:limit]
 
     def count_turn_facts(
-        self, entries: Sequence[CatalogEntry], *, stop: Callable[[], bool] | None = None
+        self,
+        entries: Sequence[CatalogEntry],
+        *,
+        stop: Callable[[], bool] | None = None,
+        pace: Callable[[float], None] | None = None,
     ) -> CountFillResult:
         del entries, stop
+        self.pace = pace
         self.counted += 1
         self.entered.set()
         self.release.wait(timeout=5)
@@ -511,6 +518,68 @@ def test_failed_turn_count_pass_retries_for_the_same_generation(
         assert attempts == 2
     finally:
         memo.close()
+
+
+class _PacedCatalog(_CountingCatalog):
+    """A pass that reports one ``busy``-second parse and times the yield after it."""
+
+    def __init__(self, rows: tuple[CatalogEntry, ...], *, busy: float) -> None:
+        super().__init__(rows)
+        self.busy = busy
+        self.yielded: float | None = None
+
+    def count_turn_facts(
+        self,
+        entries: Sequence[CatalogEntry],
+        *,
+        stop: Callable[[], bool] | None = None,
+        pace: Callable[[float], None] | None = None,
+    ) -> CountFillResult:
+        del entries, stop
+        started = time.monotonic()
+        self.entered.set()
+        if pace is not None:
+            pace(self.busy)
+        self.yielded = time.monotonic() - started
+        return CountFillResult(counted=1, complete=True)
+
+
+def test_the_daemons_turn_count_pass_idles_in_proportion_to_each_parse() -> None:
+    """The daemon's pass must give the GIL back for REAL time after every parse.
+
+    Measured before this existed: a 200k-row SQLite read beside the pass took
+    10.3 s against 0.12 s quiet, and ``sleep(0)`` between sessions changed
+    nothing — so this asserts the yield lasts a share of the parse's own
+    duration, which neither an absent hook nor a zero sleep satisfies.
+    """
+    catalog = _PacedCatalog((_entry("a"),), busy=0.2)
+    memo = _memo(catalog)
+    try:
+        memo.rows()
+        memo.count_turns_in_background()
+        assert memo._counting is not None
+        memo._counting.result(timeout=5)
+        assert catalog.yielded is not None
+        assert catalog.yielded >= 0.2 * _TURN_COUNT_IDLE_PER_BUSY * 0.9
+    finally:
+        memo.close()
+
+
+def test_close_cuts_a_pacing_idle_short() -> None:
+    """Shutdown never waits out the pass, so it must not wait out its pacing either."""
+    catalog = _PacedCatalog((_entry("a"),), busy=60.0)
+    memo = _memo(catalog)
+    memo.rows()
+    memo.count_turns_in_background()
+    assert catalog.entered.wait(timeout=5)
+    counting = memo._counting
+    assert counting is not None
+
+    memo.close()
+
+    counting.result(timeout=5)
+    assert catalog.yielded is not None
+    assert catalog.yielded < 5
 
 
 def test_close_stops_scheduling_and_does_not_wait_for_a_pass_in_flight() -> None:

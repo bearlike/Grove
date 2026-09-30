@@ -60,7 +60,7 @@ function LaunchSurfaceContent(): React.ReactNode {
 
   return (
     <main
-      className="flex min-h-0 flex-1 flex-col"
+      className="launch-surface flex min-h-0 flex-1 flex-col"
       data-testid={LAUNCH_TESTIDS.page}
       // Only the measure. The composer's surface is the vendored
       // `ComposerBar`'s, so this file has no opinion about its look.
@@ -99,7 +99,7 @@ function LaunchSurfaceContent(): React.ReactNode {
             all. It is deliberately wider than the text it sits behind so the
             fade lands on empty space rather than mid-sentence.
           */}
-          <span aria-hidden className="launch-brand-field absolute -inset-x-24 -top-16 bottom-0" />
+          <span aria-hidden className="launch-brand-field absolute -inset-x-40 -top-24 -bottom-4" />
           {/*
             THE APP ICON, not the bare mark: this is the one place in the app
             where the logo stands alone above a blank page with nothing else
@@ -180,7 +180,7 @@ function LaunchSurfaceContent(): React.ReactNode {
           </div>
         ) : null}
         <div data-testid={LAUNCH_TESTIDS.derivedTitle}>
-          <LaunchDerivedTitle prompt={launch.prompt} />
+          <LaunchDerivedTitle prompt={launch.prompt} salt={launch.titleSalt} />
         </div>
         <div
           className="flex items-center justify-center gap-1"

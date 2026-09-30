@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -447,3 +448,32 @@ def test_an_entry_whose_duration_predates_a_NESTED_field_is_refused_too(
     # "the next read accepts it" is the property; the key's spelling is not.
     assert cache.facts_for(refs)[("claude_code", SID)].turns == 2
     assert cache.fill(refs) == 0
+
+
+def test_pace_is_handed_each_parse_duration_and_skips_cache_hits(
+    cache: TurnCountCache, claude_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The GIL yield has to follow every PARSE, with that parse's own duration.
+
+    A caller sharing the process (the daemon) paces in proportion to how long
+    the parse held the GIL, so the hook needs the real elapsed time — a slowed
+    ``_measure`` proves it is timed rather than guessed. Cache hits cost a
+    ``stat`` and must not be paced, or a warm host's pass would idle for nothing.
+    """
+    cwd = tmp_path / "repo"
+    first = _ref(SID, cwd, _write(claude_home, SID, cwd, turns=1))
+    second = _ref(OTHER_SID, cwd, _write(claude_home, OTHER_SID, cwd, turns=2))
+    assert cache.fill([first]) == 1  # `first` is now a hit
+
+    real_measure = TurnCountCache._measure
+
+    def slow_measure(ref: SessionRef) -> object:
+        time.sleep(0.05)
+        return real_measure(ref)
+
+    monkeypatch.setattr(cache, "_measure", slow_measure)
+    paced: list[float] = []
+
+    assert cache.fill([first, second], pace=paced.append) == 1
+    assert len(paced) == 1
+    assert paced[0] >= 0.05

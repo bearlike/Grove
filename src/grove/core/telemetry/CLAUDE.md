@@ -199,6 +199,57 @@ instance, so a blank row is work that was recorded and cannot be found.
   replayed from here on and leaves history exactly as it was — which is the
   correct default, and the reason no reindex is needed. Do not "fix" the
   mismatch by clearing checkpoints.
+- **A human rating joins the trace by the turn's `started_at`, never by an id
+  the client holds (`feedback.py`, `trace.turn_trace_id`).** The wire turn's
+  `started_at` and the replay's turn anchor are the same prompt timestamp
+  (measured 25/25 on a live session), so the daemon re-derives the trace id with
+  the replay's own derivation, and a client can never annotate a trace the replay
+  would not produce. An OPEN turn rates too: its id derives from the anchor
+  alone, so it is the id the replay exports once the turn closes. The seed is the LIVE replay's, without `source_id`. A
+  backfilled session's traces are seeded with its source and a rating will not
+  reach them, which is the right trade for a surface that rates live work.
+  **Langfuse refuses an `ANNOTATION` score without its rubric's `configId`**
+  (measured, not documented where you would look), so `record` looks the configs
+  up by name and checks every one BEFORE the first write. Checking per score
+  posted the verdict and then refused the reason, which leaves a half-recorded
+  rating. Score ids derive from trace + name (+ reason), so a re-vote overwrites.
+  An unticked reason is DELETEd by the same id, and deleting an absent score
+  answers 200, so there is no 404 branch. A score names exactly ONE target:
+  `traceId` plus `sessionId` is a 400, and the trace already belongs to its
+  session. **Verify a score by `GET /api/public/v2/scores/{id}` with the
+  derived id, never by listing.** On this self-hosted instance (2026-09-29) the
+  list reported `totalItems: 0` for the whole project while GET-by-id returned
+  the score, and the CLI's `scores list` targets a v3 path the instance 404s.
+  "Nothing listed" there is a reader problem, not a lost write.
+- **From 2026-09-16 to 2026-09-29, EVERY span Grove emitted raised inside
+  `span.end()`, and nothing said so.** The OpenTelemetry SDK began calling a
+  span processor's `_on_ending` hook; `_AcknowledgingSpanProcessor` is
+  duck-typed (subclassing `SpanProcessor` would import the SDK at module scope
+  and break the lean install), so it did not inherit the hook's no-op.
+  `replay()` swallows exceptions by design, so the replay and context tiers
+  simply went dark: no `agent-turn` traces, every rating pointing at a trace
+  Langfuse never received ("Trace not found"). The local collector had also
+  been refusing data under memory pressure that same day, which made the host
+  look like the cause. **The discriminator was running the real sink
+  in-process against one real turn** — the crash is the first line of output,
+  while the logs held nothing. Every processor test had fed `on_end` a bare
+  `object()`, so no real span ever passed through the class. The guard now
+  drives a real span through the production `sink_from_processor` +
+  `_AcknowledgingSpanProcessor` pairing, so the NEXT hook the SDK adds fails
+  there instead of in silence. **A best-effort swallow on the only path that
+  exercises a seam turns an SDK upgrade into a silent outage; the test for such
+  a seam must go through the swallowed path's real objects.**
+- **`langfuse.user.id` is the host account, set once per daemon.** Traces
+  reached Langfuse with no user, so "whose work is this" had no answer on the
+  vendor's own user axis. It is an attribute, never a tag (high cardinality),
+  and only Grove's own spans carry it — the tier-1 resource carries no
+  `langfuse.*` keys at all.
+- **Praise and complaint are two rubrics, and a flipped vote withdraws the old
+  verdict's reasons.** `user-feedback-praise` exists beside
+  `user-feedback-reason` because a category's meaning must not depend on which
+  way the thumb pointed; one rubric answering both could not calibrate a judge.
+  `withdrawn` walks BOTH catalogs minus what was just ticked, so a turn rated
+  down with a reason and then up does not keep the complaint.
 - **A generation span is zero-width and that is the honest answer, so do not
   "fix" it.** A transcript stamps a message once, when it was written, and
   carries no request-start or first-token time; tool spans get real durations

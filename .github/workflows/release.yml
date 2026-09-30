@@ -1,25 +1,78 @@
 name: Release
 
+# Publishing a GitHub release is the one thing that ships Grove to PyPI.
+#
+# This file lives on both forges, because the tree is mirrored whole, and it
+# must only ever act on GitHub. Two independent locks make that hold:
+#   1. The trigger. Only a `release` being published starts it, and the
+#      self-hosted forge's releases are never what gets published.
+#   2. The `github.server_url` guard on every job, so even a release made on the
+#      other forge (or a manual dispatch there) runs nothing.
+# PyPI adds a third: Trusted Publishing accepts an OIDC token only from the
+# repository, workflow and environment registered for the project, so a run
+# anywhere else cannot authenticate even if both locks above were removed.
+#
+# The release's tag names the version, and it must equal pyproject's. A
+# mismatch fails before anything is uploaded: PyPI never takes a version back,
+# so a wrong number published once is wrong forever.
+
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
-  contents: write
-  id-token: write  # required for PyPI Trusted Publishing (OIDC)
+  contents: read
 
 jobs:
   build:
     name: Build wheel + sdist
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
         with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          ref: ${{ github.event.release.tag_name }}
+      - uses: astral-sh/setup-uv@v3
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}/toolcache
+        with:
+          enable-cache: false
+      # The webapp is Next 16; the wheel carries its prebuilt standalone server.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Tag matches the package version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          declared="$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          if [ "${TAG#v}" != "$declared" ]; then
+            echo "::error::release tag ${TAG} does not match pyproject.toml version ${declared}"
+            exit 1
+          fi
+      - name: Bundle the web dashboard
+        run: make webapp-bundle WEBAPP_NPM_BIN="$(command -v npm)"
+      # Two separate builds on purpose. A bare `uv build` builds the wheel FROM
+      # the sdist, and the sdist deliberately carries no dashboard (that would
+      # breach PyPI's size limit), so that wheel would ship without one.
       - name: Build
-        run: uv build
+        run: |
+          uv build --wheel
+          uv build --sdist
+      # What a user runs, from the file PyPI will serve, before it is uploaded.
+      - name: Smoke-install the wheel
+        run: |
+          set -euo pipefail
+          uv tool install dist/*.whl
+          "$(uv tool dir --bin)/grove" version
+          python_bin="$(uv tool dir)/grove-factory/bin/python"
+          "$python_bin" -c 'import grove.daemon.app, grove.mcp.server, opentelemetry.sdk, asyncssh'
+          # The dashboard and the Node that serves it both come from the wheel.
+          # A bare PATH hides the runner's own Node, so this cannot pass by
+          # falling back to it.
+          env -i HOME="$HOME" PATH=/usr/bin:/bin "$(uv tool dir --bin)/grove" web --check \
+            | tee /dev/stderr | grep -q 'nodejs_wheel'
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -27,54 +80,38 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
 
-  github-release:
-    name: Publish GitHub Release
+  release-assets:
+    name: Attach the build to the GitHub release
     needs: build
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
-      - uses: softprops/action-gh-release@v2
-        with:
-          name: "Grove ${{ github.ref_name }}"
-          generate_release_notes: true
-          body: |
-            ## Install
-
-            ```bash
-            # ephemeral, isolated env (recommended)
-            uvx --from grove-crew grove
-
-            # persistent install
-            uv tool install grove-crew==${{ github.ref_name }}
-
-            # bleeding edge (latest commit on main)
-            uvx --from git+https://github.com/${{ github.repository }} grove
-            ```
-
-            See the auto-generated notes below for the change summary.
-          files: |
-            dist/*.whl
-            dist/*.tar.gz
-          fail_on_unmatched_files: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
   pypi-publish:
     name: Publish to PyPI
     needs: build
+    if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
-    # Requires PyPI Trusted Publishing for this repo + workflow + environment.
-    # See https://docs.pypi.org/trusted-publishers/
+    # Trusted Publishing: PyPI trusts this repository + this workflow file +
+    # this environment, and nothing else. No API token exists to leak.
     environment:
       name: pypi
-      url: https://pypi.org/p/grove-crew
+      url: https://pypi.org/p/grove-factory
+    permissions:
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true

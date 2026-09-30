@@ -44,16 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-      # `--frozen --group dev`, never `--all-groups`: the latter reaches for
-      # metadata on every group's direct-URL requirement even when excluded,
-      # which pulled the docs theme (a GitHub release asset with no index
-      # mirror) and failed installs over a package no gate here runs.
-      - name: Install
-        run: uv sync --frozen --group dev
+      - uses: ./.github/actions/setup-python-env
 
       # Selection is comma-ANCHORED: a bare contains(gates, 'ruff') also fires
       # `ruff-format`, and the two are deliberately distinct — `ruff check --fix`

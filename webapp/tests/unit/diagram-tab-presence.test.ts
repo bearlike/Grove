@@ -19,6 +19,7 @@ describe("offeredPanelTabs", () => {
   it("leaves an ordinary workspace's strip exactly as it was", () => {
     expect(offeredPanelTabs(true, false)).toEqual([
       "terminal",
+      "trajectory",
       "changes",
       "files",
       "info",
@@ -29,6 +30,7 @@ describe("offeredPanelTabs", () => {
   it("adds Diagram in the census's position, never appended", () => {
     expect(offeredPanelTabs(true, true)).toEqual([
       "terminal",
+      "trajectory",
       "changes",
       "diagram",
       "files",

@@ -13,6 +13,7 @@ import os
 import sqlite3
 import subprocess
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -463,7 +464,10 @@ class _OpenCodeParser:
                     entries = []
                 current = message
             elif message.role == "assistant":
-                entries.extend(self._assistant_entries(message, outcomes))
+                entries.extend(
+                    replace(entry, at=message.timestamp)
+                    for entry in self._assistant_entries(message, outcomes)
+                )
         if current is not None or entries:
             turns.append(
                 SessionTurn(

@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import { ToolTimeline } from "@/components/grove/workspace/tool-timeline";
 
-/** The collapsed trigger's rendered markup — the stack only draws while closed. */
-function stack(icons: readonly string[]): { discs: number; more: string | null } {
-  const html = renderToStaticMarkup(
+/** The collapsed trigger's rendered markup. */
+function render(icons: readonly string[]): string {
+  return renderToStaticMarkup(
     <ToolTimeline
       open={false}
       onOpenChange={() => {}}
@@ -18,6 +18,10 @@ function stack(icons: readonly string[]): { discs: number; more: string | null }
       {null}
     </ToolTimeline>,
   );
+}
+
+function stack(icons: readonly string[]): { discs: number; more: string | null } {
+  const html = render(icons);
   return {
     discs: html.split("tool-icon-stack-disc").length - 1,
     more: html.match(/tool-icon-stack-more[^>]*>\+(\d+)</)?.[1] ?? null,
@@ -45,5 +49,12 @@ describe("the source stack is bounded", () => {
 
   it("draws nothing at all for a run whose steps had no marks", () => {
     expect(stack([])).toEqual({ discs: 0, more: null });
+  });
+});
+
+describe("the source stack is layered", () => {
+  it("numbers every coin by depth, counter last, so the first coin sits on top", () => {
+    const orders = [...render(SLUGS).matchAll(/--tool-stack-order:(\d+)/g)].map(m => Number(m[1]));
+    expect(orders).toEqual([0, 1, 2, 3, 4, 5]);
   });
 });

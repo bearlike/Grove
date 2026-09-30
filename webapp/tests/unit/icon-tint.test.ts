@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { iconTint } from "@/lib/grove/adapters/icon-tint";
 import catalog from "@/lib/grove/adapters/tool-catalog.json";
 
-const SLUGS = [...new Set((catalog.tools as { icon: string }[]).map(tool => tool.icon))];
+/** Builtin tool marks only: a brand mark may be monochrome by design (GitHub,
+ * Vercel), and a monochrome mark rightly has no accent to report. */
+const SLUGS = [...new Set(catalog.tools.map(tool => tool.icon))];
 
 describe("a disc is tinted from its own mark", () => {
   it("resolves a tint for every icon the catalog names", () => {
@@ -20,7 +22,8 @@ describe("a disc is tinted from its own mark", () => {
     // Pinned against the committed bundle, so these change only when the
     // artwork does — which is exactly the event worth reviewing.
     expect(iconTint("material-icon-theme:console")).toBe("#ff7043");
-    expect(iconTint("flat-color-icons:document")).toBe("#90caf9");
+    expect(iconTint("fluent-color:book-open-24")).toBe("#20ac9d");
+    expect(iconTint("grove:grove")).toBe("#c86e45");
   });
 
   it("reports no tint rather than guessing, for anything it cannot read", () => {

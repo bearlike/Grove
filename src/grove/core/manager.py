@@ -38,6 +38,7 @@ from grove.core.agents import (
     AgentQuestion,
     AnswerSelection,
     QueuedMessage,
+    SessionControl,
     SessionControls,
     TodoList,
     all_adapters,
@@ -49,7 +50,7 @@ from grove.core.agents.hook import DEFAULT_DAEMON_LOOPBACK_URL, ClaudeHook, Pend
 from grove.core.agents.registry import CONTEXT_VARIANT_SUFFIX
 from grove.core.agents.transcript_scope import config_dir_scope
 from grove.core.attachments import Attachment, AttachmentStore
-from grove.core.config import AgentKind, AgentSpec, GroveConfig, load_config
+from grove.core.config import MACRO_PREFIX, AgentKind, AgentSpec, GroveConfig, load_config
 from grove.core.container_agent import ContainerAgent, ContainerAgentEntry
 from grove.core.container_decor import DecorPayload, DecorPlan
 from grove.core.container_policy import AgentSharePlan
@@ -84,6 +85,7 @@ from grove.core.errors import (
     DiagramUnavailable,
     EnvSourceError,
     GroveError,
+    MacroNotFound,
     MewboError,
     PaneNotFound,
     QuestionAnswerInvalid,
@@ -2928,6 +2930,11 @@ class WorkspaceManager:
         the text *length*, never the content — steering text can hold
         secrets and events fan out to every subscriber and log sink.
         """
+        if not agent and not attachments and text.strip().startswith(MACRO_PREFIX):
+            # A Grove command is never agent input, so every surface that types
+            # into a session (web composer, `grove message`, MCP) inherits it here.
+            self.run_macro(workspace_id, text)
+            return
         state = self._reconcile_status(self._store.get(workspace_id))
         text = GroveInstruction.append(text, self._attachment_block(state, attachments))
         if agent:
@@ -3395,8 +3402,19 @@ class WorkspaceManager:
             configured=agent.models if agent is not None else (),
         )
         permission_mode = self._cfg.permission.default if self._cfg.permission.enabled else None
+        # Grove commands lead the list: they are what this host's operator
+        # declared, and only a native Claude session can run them.
+        grove_commands = (
+            tuple(
+                SessionControl(name=f"grove:{name}", scope="grove", detail=spec.description or None)
+                for name, spec in sorted(self._cfg.macros.items())
+            )
+            if kind == "claude_code" and self._steers_natively(state)
+            else ()
+        )
         return _dc_replace(
             scanned,
+            commands=grove_commands + scanned.commands,
             models=models,
             current_model=self._current_model(adapter, state, session_id),
             permission_mode=permission_mode,
@@ -3735,6 +3753,9 @@ class WorkspaceManager:
         raises ``CapabilityUnavailable`` (well-formed, but the runtime can't act
         on it). Best-effort dispatch semantics like ``send_message`` — 204/return
         is "delivered", not "ran"."""
+        if f"/{name.strip().lstrip('/')}".startswith(MACRO_PREFIX):
+            self.run_macro(workspace_id, name)
+            return
         state = self._reconcile_status(self._store.get(workspace_id))
         cleaned = name.strip().lstrip("/").strip()
         if not cleaned:
@@ -3747,6 +3768,36 @@ class WorkspaceManager:
             self._emit("control_invoked", state.id, {"control": cleaned.split(" ", 1)[0]})
             return
         self._deliver_control(workspace_id, cleaned)
+
+    def run_macro(self, workspace_id: str, invocation: str) -> None:
+        """Run the Grove command ``/grove:<name>`` declared in ``cfg.macros``.
+
+        The steps go to the native worker as ONE frame and it runs them in
+        order, each after the provider reports the previous one finished — the
+        owned stream is the only place that completion is observable, so a
+        terminal workspace (no completion signal) and a provider whose owner
+        cannot report one both refuse rather than fire the steps back to back.
+        Dispatch semantics like every steer: returning means the worker has the
+        command, not that it ran; progress lands in the workspace's stream pane.
+        """
+        name = invocation.strip().lstrip("/").removeprefix(MACRO_PREFIX.lstrip("/")).strip()
+        macro = self._cfg.macros.get(name)
+        if macro is None:
+            raise MacroNotFound(
+                f"no Grove command /grove:{name}; declare it under `macros` in config"
+                + (f" (known: {', '.join(sorted(self._cfg.macros))})" if self._cfg.macros else "")
+            )
+        state = self._reconcile_status(self._store.get(workspace_id))
+        kind = self.effective_kind(state)
+        if kind != "claude_code" or not self._steers_natively(state):
+            raise CapabilityUnavailable(
+                "Grove commands run on native Claude Code sessions, the one runtime that "
+                "reports when each step finishes"
+            )
+        self._native_steer().run_macro(
+            state, json.dumps({"name": name, "steps": list(macro.steps)})
+        )
+        self._emit("control_invoked", state.id, {"control": f"grove:{name}"})
 
     def switch_model(self, workspace_id: str, model: str) -> None:
         """Switch the running session's model where the agent exposes a switch

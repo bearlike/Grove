@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { PauseIcon, PlayIcon } from "lucide-react";
+import { create } from "zustand";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
@@ -33,7 +34,8 @@ import { cn } from "@/lib/utils";
  *                   already uses them.
  *
  * THE SCOPE IS THE SEAM, NOT A PROP. `ScannedTextScope` wraps the sidebar and
- * nothing else, so "the rail loops its overflow" is one decision in one place
+ * the few places a WORKSPACE TITLE is drawn (the page header, the fleet card),
+ * so "a name loops rather than losing its tail" is one decision per surface
  * rather than a `marquee` boolean threaded through `entity.tsx`, the group
  * heading and every metric cell — each of which a future caller could set
  * differently, which is exactly the disagreement `entity.tsx` refuses an `icon`
@@ -131,23 +133,32 @@ export function useScannedText(): ScannedText {
 }
 
 /**
- * The subtree whose overflowing text loops, and the one place its motion can be
- * switched off.
+ * The one pause switch for every scope on the page.
  *
- * The pause state lives here rather than in each label because the control has
- * to govern ALL of them at once: a reader who finds movement distracting is not
- * asking about one row. It is deliberately not persisted — `prefers-reduced-
- * motion` is the durable preference and this is the in-the-moment override.
+ * A store, not scope-local state: the rail's two renderings and the page
+ * header's title are separate scopes with no common parent below the shell
+ * (the same reason `useSidebarUi` is a store), and a reader who presses Pause
+ * is asking for the PAGE to hold still — a header title still looping after
+ * the rail stopped would leave WCAG 2.2.2's control only half working. It is
+ * deliberately not persisted — `prefers-reduced-motion` is the durable
+ * preference and this is the in-the-moment override.
  */
+const useMarqueePause = create<{ paused: boolean; setPaused(paused: boolean): void }>((set) => ({
+  paused: false,
+  setPaused: (paused) => set({ paused }),
+}));
+
+/** The subtree whose overflowing text loops rather than clipping. */
 export function ScannedTextScope({
   children,
 }: {
   children: React.ReactNode;
 }): React.ReactNode {
-  const [paused, setPaused] = useState(false);
+  const paused = useMarqueePause((state) => state.paused);
+  const setPaused = useMarqueePause((state) => state.setPaused);
   const value = useMemo<ScannedText>(
     () => ({ scanned: true, paused, setPaused }),
-    [paused],
+    [paused, setPaused],
   );
   return (
     <ScannedTextContext.Provider value={value}>

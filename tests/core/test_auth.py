@@ -411,3 +411,51 @@ def test_auth_file_is_written_0600_with_no_readable_window(store_path: Path) -> 
     assert stat.S_IMODE(store_path.stat().st_mode) == 0o600
     # No stage file survives, and none was ever visible at the final path.
     assert {p.name for p in store_path.parent.iterdir()} == {store_path.name}
+
+
+# ─── mint_local ─────────────────────────────────────────────────────────────
+
+
+def test_mint_local_does_not_accumulate_abandoned_sessions(store_path: Path) -> None:
+    """One label, many short-lived runs: the incident was 274 `local-watch` devices.
+
+    Each run mints and exits without revoking. After the idle window every
+    earlier run's session is abandoned, so only the newest may stay live.
+    """
+    store, clock = _fresh_store(store_path)
+    for _ in range(20):
+        store.mint_local("local-watch")
+        clock.advance(SessionStore.LOCAL_IDLE_REVOKE_AFTER + timedelta(seconds=1))
+    token = store.mint_local("local-watch")
+
+    live = [s for s in store.list_sessions() if s.label == "local-watch"]
+    assert len(live) == 1
+    assert store.validate(token).session_id == live[0].session_id
+
+
+def test_mint_local_keeps_a_concurrent_client_with_the_same_label(store_path: Path) -> None:
+    """Two MCP servers share a label; the second mint must not revoke the first."""
+    store, clock = _fresh_store(store_path)
+    first = store.mint_local("local-mcp")
+    clock.advance(timedelta(minutes=1))
+    store.validate(first)  # the first client is still making requests
+    store.mint_local("local-mcp")
+
+    assert store.validate(first).label == "local-mcp"
+    assert len([s for s in store.list_sessions() if s.label == "local-mcp"]) == 2
+
+
+def test_mint_local_leaves_other_labels_alone(store_path: Path) -> None:
+    store, clock = _fresh_store(store_path)
+    phone = store.mint_local("phone")
+    clock.advance(SessionStore.LOCAL_IDLE_REVOKE_AFTER + timedelta(seconds=1))
+    store.mint_local("local-watch")
+
+    assert store.validate(phone).label == "phone"
+
+
+def test_mint_local_is_not_rate_limited(store_path: Path) -> None:
+    """A burst of local CLI calls must not hit the remote-pairing limiter."""
+    store, _ = _fresh_store(store_path, pair_init_per_minute=1)
+    tokens = {store.mint_local("local-watch") for _ in range(10)}
+    assert len(tokens) == 10

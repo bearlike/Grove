@@ -66,16 +66,26 @@ Three install channels:
 
 | Channel | Source | Cadence | Install |
 |---|---|---|---|
-| **Stable**       | PyPI (`v*` git tags)  | manually tagged | `uvx --from grove-crew grove` |
-| **Canary**       | git, `current` branch | every push to `current` | `uvx --from git+https://github.com/bearlike/Grove grove` |
+| **Stable**       | PyPI, from a published GitHub release | each release | `uv tool install grove-factory` |
+| **Canary**       | git, `current` branch | every push to `current` | `uv tool install "grove-factory @ git+https://github.com/bearlike/Grove"` |
 | **Pinned commit**| git, specific SHA     | reproducible installs | `uvx --from git+https://github.com/bearlike/Grove@<sha> grove` |
 
-Stable publishes a wheel and sdist to PyPI via Trusted Publishing, plus
-a GitHub Release. No per-OS binaries: `uvx` gives the isolation a native
-binary would, with less infrastructure.
+Publishing a release on GitHub is the one action that ships to PyPI. The
+release workflow runs on GitHub only and does nothing on any other forge.
+It checks that the release tag equals the version in `pyproject.toml`,
+since PyPI never takes a version back. It then bundles the web dashboard,
+builds the wheel and sdist, smoke-installs the wheel, attaches both to the
+release, and uploads them through PyPI Trusted Publishing, so no API token
+is stored anywhere.
 
-Canary is git-based, so nothing extra to publish, and pinning a SHA
-gives reproducibility with no parallel pipeline.
+To cut one, bump the version everywhere it is declared, merge, publish the
+`current` snapshot to GitHub, then publish a release tagged with that
+version (`0.1.0` or `v0.1.0`). A single pure Python wheel serves every
+platform, and `uvx` gives the isolation a native binary would.
+
+Canary and pinned installs build from git, so they need nothing published.
+They carry no prebuilt dashboard. Run `make webapp-bundle` in a checkout,
+or serve `webapp/` directly, to get one.
 
 ## See also
 

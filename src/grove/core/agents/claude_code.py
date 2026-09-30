@@ -37,7 +37,7 @@ import time
 from bisect import bisect_right
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -2565,7 +2565,14 @@ class _TranscriptParser:
             elif message.role == "notification":
                 # A notice the agent received mid-turn — an entry inside the
                 # current turn, never a new turn of its own.
-                entries.append(DigestEntry("notification", message.text(), mailbox=message.mailbox))
+                entries.append(
+                    DigestEntry(
+                        "notification",
+                        message.text(),
+                        mailbox=message.mailbox,
+                        at=message.timestamp,
+                    )
+                )
             elif message.role == "compaction" and message.compaction is not None:
                 # Same placement rule as a notification: the harness cut the
                 # context mid-turn, so the marker belongs inside the turn it
@@ -2575,13 +2582,17 @@ class _TranscriptParser:
                         "compaction",
                         message.compaction.headline(),
                         compaction=message.compaction,
+                        at=message.timestamp,
                     )
                 )
             elif message.role == "assistant":
                 if current is None and not entries and message.timestamp is not None:
                     # Leading continuation block inherits the first reply's time.
                     current = ("", message.timestamp, None)
-                entries.extend(cls._assistant_entries(message, outcomes, board))
+                entries.extend(
+                    replace(entry, at=message.timestamp)
+                    for entry in cls._assistant_entries(message, outcomes, board)
+                )
             # role == "tool": a result carrier — feeds `answered`, no entry.
         if current is not None or entries:
             _flush(*(current or ("", None, None)))
@@ -3340,6 +3351,7 @@ class ClaudeCodeAdapter:
             if title is None and isinstance(agent_type, str) and agent_type:
                 title = agent_type
             description = meta.get("description")
+            spawn = meta.get("toolUseId")
             out.append(
                 (
                     AgentSession(
@@ -3349,6 +3361,7 @@ class ClaudeCodeAdapter:
                         provenance="fs_discovered",
                         tmux_window=None,
                         parent_session_id=session_id,
+                        spawn_tool_use_id=spawn if isinstance(spawn, str) and spawn else None,
                     ),
                     self._fleet_thread_activity(
                         thread_messages,

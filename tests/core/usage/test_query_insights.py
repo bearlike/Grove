@@ -791,3 +791,75 @@ def test_temporal_cost_accounts_for_the_same_events_as_the_session_row(tmp_path:
     assert summary.cost_breakdown.known_cost == summary.cost
     assert row.cost == summary.cost
     store.close()
+
+
+def test_a_mid_day_bound_clamps_the_first_and_last_day_rather_than_the_whole_day(
+    tmp_path: Path,
+) -> None:
+    """The range bound moved out of the WHERE into the day spine, and a spine
+    covers WHOLE local days — so without the clamp a mid-day `since` would admit
+    the earlier part of its first day. Both edges carry an event on each side of
+    the bound; only the inside ones may count."""
+    store, query = _query(tmp_path)
+    _insert_session(store, session_id="before-since", at=_epoch(8, 3), provider_total=1)
+    _insert_session(store, session_id="after-since", at=_epoch(8, 15), provider_total=10)
+    _insert_session(store, session_id="before-until", at=_epoch(9, 3), provider_total=100)
+    _insert_session(store, session_id="after-until", at=_epoch(9, 15), provider_total=1000)
+
+    window = UsageFilters(
+        since=datetime(2026, 8, 8, 12, tzinfo=UTC), until=datetime(2026, 8, 9, 12, tzinfo=UTC)
+    )
+    tokens = query.activity(window, metric="tokens")
+
+    assert [(b.day, b.value, b.sessions) for b in tokens.buckets] == [
+        ("2026-08-08", 10.0, 1),
+        ("2026-08-09", 100.0, 1),
+    ]
+    store.close()
+
+
+def test_a_bounded_calendar_read_puts_no_timestamp_bound_in_the_event_where(
+    tmp_path: Path,
+) -> None:
+    """The incident: `e.ts >= since` beside the spine's own per-day range made
+    SQLite drive the `ix_events_ts` search off the WIDE bound, re-walking every
+    event after `since` once per bucket — a year-wide read took 14.4 s against
+    2.0 s without it, and the whole usage page serializes behind that read.
+    The EXPLAIN plan reads identically either way, so assert on the SQL shape:
+    the bound must live only in the spine."""
+    store, query = _query(tmp_path)
+    captured: list[str] = []
+    real = store.query
+
+    def spy(sql: str, params: Sequence[Any] = ()) -> list[Any]:
+        captured.append(sql)
+        return real(sql, params)
+
+    store.query = spy  # type: ignore[method-assign]
+    query.activity(UsageFilters(since=datetime(2026, 1, 1, tzinfo=UTC)), metric="tokens")
+    query.activity(UsageFilters(day="2026-08-08"), metric="cost")
+
+    calendar_reads = [sql for sql in captured if "JOIN bucket" in sql]
+    assert calendar_reads, "no calendar-grained read was issued"
+    for sql in calendar_reads:
+        where = sql.split(" WHERE ", 1)[1]
+        assert "e.ts >=" not in where and "e.ts <" not in where, where
+    store.close()
+
+
+def test_a_day_filter_draws_a_one_day_axis_as_series_does(tmp_path: Path) -> None:
+    """`activity` ignored `day=` when choosing its axis and built a whole-history
+    spine that only the WHERE narrowed — 365 zero buckets around one real one,
+    and a year-long scan once the bound moved into the spine. `series._spine`
+    already narrowed to the day; the two routes must agree on the axis."""
+    store, query = _query(tmp_path)
+    _insert_session(store, session_id="earlier", at=_epoch(1), provider_total=7)
+    _insert_session(store, session_id="chosen", at=_epoch(8), provider_total=3)
+    _insert_session(store, session_id="later", at=_epoch(20), provider_total=5)
+
+    for metric in METRICS:
+        view = query.activity(UsageFilters(day="2026-08-08"), metric=metric)
+        assert [b.day for b in view.buckets] in (["2026-08-08"], []), (metric, view.buckets)
+    tokens = query.activity(UsageFilters(day="2026-08-08"), metric="tokens")
+    assert [(b.day, b.value) for b in tokens.buckets] == [("2026-08-08", 3.0)]
+    store.close()

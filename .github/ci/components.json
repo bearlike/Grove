@@ -1,0 +1,126 @@
+{
+  "$comment": "The one map of which paths belong to which CI component. ci.yml's `changes` job reads `sources` to decide what runs; tests/test_ci_components.py proves every package and every test file has exactly one owner. Edit here, never in a workflow.",
+  "always_run_on": [
+    ".github/",
+    "pyproject.toml",
+    "uv.lock",
+    "Makefile"
+  ],
+  "components": {
+    "core": {
+      "sources": [
+        "src/grove/core/",
+        "src/grove/__init__.py",
+        "src/grove/_skills.py",
+        "src/grove/_truststore.py",
+        "src/grove/_mcp_sdk.py",
+        "src/grove/hook_producer.py",
+        "src/grove/statusline.py",
+        "src/grove/cli.py",
+        "src/grove/skills/",
+        "src/grove/.claude-plugin/"
+      ],
+      "tests": [
+        "tests/core/",
+        "tests/integration/",
+        "tests/test_cli_composition.py",
+        "tests/test_install_scripts.py",
+        "tests/test_mcp_sdk.py",
+        "tests/test_offline_guarantee.py",
+        "tests/test_statusline.py",
+        "tests/test_systemd_packaging.py",
+        "tests/test_truststore.py",
+        "tests/conftest.py"
+      ],
+      "dependents": [
+        "daemon",
+        "tui",
+        "client",
+        "mcp",
+        "tooling",
+        "webapp"
+      ]
+    },
+    "daemon": {
+      "sources": [
+        "src/grove/daemon/"
+      ],
+      "tests": [
+        "tests/daemon/"
+      ],
+      "dependents": [
+        "webapp"
+      ]
+    },
+    "tui": {
+      "sources": [
+        "src/grove/tui/"
+      ],
+      "tests": [
+        "tests/tui/",
+        "tests/cli/"
+      ],
+      "dependents": []
+    },
+    "client": {
+      "sources": [
+        "src/grove/client/"
+      ],
+      "tests": [
+        "tests/client/"
+      ],
+      "dependents": [
+        "mcp",
+        "tui"
+      ]
+    },
+    "mcp": {
+      "sources": [
+        "src/grove/mcp/"
+      ],
+      "tests": [
+        "tests/mcp/"
+      ],
+      "dependents": []
+    },
+    "tooling": {
+      "sources": [
+        "tools/",
+        "install.sh",
+        "install.ps1",
+        "reinstall.sh",
+        "packaging/"
+      ],
+      "tests": [
+        "tests/tools/"
+      ],
+      "dependents": []
+    },
+    "docs": {
+      "sources": [
+        "docs/",
+        "mkdocs.yml"
+      ],
+      "tests": [
+        "tests/docs/"
+      ],
+      "dependents": []
+    },
+    "webapp": {
+      "sources": [
+        "webapp/"
+      ],
+      "tests": [],
+      "dependents": []
+    },
+    "workflows": {
+      "sources": [
+        ".github/"
+      ],
+      "tests": [
+        "tests/test_ci_components.py"
+      ],
+      "dependents": []
+    }
+  }
+}

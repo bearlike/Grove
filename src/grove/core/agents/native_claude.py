@@ -10,11 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 from uuid import UUID, uuid4
 
-from grove.core.agents.model import AgentQuestion
+from grove.core.agents.model import AgentQuestion, NativeOperation
 from grove.core.agents.native_owner import (
     AskRecorder,
     FrameTrace,
@@ -88,6 +89,17 @@ class ClaudeNativeOwner:
         self._context_epoch = 0
         self._context_task: asyncio.Task[None] | None = None
         self._session_id: str | None = None
+        # The transitional step the stream last announced, so a repeated
+        # `status: compacting` heartbeat (every 30 s, measured 2.1.280) keeps
+        # the step's original start instead of restarting its clock.
+        self._operation: NativeOperation | None = None
+        # The model in the `--model` vocabulary (`system/init.model`, or the id a
+        # `set_model` just acknowledged) — NOT an assistant frame's `model`, which
+        # is the provider's namespace and switches back to nothing (measured 2.1.283).
+        self._model: str | None = None
+        # Inputs awaiting their `command_lifecycle` terminal state, by input uuid.
+        # Counting `result` frames cannot stand in: queued inputs merge into one turn.
+        self._commands: dict[str, asyncio.Future[str]] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
 
@@ -117,19 +129,20 @@ class ClaudeNativeOwner:
         try:
             if initial_prompt:
                 await self._write(self._input_frame(initial_prompt))
-            elif "--resume" in self._command:
-                # Idle resumes emit no system/init until a user turn. Initialize
-                # the control channel instead, without inventing a conversation.
-                index = self._command.index("--resume")
-                resumed_id = str(UUID(self._command[index + 1]))
+            elif (pinned_id := self._pinned_session_id()) is not None:
+                # `claude -p` emits no system/init until a user turn, so a start
+                # with nothing to say — an idle resume, or a create that carried
+                # no task — would wait out the timeout and kill the session.
+                # Initialize the control channel instead and take the id Grove
+                # pinned on the argv, without inventing a conversation.
                 if await self._control({"subtype": "initialize"}) is None:
-                    raise RuntimeError("native resume initialization was not acknowledged")
-                self._session_id = resumed_id
+                    raise RuntimeError("native session initialization was not acknowledged")
+                self._session_id = pinned_id
                 if self._asks is not None:
-                    self._asks.bind(resumed_id)
+                    self._asks.bind(pinned_id)
                 self._request_context()
                 if not self._init.done():
-                    self._init.set_result(resumed_id)
+                    self._init.set_result(pinned_id)
             return await asyncio.wait_for(asyncio.shield(self._init), self._timeout_seconds)
         except BaseException:
             # Cancel the startup waiter before reader cleanup can settle it with
@@ -139,6 +152,13 @@ class ClaudeNativeOwner:
                 self._init.exception()
             await self.close()
             raise
+
+    def _pinned_session_id(self) -> str | None:
+        """The session id on the argv — `--resume` continues one, `--session-id` mints one."""
+        for flag in ("--resume", "--session-id"):
+            if flag in self._command:
+                return str(UUID(self._command[self._command.index(flag) + 1]))
+        return None
 
     async def send(self, message_id: str, text: str) -> NativeSubmission:
         """Submit one mailbox message and await its exact native replay UUID."""
@@ -181,16 +201,68 @@ class ClaudeNativeOwner:
         2.1.270 comes back as a ``control_response`` error carrying the API's
         400), so a ``True`` means the next turn runs on ``model``.
         """
-        return await self._control({"subtype": "set_model", "model": model}) is not None
+        if await self._control({"subtype": "set_model", "model": model}) is None:
+            return False
+        # `init` re-reports the model only on the next turn, so a Grove command
+        # started before then would otherwise remember the model it switched away from.
+        self._model = model
+        return True
+
+    @property
+    def current_model(self) -> str | None:
+        return self._model
+
+    async def run_command(self, command: str) -> bool:
+        """Send one slash command as input and wait for its ``command_lifecycle`` end.
+
+        Measured on 2.1.283: every stream-json input carrying a ``uuid`` is
+        reported ``queued`` → ``started`` → ``completed`` (or ``cancelled``)
+        against that uuid — for ``/compact``, ``/model <id>`` and an unknown
+        command alike — so the wait needs no timeout of its own: a compaction
+        legitimately takes minutes, and a dead child settles it through
+        ``_finish_pending``.
+        """
+        text = command.strip()
+        process = self._process
+        if not text or process is None or self._closed or process.returncode is not None:
+            return False
+        native_id = str(uuid4())
+        finished: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._commands[native_id] = finished
+        try:
+            async with self._write_lock:
+                await self._write(self._input_frame(text, native_id))
+            return await finished == "completed"
+        except (BrokenPipeError, ConnectionError, RuntimeError, ValueError):
+            return False
+        finally:
+            self._commands.pop(native_id, None)
 
     async def compact(self) -> bool:
-        """Claude stream-json has no provider-native compaction control."""
-        return False
+        """Request compaction the way Claude Code takes it headless: ``/compact`` as input.
+
+        There is no compaction ``control_request``, but a slash command sent as
+        a stream-json user turn runs natively — measured on 2.1.280 it answers
+        ``status: compacting`` at once, and a busy session queues it like any
+        input (``command_lifecycle: queued``). ``True`` means written, not
+        compacted: the outcome arrives later on the stream (see ``_status``).
+        """
+        return await self.invoke_control("compact")
 
     async def invoke_control(self, name: str) -> bool:
-        """Claude stream-json exposes no provider-native named-command control."""
-        del name
-        return False
+        """Run one slash command by sending it as a user turn, exactly as typed."""
+        command = name.strip().lstrip("/")
+        if not command:
+            return False
+        process = self._process
+        if process is None or self._closed or process.returncode is not None:
+            return False
+        try:
+            async with self._write_lock:
+                await self._write(self._input_frame(f"/{command}", str(uuid4())))
+        except (BrokenPipeError, ConnectionError, RuntimeError, ValueError):
+            return False
+        return True
 
     async def answer(self, tool_use_id: str, answers: tuple[NativeAnswer, ...]) -> bool:
         """Resolve the standing ``can_use_tool`` for ``tool_use_id`` with the answers.
@@ -332,14 +404,17 @@ class ClaudeNativeOwner:
         """Route documented stream facts without assigning a meaning to results."""
         kind = frame.get("type")
         if kind == "system":
-            if frame.get("subtype") == "init":
-                self._initialized(frame)
+            self._system(frame)
         elif kind == "user":
             self._replayed(frame)
         elif kind == "assistant":
             for text in self._assistant_text(frame):
                 self._report(text)
             if frame.get("parent_tool_use_id") is None:
+                # A root reply means the request the retry was waiting on got
+                # through; a compaction is only ever ended by its own status.
+                if self._operation is not None and self._operation.kind == "retrying":
+                    self._publish_operation(None)
                 self._request_context()
         elif kind == "result":
             self._result(frame)
@@ -349,10 +424,26 @@ class ClaudeNativeOwner:
             self._asked_by_provider(frame)
         elif kind == "permission_request":
             self._report(_CONTROL_NOTICE)
+        elif kind == "command_lifecycle":
+            state = frame.get("state")
+            waiting = self._commands.get(str(frame.get("command_uuid")))
+            if waiting is not None and not waiting.done() and state not in ("queued", "started"):
+                waiting.set_result(str(state))
+
+    def _system(self, frame: Mapping[str, Any]) -> None:
+        subtype = frame.get("subtype")
+        if subtype == "init":
+            self._initialized(frame)
+        elif subtype == "status":
+            self._status(frame)
+        elif subtype == "api_retry":
+            self._retrying(frame)
 
     def _initialized(self, frame: Mapping[str, Any]) -> None:
         session_id = frame.get("session_id")
         init = self._init
+        if isinstance(model := frame.get("model"), str) and model:
+            self._model = model
         if isinstance(session_id, str) and session_id:
             self._session_id = session_id
             if self._asks is not None:
@@ -392,6 +483,11 @@ class ClaudeNativeOwner:
         what it says. ``total_cost_usd`` is cumulative across the session's
         turns (measured 2.1.270), so it is stated whole, never summed here.
         """
+        # A turn is over, whatever it was doing: nothing can still be retrying
+        # or compacting for it. Cleared before the facts so a stale step never
+        # outlives the result that ended it.
+        if self._operation is not None:
+            self._publish_operation(None)
         if self._asks is None:
             return
         facts = parse_result_frame(dict(frame))
@@ -411,6 +507,70 @@ class ClaudeNativeOwner:
         # the only current-window source, and only the root session may publish it.
         if facts.session_id == self._session_id:
             self._request_context()
+
+    def _status(self, frame: Mapping[str, Any]) -> None:
+        """Track ``system/status`` — the stream's own "what I am doing" channel.
+
+        Measured on 2.1.280: ``status: "compacting"`` opens a compaction and
+        repeats every 30 s while it runs; ``status: null`` closes it, carrying
+        ``compact_result`` (``success``/``failed``) and, on failure, the
+        provider's ``compact_error``. The transcript records nothing until the
+        boundary lands (79 s after the start on a real manual compaction), so
+        this is the only live witness. Any other status value is unknown to
+        Grove and deliberately not rendered.
+        """
+        status = frame.get("status")
+        if status == "compacting":
+            if self._operation is None or self._operation.kind != "compacting":
+                self._publish_operation(
+                    NativeOperation(kind="compacting", started_at=datetime.now(UTC)),
+                    compact_error=None,
+                )
+            return
+        if status is None and self._operation is not None and self._operation.kind == "compacting":
+            result = frame.get("compact_result")
+            error = frame.get("compact_error")
+            if result == "failed":
+                self._publish_operation(
+                    None, compact_error=error if isinstance(error, str) and error else "failed"
+                )
+            else:
+                self._publish_operation(None)
+
+    def _retrying(self, frame: Mapping[str, Any]) -> None:
+        """``system/api_retry``: a request failed retryably and waits ``retry_delay_ms``.
+
+        The schema (2.1.280) states the attempt, the cap, the delay and an error
+        category; the instant is computed once here so a client counts down to
+        it without a server tick. Never written to the transcript.
+        """
+
+        def _int(key: str) -> int | None:
+            value = frame.get(key)
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+        now = datetime.now(UTC)
+        delay = _int("retry_delay_ms")
+        error = frame.get("error")
+        status = _int("error_status")
+        detail = error if isinstance(error, str) and error else None
+        if status is not None:
+            detail = f"{detail} ({status})" if detail else f"HTTP {status}"
+        self._publish_operation(
+            NativeOperation(
+                kind="retrying",
+                started_at=now,
+                attempt=_int("attempt"),
+                max_attempts=_int("max_retries"),
+                retry_at=now + timedelta(milliseconds=delay) if delay is not None else None,
+                detail=detail,
+            )
+        )
+
+    def _publish_operation(self, operation: NativeOperation | None, **also: object) -> None:
+        self._operation = operation
+        if self._asks is not None:
+            self._asks.facts(operation=operation, **also)
 
     def _request_context(self) -> None:
         """Coalesce one current-context query after init or a root result.
@@ -479,6 +639,10 @@ class ClaudeNativeOwner:
         for replayed in pending.values():
             if not replayed.done():
                 replayed.set_exception(ConnectionError("Claude mailbox process ended"))
+        commands, self._commands = self._commands, {}
+        for finished in commands.values():
+            if not finished.done():
+                finished.set_exception(ConnectionError("Claude mailbox process ended"))
         controls, self._controls = self._controls, {}
         for answered in controls.values():
             if not answered.done():

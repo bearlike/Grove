@@ -1,0 +1,112 @@
+name: Nightly
+
+# Everything, with no path filtering, once a day against main — the safety net
+# for ci.yml's change detection. A filter that misses a dependency skips a job
+# on a PR; this run is where that shows up, instead of never.
+#
+# It also owns the two checks too slow or too noisy for every PR:
+#   - the idle-activity SOAK test (10 of integration's 11 minutes; it measures a
+#     timing budget, not a contract), and
+#   - the UNLOCKED install, which is blocking only here: an upstream major or a
+#     PyPI blip can turn it red for reasons no PR author caused.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  full-suite:
+    name: every unit test
+    uses: ./.github/workflows/_py-tests.yml
+    with:
+      paths: tests
+      timeout: 30
+
+  integration:
+    name: integration + soak
+    uses: ./.github/workflows/_py-tests.yml
+    with:
+      paths: tests
+      markers: "integration"
+      timeout: 30
+
+  quality:
+    name: Python quality
+    uses: ./.github/workflows/_py-quality.yml
+
+  webapp-checks:
+    name: webapp checks
+    uses: ./.github/workflows/_webapp-gate.yml
+
+  e2e-1:
+    name: e2e 1/4
+    uses: ./.github/workflows/_webapp-e2e.yml
+    with: { shard: 1, shards: 4 }
+  e2e-2:
+    name: e2e 2/4
+    uses: ./.github/workflows/_webapp-e2e.yml
+    with: { shard: 2, shards: 4 }
+  e2e-3:
+    name: e2e 3/4
+    uses: ./.github/workflows/_webapp-e2e.yml
+    with: { shard: 3, shards: 4 }
+  e2e-4:
+    name: e2e 4/4
+    uses: ./.github/workflows/_webapp-e2e.yml
+    with: { shard: 4, shards: 4 }
+
+  docs-build:
+    name: docs build
+    uses: ./.github/workflows/_docs-build.yml
+
+  unlocked-install:
+    name: Unlocked install (what users actually get)
+    # `uv sync` everywhere else is a LOCKED resolution against uv.lock, so those
+    # jobs can never see a newly-published incompatible major. Users install
+    # with `uv tool install`, which resolves fresh from PyPI and ignores the
+    # lockfile — this job is the only one standing where they stand, and it
+    # exists because an unbounded pin (`mcp>=1.2`) let SDK 2.0.0 through.
+    runs-on: ${{ vars.CI_RUNNER_LABEL || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Not the shared setup action: that one syncs the LOCK, and this job
+      # exists to ignore it. The private tool cache is kept, because setup-uv
+      # racing the shared volume is a runner hazard, not a lockfile one.
+      - uses: astral-sh/setup-uv@v3
+        env:
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}/toolcache
+        with:
+          enable-cache: false
+      - name: Install the published extras, unlocked
+        run: uv tool install --force --no-cache '.[all]'
+      - name: Probe every console script
+        run: |
+          set -euo pipefail
+          grove version
+          # The hook hand-parses argv and reads stdin (no --help), so an empty
+          # payload is its liveness probe: import, no-op, exit 0.
+          grove-agent-hook </dev/null
+          grove-mcp --help >/dev/null
+          # `grove-mcp --help` returns BEFORE the SDK is touched (the FastMCP
+          # import is deferred so a [daemon]-only host gets an install hint
+          # instead of a traceback) — it stayed green throughout the 2.0.0
+          # break. Constructing the server is the line that actually loads
+          # FastMCP, and it needs no daemon: the client is lifespan-owned.
+          #
+          # The interpreter is read from the installed script's own shebang:
+          # `uv tool dir` is keyed by DISTRIBUTION name, so a hardcoded path
+          # breaks on the next rename, on a clean runner only.
+          GROVE_PY="$(sed -n '1s|^#!||p' "$(command -v grove-mcp)")"
+          test -x "$GROVE_PY" || { echo "no interpreter at '$GROVE_PY'" >&2; exit 1; }
+          "$GROVE_PY" - <<'PY'
+          from grove.mcp.server import GroveMcpServer, McpServerConfig
+
+          GroveMcpServer(McpServerConfig.from_env({}))
+          print("ok: grove-mcp builds its FastMCP server")
+          PY

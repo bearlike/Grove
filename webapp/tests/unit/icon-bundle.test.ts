@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { UNKNOWN_SERVER_ICON, UNKNOWN_TOOL_ICON } from "@/lib/grove/adapters/tool-catalog";
 import catalog from "@/lib/grove/adapters/tool-catalog.json";
 import bundle from "@/lib/grove/adapters/tool-icon-bundle.json";
 
@@ -20,8 +21,8 @@ const iconsIn = (set: { icons: Record<string, unknown>; aliases?: Record<string,
 
 describe("the committed icon bundle", () => {
   it("carries every icon the built-in catalog names", () => {
-    const missing = (catalog.tools as { icon: string }[])
-      .map((tool) => tool.icon)
+    const missing = [...catalog.tools, ...catalog.servers]
+      .map((entry) => entry.icon)
       .filter((slug) => {
         const [prefix, name] = slug.split(":");
         const set = (bundle as Record<string, { icons: Record<string, unknown> }>)[prefix ?? ""];
@@ -34,7 +35,7 @@ describe("the committed icon bundle", () => {
     // An unknown tool and an unmapped MCP server resolve to these, so they are
     // reachable without appearing in `tools[]` — exactly the kind of icon a
     // catalog-only check would miss.
-    for (const slug of ["flat-color-icons:services", "flat-color-icons:settings"]) {
+    for (const slug of [UNKNOWN_TOOL_ICON, UNKNOWN_SERVER_ICON]) {
       const [prefix, name] = slug.split(":");
       const set = (bundle as Record<string, { icons: Record<string, unknown> }>)[prefix ?? ""];
       expect(iconsIn(set)).toContain(name);
@@ -52,4 +53,15 @@ describe("the committed icon bundle", () => {
     );
     expect(source).toContain("registerBundledIcons(module.addCollection)");
   });
+
+  it("gives every mark a paint, so none falls back to SVG's default black", () => {
+    // Default black is invisible on a dark coin. A monochrome mark says
+    // `currentColor`; the build wraps any body that names no paint at all.
+    const unpainted = Object.entries(bundle as Record<string, { icons: Record<string, { body: string }> }>)
+      .flatMap(([prefix, set]) => Object.entries(set.icons).map(([name, icon]) => [`${prefix}:${name}`, icon.body] as const))
+      .filter(([, body]) => !/fill=|stroke=|currentColor/.test(body))
+      .map(([slug]) => slug);
+    expect(unpainted).toEqual([]);
+  });
 });
+

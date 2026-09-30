@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from grove.core.contracts.watches import CiPredicate, WatchOutcome
-from grove.core.errors import TicketProviderError
+from grove.core.errors import TicketProviderError, TicketProviderNotConfigured, WatchUnobservable
 from grove.core.tickets.provider import CommitChecks
 from grove.core.watches.watcher import Watcher
 
@@ -31,6 +31,31 @@ class CiWatcher(Watcher[CiPredicate]):
         self._providers = providers
         self._cache: dict[tuple[str, str, str, str], tuple[datetime, CommitChecks]] = {}
         self._unreadable_until: dict[tuple[str, str, str, str], datetime] = {}
+
+    def admit(self, predicate: CiPredicate) -> None:
+        """Refuse a forge this daemon cannot read checks from.
+
+        The provider comes from the DAEMON-wide ticket config, which is not the
+        config a repo's own workspaces see. A watch the daemon could not read
+        therefore looked fine to the agent registering it, and every probe
+        raised until the deadline.
+        """
+        try:
+            provider = self._providers.get(predicate.provider)
+        except TicketProviderNotConfigured as exc:
+            raise WatchUnobservable(
+                f"this daemon has no {predicate.provider} provider enabled, so it "
+                f"can never read CI checks for {predicate.owner}/{predicate.repo}. "
+                f"Enable tickets.{predicate.provider} in the daemon's config."
+            ) from exc
+        if not provider.checks_supported:
+            raise WatchUnobservable(f"the {provider.label} provider cannot read CI checks.")
+        if not provider.configured:
+            raise WatchUnobservable(
+                f"the daemon's {provider.label} provider has no credential, so every "
+                f"read of {predicate.owner}/{predicate.repo} would fail. Set the "
+                f"variable tickets.{predicate.provider}.token_env names."
+            )
 
     def observe(self, predicate: CiPredicate, now: datetime) -> WatchOutcome | None:
         key = (predicate.provider, predicate.owner, predicate.repo, predicate.head_sha)

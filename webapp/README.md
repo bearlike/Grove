@@ -21,18 +21,19 @@ Two documents govern work here, and they are worth reading before the code:
 
 ## Running it
 
-Needs **Node 22 or newer** (Next 16). The repo's Make targets are the supported entry points and resolve this directory for you:
+Needs **Node 22 or newer** (Next 16). The Make targets use the Node and npm Grove ships in its own venv (`uv sync` puts them in `.venv/bin`), so the host's Node is never used:
 
 ```bash
 make webapp-dev                       # dev server
-make webapp-build                     # production build
+make webapp-build                     # production build of this directory
+make webapp-bundle                    # the standalone copy `grove web` serves
 make webapp-gate                      # typecheck, drift, styling, tests
 ```
 
 `GROVE_DAEMON_URL` points at the daemon (default `http://127.0.0.1:7421`). There is no model provider key: the browser never talks to an LLM, only to the daemon.
 
 > [!TIP]
-> In production this serves a **pre-built** `.next` under systemd, so a merge is invisible until you rebuild and restart. Building under a running server also breaks it — the live process keeps the old manifest and every dynamic route 500s with `ChunkLoadError`. One owner builds and restarts.
+> In production `grove web` serves a **pre-built** bundle, so a merge is invisible until you rebuild and restart; `./reinstall.sh` does both. `make webapp-bundle` stages the new bundle beside the live one and swaps it in only on success. Building `.next` under a running `next start` still breaks that server: the live process keeps the old manifest and every dynamic route 500s with `ChunkLoadError`.
 
 ---
 

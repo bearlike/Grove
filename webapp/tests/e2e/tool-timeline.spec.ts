@@ -199,12 +199,15 @@ for (const theme of ["light", "dark"]) {
             return !next || svg.getBoundingClientRect().right < next.getBoundingClientRect().left;
           }),
           shellOpacity: getComputedStyle(element, "::before").opacity,
-          fills: coins.map(coin => getComputedStyle(coin).backgroundImage),
+          fills: coins.map(coin => getComputedStyle(coin, "::before").backgroundImage),
+          // The first coin sits on top; each later one tucks behind its neighbour.
+          depths: coins.map(coin => Number(getComputedStyle(coin, "::before").zIndex)),
         };
       });
       expect(geometry.aspect).toBeGreaterThan(1.7);
       expect(geometry.clear).toBe(true);
       if (count > 1) expect(new Set(geometry.fills).size).toBeGreaterThan(1);
+      expect(geometry.depths).toEqual([...geometry.depths].sort((a, b) => b - a));
       await stack.screenshot({ path: test.info().outputPath(`stack-${count}-${theme}.png`) });
       await group.getByRole("button").first().click();
       await expect(stack).toHaveAttribute("data-state", "open");

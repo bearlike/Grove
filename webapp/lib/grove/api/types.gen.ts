@@ -1595,6 +1595,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/sessions/{session_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Workspace Session Feedback
+         * @description Record a human rating of one turn as Langfuse scores on that turn's trace.
+         *
+         *     The trace is re-derived from the transcript (:func:`turn_trace_id`),
+         *     never taken from the client. 409 ``feedback_unavailable`` when Langfuse
+         *     is not configured — the same gate ``WhoamiView.feedback_reasons`` shows
+         *     a client; 422 ``unknown_feedback_reason`` for a reason the config does
+         *     not list; 404 ``turn_not_found`` for a turn not in this
+         *     session; 502 ``feedback_not_recorded`` when Langfuse refuses the write
+         *     or lacks the ``user-feedback`` / ``user-feedback-reason`` score configs
+         *     (the message names which).
+         */
+        post: operations["workspace_session_feedback_workspaces__ws_id__sessions__session_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/sessions/{session_id}/tools/{tool_use_id}": {
         parameters: {
             query?: never;
@@ -2518,6 +2547,8 @@ export interface components {
             tmux_window: string | null;
             /** Parent Session Id */
             parent_session_id?: string | null;
+            /** Spawn Tool Use Id */
+            spawn_tool_use_id?: string | null;
         };
         /**
          * AgentSummaryView
@@ -3200,6 +3231,8 @@ export interface components {
             tool?: components["schemas"]["ToolCallView"] | null;
             compaction?: components["schemas"]["CompactionView"] | null;
             mailbox?: components["schemas"]["MailboxMessageView"] | null;
+            /** At */
+            at?: string | null;
         };
         /**
          * DurationView
@@ -3811,6 +3844,38 @@ export interface components {
             subagents_completed?: number | null;
             /** Subagents Failed */
             subagents_failed?: number | null;
+            operation?: components["schemas"]["NativeOperationView"] | null;
+            /** Compact Error */
+            compact_error?: string | null;
+        };
+        /**
+         * NativeOperationView
+         * @description Wire mirror of ``grove.core.agents.NativeOperation`` — a step in progress.
+         *
+         *     ``kind`` is what the native harness said it is doing beyond generating:
+         *     ``compacting`` (summarizing its own context) or ``retrying`` (a request
+         *     failed and will be re-sent at ``retry_at``). Instants are absolute so a
+         *     client can show an elapsed time or a countdown without a server tick.
+         */
+        NativeOperationView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "compacting" | "retrying";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Attempt */
+            attempt?: number | null;
+            /** Max Attempts */
+            max_attempts?: number | null;
+            /** Retry At */
+            retry_at?: string | null;
+            /** Detail */
+            detail?: string | null;
         };
         /**
          * NewNamedBranch
@@ -4085,7 +4150,7 @@ export interface components {
             repo_url: string;
             /**
              * Tagline
-             * @default The terminal workspace manager for AI coding agents. Spin up a forest of isolated agent workspaces. Reach any of them asynchronously from your terminal, your browser, or another agent.
+             * @default Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.
              */
             tagline: string;
         };
@@ -4490,7 +4555,7 @@ export interface components {
              * Scope
              * @enum {string}
              */
-            scope: "project" | "user" | "builtin" | "dynamic";
+            scope: "project" | "user" | "builtin" | "dynamic" | "grove";
             /** Detail */
             detail?: string | null;
         };
@@ -5332,6 +5397,31 @@ export interface components {
             remote_ref: string;
             /** Local Name */
             local_name?: string | null;
+        };
+        /**
+         * TurnFeedbackRequest
+         * @description Rate the turn that began at ``started_at``.
+         *
+         *     The turn is addressed by the ``started_at`` the transcript already carries
+         *     rather than by a trace id: the daemon re-derives the trace, so a client
+         *     cannot annotate a trace the replay would never have produced. Re-sending
+         *     for the same turn replaces the previous rating.
+         */
+        TurnFeedbackRequest: {
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Rating
+             * @enum {string}
+             */
+            rating: "positive" | "negative";
+            /** Reasons */
+            reasons?: string[];
+            /** Note */
+            note?: string;
         };
         /**
          * UpdateWorkspaceRequest
@@ -6284,6 +6374,10 @@ export interface components {
             langfuse_host?: string | null;
             /** Langfuse Project Id */
             langfuse_project_id?: string | null;
+            /** Positive Feedback Reasons */
+            positive_feedback_reasons?: string[];
+            /** Feedback Reasons */
+            feedback_reasons?: string[];
         };
         /**
          * WorkspaceActivityView
@@ -9068,6 +9162,40 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SessionDetailView"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    workspace_session_feedback_workspaces__ws_id__sessions__session_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TurnFeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

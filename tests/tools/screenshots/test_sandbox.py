@@ -51,3 +51,26 @@ def test_activate_redirects_every_lookup_into_the_root(
 
     for name, _child in Sandbox.DIRS:
         assert Path(os.environ[name]).is_relative_to(sandbox.root)
+
+
+def test_activate_keeps_playwright_on_the_real_browser_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The browser was installed under the real HOME; the sandbox's HOME is empty."""
+    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+    monkeypatch.delenv(Sandbox.BROWSERS_ENV, raising=False)
+    sandbox = Sandbox(root=tmp_path / "sandbox")
+
+    sandbox.activate()
+
+    expected = tmp_path / "real-home" / ".cache" / "ms-playwright"
+    assert Path(os.environ[Sandbox.BROWSERS_ENV]) == expected
+
+
+def test_activate_respects_an_explicit_browser_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(Sandbox.BROWSERS_ENV, "/opt/browsers")
+    Sandbox(root=tmp_path / "sandbox").activate()
+
+    assert os.environ[Sandbox.BROWSERS_ENV] == "/opt/browsers"

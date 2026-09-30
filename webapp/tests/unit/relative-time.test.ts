@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   approxDurationUntil,
+  daySeparatorLabel,
   durationSince,
   durationUntil,
   preciseAge,
@@ -179,5 +180,24 @@ describe("preciseAge — the age a detail surface reads", () => {
     // has not happened yet.
     expect(preciseAge(ISO, at(-30))).toBe("just now");
     expect(preciseAge(ISO, at(30))).toBe("just now");
+  });
+});
+
+describe("daySeparatorLabel — a transcript's time separator", () => {
+  // Local-time construction so the calendar-day rule is tested in the
+  // runner's own zone, which is the zone the function reads.
+  const now = new Date(2026, 8, 29, 1, 0).getTime(); // Tue Sep 29, 1:00 AM
+
+  it("says Today and Yesterday by calendar day, not by 24 hours", () => {
+    expect(daySeparatorLabel(new Date(2026, 8, 29, 0, 30), now)).toMatch(/^Today /);
+    // Two hours ago, but before midnight — yesterday.
+    expect(daySeparatorLabel(new Date(2026, 8, 28, 23, 0), now)).toMatch(/^Yesterday /);
+  });
+
+  it("dates anything older, and everything before mount", () => {
+    const older = daySeparatorLabel(new Date(2026, 8, 22, 23, 23), now);
+    expect(older).not.toMatch(/^(Today|Yesterday)/);
+    expect(older).toContain("22");
+    expect(daySeparatorLabel(new Date(2026, 8, 29, 0, 30), null)).not.toMatch(/^Today/);
   });
 });

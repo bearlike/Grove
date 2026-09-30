@@ -23,6 +23,8 @@ from grove.core.contracts.questions import QuestionAnswerItem, QuestionAnswerReq
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.views import WorkspaceStateView
 from grove.core.errors import (
+    CapabilityUnavailable,
+    MacroNotFound,
     ResumeNotSupported,
     SteeringUnsupported,
     TmuxError,
@@ -55,6 +57,7 @@ class FakeNativeSteer:
         self.answers: list[tuple[str, dict[str, object]]] = []
         self.compactions: list[str] = []
         self.controls: list[tuple[str, str]] = []
+        self.macros: list[tuple[str, dict[str, object]]] = []
 
     def owner_connected(self, state: WorkspaceState) -> bool:
         del state
@@ -78,6 +81,9 @@ class FakeNativeSteer:
     def invoke_control(self, state: WorkspaceState, name: str) -> None:
         self.controls.append((state.id, name))
 
+    def run_macro(self, state: WorkspaceState, macro: str) -> None:
+        self.macros.append((state.id, json.loads(macro)))
+
 
 @pytest.fixture
 def steer() -> FakeNativeSteer:
@@ -90,6 +96,12 @@ def manager(tmp_repo: Path, tmp_path: Path, steer: FakeNativeSteer) -> Workspace
         {
             "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
             "tmux": {"session_prefix": "test-"},
+            "macros": {
+                "compact-fast": {
+                    "description": "Compact on the fast model",
+                    "steps": ["/model flash", "/compact", "/model {model}"],
+                }
+            },
         }
     )
     return WorkspaceManager(
@@ -549,3 +561,73 @@ def test_a_terminal_workspace_is_untouched_by_the_owner_check(
     exit_path.write_text("1\n", encoding="utf-8")
 
     assert manager.peek(state.id).state.status in LIVE_STATUSES
+
+
+# ─── Grove commands: `/grove:<name>` is Grove's, never agent input ──────────
+
+
+_COMPACT_FAST = {"name": "compact-fast", "steps": ["/model flash", "/compact", "/model {model}"]}
+
+
+@pytest.mark.parametrize("text", ["/grove:compact-fast", "  /grove:compact-fast  "])
+def test_a_grove_command_typed_as_a_message_runs_the_macro_instead(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, steer: FakeNativeSteer, text: str
+) -> None:
+    """The composer, `grove send` and MCP all reach `send_message`, so that is the
+    one interception seam — the text must never reach the agent as a prompt."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="native"))
+
+    manager.send_message(state.id, text)
+
+    assert steer.macros == [(state.id, _COMPACT_FAST)]
+    assert steer.messages == []
+    assert fake_tmux.sent_texts == []
+
+
+def test_a_grove_command_invoked_as_a_control_runs_the_macro(
+    manager: WorkspaceManager, steer: FakeNativeSteer
+) -> None:
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="native"))
+
+    manager.invoke_control(state.id, "grove:compact-fast")
+
+    assert steer.macros == [(state.id, _COMPACT_FAST)]
+    assert steer.controls == []
+
+
+def test_an_undeclared_grove_command_is_refused_by_name(
+    manager: WorkspaceManager, steer: FakeNativeSteer
+) -> None:
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="native"))
+
+    with pytest.raises(MacroNotFound, match="compact-fast"):
+        manager.send_message(state.id, "/grove:nope")
+    assert steer.macros == [] and steer.messages == []
+
+
+def test_a_terminal_workspace_refuses_a_grove_command_rather_than_typing_it(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, steer: FakeNativeSteer
+) -> None:
+    """A terminal pane reports no step completion, so firing the steps back to
+    back would switch the model back before the compaction ran."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude-terminal", title="tui"))
+
+    with pytest.raises(CapabilityUnavailable, match="native Claude Code"):
+        manager.send_message(state.id, "/grove:compact-fast")
+    assert fake_tmux.sent_texts == []
+    assert steer.macros == []
+
+
+def test_session_controls_list_grove_commands_first_for_a_native_claude_session(
+    manager: WorkspaceManager,
+) -> None:
+    native = manager.create(CreateWorkspaceRequest(agent_name="claude", title="native"))
+    terminal = manager.create(CreateWorkspaceRequest(agent_name="claude-terminal", title="tui"))
+
+    [first, *_] = manager.session_controls(native.id).commands
+    assert (first.name, first.scope, first.detail) == (
+        "grove:compact-fast",
+        "grove",
+        "Compact on the fast model",
+    )
+    assert all(c.scope != "grove" for c in manager.session_controls(terminal.id).commands)

@@ -51,7 +51,7 @@ from grove.core.contracts.watches import (
     WatchRegistration,
     WatchView,
 )
-from grove.core.errors import GroveError
+from grove.core.errors import GroveError, WatchUnobservable
 from grove.core.watches.log import WatchLog, utcnow
 from grove.core.watches.watcher import StillWatching, WatcherRegistry
 
@@ -159,7 +159,18 @@ class WatchScheduler:
     # ─── the public verbs ───────────────────────────────────────────────────
 
     def register(self, registration: WatchRegistration) -> WatchView:
-        """Record a watch durably and arm it, waking the scheduler immediately."""
+        """Record a watch durably and arm it, waking the scheduler immediately.
+
+        Raises :class:`WatchUnobservable` before anything is written when no
+        watcher could ever observe the subject. The caller is about to halt on
+        this watch, so a refusal now is the only moment it can still act.
+        """
+        watcher = self._watchers.get(registration.predicate)
+        if watcher is None:
+            raise WatchUnobservable(
+                f"this daemon has no watcher for a {registration.predicate.kind!r} watch."
+            )
+        watcher.admit(registration.predicate)
         now = self._clock()
         deadline = self._deadline_for(registration, now)
         expires_at = None if deadline is None else now + deadline

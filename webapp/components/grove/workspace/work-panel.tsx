@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import {
+  ChartGanttIcon,
   FileDiffIcon,
   GitCompareArrowsIcon,
   InfoIcon,
@@ -63,6 +64,9 @@ const ControlsTab = dynamic(() => import("./controls-tab").then((m) => m.Control
   loading: TabFallback,
 });
 const DiagramTab = dynamic(() => import("./diagram-tab").then((m) => m.DiagramTab), {
+  loading: TabFallback,
+});
+const TrajectoryTab = dynamic(() => import("./trajectory-tab").then((m) => m.TrajectoryTab), {
   loading: TabFallback,
 });
 const EmbeddedPanelTab = dynamic(
@@ -201,7 +205,7 @@ export function WorkPanel({
           onNavigate={onTabChange}
         />
       </TabsContent>
-      {/* The three privileged tabs are not merely untriggerable without
+      {/* The privileged tabs are not merely untriggerable without
           `privileged` — they are not in the tree at all. A hidden `TabsContent`
           still mounts nothing here (see the doc comment above on why only the
           active tab mounts), but leaving them declared would put three
@@ -211,6 +215,9 @@ export function WorkPanel({
         <>
           <TabsContent value="terminal" className="flex min-h-0 flex-1 flex-col">
             <TerminalTab peek={privileged.peek} active={tab === "terminal"} />
+          </TabsContent>
+          <TabsContent value="trajectory" className="flex min-h-0 flex-1 flex-col">
+            <TrajectoryTab workspaceId={privileged.peek.state.id} activity={activity} />
           </TabsContent>
           <TabsContent value="files" className="flex min-h-0 flex-1 flex-col">
             <FilesTab workspaceId={privileged.peek.state.id} onNavigate={onTabChange} />
@@ -270,6 +277,7 @@ export function WorkPanel({
  */
 const TAB_CHROME: Record<PanelTab, { label: string; Icon: LucideIcon }> = {
   terminal: { label: "Terminal", Icon: TerminalIcon },
+  trajectory: { label: "Trajectory", Icon: ChartGanttIcon },
   changes: { label: "Changes", Icon: GitCompareArrowsIcon },
   diagram: { label: "Diagram", Icon: WorkflowIcon },
   files: { label: "Files", Icon: FileDiffIcon },

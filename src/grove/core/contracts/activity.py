@@ -37,7 +37,13 @@ if TYPE_CHECKING:
         TodoProgress,
         WorkspaceActivity,
     )
-    from grove.core.agents import AgentActivity, AgentSession, ContextWindow, NativeFacts
+    from grove.core.agents import (
+        AgentActivity,
+        AgentSession,
+        ContextWindow,
+        NativeFacts,
+        NativeOperation,
+    )
     from grove.core.agents.hook import SubagentHookRecord
 
 
@@ -61,6 +67,10 @@ class AgentSessionView(BaseModel):
     # without a second lookup. Defaults so a pre-existing client deserializes
     # unchanged (additive wire evolution, same convention as ``active_subagents``).
     parent_session_id: str | None = None
+    # The parent's spawning ``tool_use_id`` for a sub-agent whose provider
+    # records it — nests a child under the exact call that launched it rather
+    # than under the whole parent session. Additive and defaulted.
+    spawn_tool_use_id: str | None = None
 
     @classmethod
     def from_session(cls, s: AgentSession) -> AgentSessionView:
@@ -70,6 +80,37 @@ class AgentSessionView(BaseModel):
             provenance=s.provenance,
             tmux_window=s.tmux_window,
             parent_session_id=s.parent_session_id,
+            spawn_tool_use_id=s.spawn_tool_use_id,
+        )
+
+
+class NativeOperationView(BaseModel):
+    """Wire mirror of ``grove.core.agents.NativeOperation`` — a step in progress.
+
+    ``kind`` is what the native harness said it is doing beyond generating:
+    ``compacting`` (summarizing its own context) or ``retrying`` (a request
+    failed and will be re-sent at ``retry_at``). Instants are absolute so a
+    client can show an elapsed time or a countdown without a server tick.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["compacting", "retrying"]
+    started_at: datetime
+    attempt: int | None = None
+    max_attempts: int | None = None
+    retry_at: datetime | None = None
+    detail: str | None = None
+
+    @classmethod
+    def from_operation(cls, o: NativeOperation) -> NativeOperationView:
+        return cls(
+            kind=o.kind,
+            started_at=o.started_at,
+            attempt=o.attempt,
+            max_attempts=o.max_attempts,
+            retry_at=o.retry_at,
+            detail=o.detail,
         )
 
 
@@ -95,6 +136,14 @@ class NativeFactsView(BaseModel):
     finished them all reads ``10`` here and ``0`` there, and both are correct."""
     subagents_completed: int | None = None
     subagents_failed: int | None = None
+    operation: NativeOperationView | None = None
+    """The transitional step running RIGHT NOW (``None`` when the session is
+    simply generating or idle). Rides the live stream: its start and end each
+    emit a ``session_activity`` delta even though the agent state stays
+    ``working`` throughout."""
+    compact_error: str | None = None
+    """The provider's reason the most recent compaction failed, verbatim;
+    ``None`` after a success or once another compaction starts."""
 
     @classmethod
     def from_facts(cls, f: NativeFacts) -> NativeFactsView:
@@ -107,6 +156,10 @@ class NativeFactsView(BaseModel):
             subagents_spawned=f.subagents_spawned,
             subagents_completed=f.subagents_completed,
             subagents_failed=f.subagents_failed,
+            operation=(
+                NativeOperationView.from_operation(f.operation) if f.operation is not None else None
+            ),
+            compact_error=f.compact_error,
         )
 
 

@@ -914,6 +914,31 @@ async def test_every_modal_renders_grove_dialog_container() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("native_roster")
+async def test_session_mode_checkbox_is_on_screen_in_a_short_terminal(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The form is taller than a 24-row terminal; it must scroll, not clip.
+
+    An auto-height dialog centred in a shorter screen lost its top rows off the
+    top edge with no way back, so the session-mode box — the second field —
+    simply was not there, and focusing Title scrolled it away again.
+    """
+    from textual.widgets import Checkbox  # noqa: PLC0415
+
+    del fake_tmux
+    app = GroveApp(_manager(tmp_repo, tmp_path))
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        modal = await _open_create_modal(pilot, app)
+        await pilot.pause()
+        box = modal.query_one("#native", Checkbox)
+        assert box.display is True
+        assert box.region.height > 0
+        assert 0 <= box.region.y < modal.size.height
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("native_roster")
 async def test_session_mode_checkbox_follows_the_entry_and_rides_the_request(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:

@@ -37,6 +37,7 @@ from grove.tui.cli_sessions import recollect_session, sessions_app
 from grove.tui.cli_shell import register as register_shell_commands
 from grove.tui.cli_usage import usage_app
 from grove.tui.cli_watch import watch_app
+from grove.tui.cli_web import register as register_web_commands
 from grove.tui.cli_workspace import register as register_workspace_commands
 from grove.tui.cli_workspace import warn_if_store_disowns_caller
 
@@ -105,6 +106,10 @@ register_shell_commands(app)
 # rather than an `--agent` flag on every existing verb: a single-agent workspace
 # is the overwhelming case and keeps every verb's signature untouched.
 register_agent_commands(app)
+
+
+# `grove web` — serve the dashboard the wheel ships, on the user's own Node.
+register_web_commands(app)
 
 
 # ─── default command (TUI) ──────────────────────────────────────────────────

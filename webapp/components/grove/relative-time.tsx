@@ -238,6 +238,29 @@ export function absoluteTime(iso: string): string {
 }
 
 /**
+ * A transcript's time separator: "Today 6:29 PM", "Yesterday 11:23 PM", or
+ * "Mon, Sep 22, 11:23 PM" for anything older.
+ *
+ * The day word is decided in the reader's own calendar (local midnight), not
+ * by a 24-hour difference — 11 PM yesterday is "Yesterday" at 1 AM today.
+ * `now: null` (before mount, see `useNow`) renders the dated form, which is
+ * true at any hour and so cannot mismatch the server.
+ */
+export function daySeparatorLabel(at: Date, now: number | null): string {
+  const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (now !== null) {
+    const midnight = new Date(now);
+    midnight.setHours(0, 0, 0, 0);
+    if (at >= midnight) return `Today ${time}`;
+    // `setDate`, not `- DAY`: a DST day is 23 or 25 hours long.
+    midnight.setDate(midnight.getDate() - 1);
+    if (at >= midnight) return `Yesterday ${time}`;
+  }
+  const date = at.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  return `${date}, ${time}`;
+}
+
+/**
  * `null` until mounted, then the clock, re-read once a minute.
  *
  * Shared by both components below because the hydration rule is the same for

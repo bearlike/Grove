@@ -797,3 +797,80 @@ async def test_worker_routes_compact_and_command_to_dedicated_native_operations(
     ).run()
 
     assert native.calls == [("compact", ""), ("command", "review --staged")]
+
+
+class _MacroNative:
+    """An owner whose model moves with `/model` and whose `/bad` does not complete."""
+
+    def __init__(self) -> None:
+        self.current_model: str | None = "opus-1m"
+        self.ran: list[str] = []
+
+    async def run_command(self, command: str) -> bool:
+        self.ran.append(command)
+        if command.startswith("/model "):
+            self.current_model = command.split(" ", 1)[1]
+        return command != "/bad"
+
+
+def _worker() -> NativeWorker:
+    return NativeWorker(
+        NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_grove_command_restores_the_model_it_started_on() -> None:
+    """`{model}` is captured ONCE, before the first step: the command switches
+    away, and a per-step expansion would hand back the model it switched TO."""
+    native = _MacroNative()
+    await _worker()._run_macro(
+        native,  # type: ignore[arg-type]
+        {"name": "compact-fast", "steps": ["/model flash", "/compact", "/model {model}"]},
+    )
+    assert native.ran == ["/model flash", "/compact", "/model opus-1m"]
+
+
+@pytest.mark.asyncio
+async def test_a_grove_command_stops_at_the_first_step_that_did_not_complete() -> None:
+    native = _MacroNative()
+    await _worker()._run_macro(
+        native,  # type: ignore[arg-type]
+        {"name": "x", "steps": ["/model flash", "/bad", "/model {model}"]},
+    )
+    assert native.ran == ["/model flash", "/bad"]
+
+
+@pytest.mark.asyncio
+async def test_a_grove_command_with_no_reported_model_restores_the_default() -> None:
+    native = _MacroNative()
+    native.current_model = None
+    await _worker()._run_macro(
+        native,  # type: ignore[arg-type]
+        {"name": "x", "steps": ["/model {model}"]},
+    )
+    assert native.ran == ["/model default"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_grove_command_while_one_runs_is_refused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    gate = asyncio.Event()
+
+    class Slow(_MacroNative):
+        async def run_command(self, command: str) -> bool:
+            self.ran.append(command)
+            await gate.wait()
+            return True
+
+    native = Slow()
+    worker = _worker()
+    worker._start_macro(native, {"name": "a", "steps": ["/compact"]})  # type: ignore[arg-type]
+    await asyncio.sleep(0)
+    worker._start_macro(native, {"name": "b", "steps": ["/other"]})  # type: ignore[arg-type]
+    gate.set()
+    assert worker._macro is not None
+    await worker._macro
+    assert native.ran == ["/compact"]
+    assert "/grove:b refused" in capsys.readouterr().out

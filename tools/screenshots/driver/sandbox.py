@@ -66,8 +66,19 @@ class Sandbox:
     def path(self, *parts: str) -> Path:
         return self.root.joinpath(*parts)
 
+    BROWSERS_ENV: ClassVar[str] = "PLAYWRIGHT_BROWSERS_PATH"
+
     def activate(self) -> None:
-        """Export the redirected environment. Call before importing grove."""
+        """Export the redirected environment. Call before importing grove.
+
+        Pins Playwright's browser cache to the REAL home before HOME moves.
+        Playwright resolves its default cache from HOME at launch time, so a
+        redirected HOME sends it looking inside the sandbox — where nothing was
+        ever installed — and every capture dies at `browserType.launch` with
+        "Executable doesn't exist", after the multi-minute seed has already
+        run. An explicit override is left alone.
+        """
+        os.environ.setdefault(self.BROWSERS_ENV, str(Path.home() / ".cache" / "ms-playwright"))
         for name, child in self.DIRS:
             os.environ[name] = str(self.root / child)
 

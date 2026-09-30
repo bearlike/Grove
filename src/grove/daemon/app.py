@@ -20,6 +20,7 @@ import os
 import platform
 import secrets
 import socket
+import urllib.error
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
@@ -74,6 +75,7 @@ from grove.core.contracts.diagrams import (
     DiagramStopRequest,
     DiagramUpdateRequest,
 )
+from grove.core.contracts.feedback import TurnFeedbackRequest
 from grove.core.contracts.gallery import (
     GalleryDocumentView,
     GalleryItemView,
@@ -133,6 +135,7 @@ from grove.core.errors import (
     DiagramConflict,
     DiagramUnavailable,
     GroveError,
+    MacroNotFound,
     PaneNotFound,
     QuestionAnswerInvalid,
     QuestionNotPending,
@@ -144,6 +147,7 @@ from grove.core.errors import (
     TicketProviderError,
     TicketProviderNotConfigured,
     TicketPullRequestsUnsupported,
+    WatchUnobservable,
     WorkCapacityExceeded,
     WorkspaceNotFound,
     WorkspaceStateError,
@@ -168,10 +172,17 @@ from grove.core.release import ReleaseChecker, ReleaseStatus
 from grove.core.sessions import SessionCatalog, SessionExplorer, SessionListing
 from grove.core.share_policy import SharePolicy, SharePolicyStore
 from grove.core.store import JsonWorkspaceStore
+from grove.core.telemetry.feedback import (
+    LangfuseScores,
+    MissingScoreConfig,
+    Rating,
+    TurnFeedback,
+)
 from grove.core.telemetry.project import LangfuseProject
 from grove.core.tickets.provider import TicketProvider
 from grove.core.tickets.reads import TicketReads
 from grove.core.tickets.registry import TicketProviderRegistry
+from grove.core.trace import turn_trace_id
 from grove.core.trace_forwarder import TraceForwarder
 from grove.core.watches import (
     CiWatcher,
@@ -286,6 +297,8 @@ def _build_whoami(
     restart_required: bool = False,
     langfuse_host: str | None = None,
     langfuse_project_id: str | None = None,
+    feedback_reasons: list[str] | None = None,
+    positive_feedback_reasons: list[str] | None = None,
 ) -> WhoamiView:
     """Snapshot the daemon's identity + uptime + release skew.
 
@@ -312,17 +325,19 @@ def _build_whoami(
         restart_required=restart_required,
         langfuse_host=langfuse_host,
         langfuse_project_id=langfuse_project_id,
+        feedback_reasons=feedback_reasons or [],
+        positive_feedback_reasons=positive_feedback_reasons or [],
     )
 
 
-def _resolve_langfuse_project(cfg: GroveConfig, projects: LangfuseProject) -> str | None:
-    """The Langfuse project these credentials belong to, or ``None``.
+def _langfuse_credentials(cfg: GroveConfig) -> tuple[str, str] | None:
+    """``(host, "Basic …")`` for the configured Langfuse, or ``None``.
 
-    Gated on exactly the same resolution as the host below — a project id
-    without a usable host builds no link — and then asked of Langfuse itself,
-    because a key pair names its project and the config never does. Cached in
-    ``projects`` (one instance per daemon), so a whoami costs an HTTP call at
-    most once per TTL and never on a failure path.
+    Gated on exactly the same resolution as the host below — a credential
+    without a usable host reaches nothing. The auth value is the composed
+    exporter header, reused rather than re-deriving the Basic token from the
+    key pair: one composition site, and this module never touches the secret
+    itself.
     """
     telemetry = cfg.telemetry
     if not telemetry.enabled:
@@ -332,16 +347,24 @@ def _resolve_langfuse_project(cfg: GroveConfig, projects: LangfuseProject) -> st
         return None
     host = derived.get("LANGFUSE_HOST")
     headers = derived.get("OTEL_EXPORTER_OTLP_HEADERS", "")
-    # The composed exporter header, reused rather than re-deriving the Basic
-    # token from the key pair: one composition site, and this module never
-    # touches the secret itself.
     auth = next(
         (part.removeprefix("Authorization=") for part in headers.split(",") if "=" in part),
         "",
     )
     if not host or not auth.startswith("Basic "):
         return None
-    return projects.resolve(host, auth)
+    return host, auth
+
+
+def _resolve_langfuse_project(cfg: GroveConfig, projects: LangfuseProject) -> str | None:
+    """The Langfuse project these credentials belong to, or ``None``.
+
+    Asked of Langfuse itself, because a key pair names its project and the
+    config never does. Cached in ``projects`` (one instance per daemon), so a
+    whoami costs an HTTP call at most once per TTL and never on a failure path.
+    """
+    credentials = _langfuse_credentials(cfg)
+    return projects.resolve(*credentials) if credentials else None
 
 
 def _resolve_langfuse_host(cfg: GroveConfig) -> str | None:
@@ -1037,6 +1060,9 @@ def build_app(  # noqa: PLR0915
             # the runtime (a generic shell / remote session) has no in-session
             # slash-control surface, so no state change makes a retry succeed. 501.
             CapabilityUnavailable: (501, "capability_unavailable"),
+            # A `/grove:<name>` no config layer declares: the request named a
+            # resource that does not exist, the same shape as an unknown workspace.
+            MacroNotFound: (404, "macro_not_found"),
             # Live-question answering. QuestionNotPending is 409, like the
             # state errors: the request was well-formed, the live question just
             # moved on (answered in the terminal, or superseded) — the client
@@ -1091,6 +1117,11 @@ def build_app(  # noqa: PLR0915
             # invalid for this provider, not a 501 capability gap, because the
             # caller's fix is "attach a different tracker's ref", not "wait".
             TicketPullRequestsUnsupported: (422, "ticket_pull_requests_unsupported"),
+            # A watch whose subject this daemon can never observe (a forge it
+            # has not enabled, or cannot authenticate to). 422 like the
+            # capability refusals above: the request is well-formed, and no
+            # retry succeeds until the daemon's configuration changes.
+            WatchUnobservable: (422, "watch_unobservable"),
             # A repo whose `.grove/config.json` will not parse. 500 and
             # not 4xx: the request was fine, the server's own state is not, and
             # no client retry fixes it — but it is NAMED, because the message
@@ -1643,6 +1674,10 @@ def build_app(  # noqa: PLR0915
             restart_required=restart_required,
             langfuse_host=langfuse_host,
             langfuse_project_id=langfuse_project,
+            feedback_reasons=list(cfg.telemetry.feedback_reasons) if langfuse_host else [],
+            positive_feedback_reasons=(
+                list(cfg.telemetry.positive_feedback_reasons) if langfuse_host else []
+            ),
         )
 
     @app.get("/activity", response_model=DashboardSnapshotView, dependencies=auth_dep)
@@ -2848,6 +2883,73 @@ def build_app(  # noqa: PLR0915
             return await asyncio.to_thread(_read)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
+
+    @app.post(
+        "/workspaces/{ws_id}/sessions/{session_id}/feedback",
+        status_code=204,
+        dependencies=auth_dep,
+    )
+    async def workspace_session_feedback(
+        ws_id: str, session_id: str, body: TurnFeedbackRequest
+    ) -> None:
+        """Record a human rating of one turn as Langfuse scores on that turn's trace.
+
+        The trace is re-derived from the transcript (:func:`turn_trace_id`),
+        never taken from the client. 409 ``feedback_unavailable`` when Langfuse
+        is not configured — the same gate ``WhoamiView.feedback_reasons`` shows
+        a client; 422 ``unknown_feedback_reason`` for a reason the config does
+        not list; 404 ``turn_not_found`` for a turn not in this
+        session; 502 ``feedback_not_recorded`` when Langfuse refuses the write
+        or lacks the ``user-feedback`` / ``user-feedback-reason`` score configs
+        (the message names which).
+        """
+        credentials = await asyncio.to_thread(_langfuse_credentials, cfg)
+        if credentials is None:
+            raise HTTPException(status_code=409, detail={"error": "feedback_unavailable"})
+        catalogs: dict[Rating, tuple[str, ...]] = {
+            "positive": cfg.telemetry.positive_feedback_reasons,
+            "negative": cfg.telemetry.feedback_reasons,
+        }
+        unknown = [reason for reason in body.reasons if reason not in catalogs[body.rating]]
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "unknown_feedback_reason", "reasons": unknown},
+            )
+        mgr = _manager_for(ws_id)
+        explorer = SessionExplorer(mgr)
+
+        def _trace_id() -> int | None:
+            listing = next(
+                (ls for ls in explorer.for_workspace(ws_id) if ls.summary.session_id == session_id),
+                None,
+            )
+            if listing is None:
+                raise AgentSessionNotFound(
+                    f"no session {session_id!r} recorded for workspace {ws_id!r}"
+                )
+            return turn_trace_id(explorer.messages_for(listing), session_id, body.started_at)
+
+        try:
+            trace_id = await asyncio.to_thread(_trace_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        if trace_id is None:
+            raise HTTPException(status_code=404, detail={"error": "turn_not_found"})
+        feedback = TurnFeedback(
+            trace_id=f"{trace_id:032x}",
+            rating=body.rating,
+            reasons=tuple(dict.fromkeys(body.reasons)),
+            note=body.note.strip(),
+        )
+        try:
+            await asyncio.to_thread(LangfuseScores(*credentials).record, feedback, catalogs)
+        except (MissingScoreConfig, urllib.error.URLError, TimeoutError, OSError) as exc:
+            logger.warning("feedback not recorded for trace {}: {}", feedback.trace_id, exc)
+            raise HTTPException(
+                status_code=502,
+                detail={"error": "feedback_not_recorded", "message": str(exc)},
+            ) from exc
 
     @app.get(
         "/workspaces/{ws_id}/sessions/{session_id}/tools/{tool_use_id}",
