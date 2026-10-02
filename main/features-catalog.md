@@ -23,7 +23,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | One agent, one worktree | Each workspace is its own git worktree, branch and tmux session. | [Workspace lifecycle](features-workspace-lifecycle.md) |
 | Pause, resume, respawn, kill | Pause drops the worktree and keeps the branch. Kill deletes only branches Grove created. | [Workspace lifecycle](features-workspace-lifecycle.md) |
 | Branch provenance | Grove records whether it made a branch or you attached one, and kill honours it. | [Branch provenance](features-branch-provenance.md) |
-| Containers | Run each agent in a containerized sandbox for its task. Set resource limits to protect the rest of the fleet. | [Containerized agents](features-containers.md) |
+| Containers | Run each agent in a containerized sandbox. Resource limits protect the rest of the fleet. | [Containerized agents](features-containers.md) |
 | Init scripts | A script prepares each new worktree, on the host or in the container. | [Init scripts](configure-init-scripts.md) |
 | Root placement | A workspace can run in the repo root on the branch already checked out. | [Workspace lifecycle](features-workspace-lifecycle.md#root-workspaces) |
 | Status semantics | Three axes, workspace, agent activity and task phase, each answering a different question. | [Status semantics](features-status.md) |
@@ -36,7 +36,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Questions and plans | A live question renders as a card and a plan approval as a dialog row. | [Web dashboard](use-webapp.md#steering-the-agent) |
 | Attachments | Paste or attach an image or file and the agent is handed its path. | [Attachments](features-attachments.md) |
 | Image annotation | Draw over a staged image before sending it. | [Attachments](features-attachments.md#annotate-before-you-send) |
-| Diagram collaboration | A person and an agent edit one draw.io file with revision checks. | [Diagram collaboration](features-diagrams.md) |
+| Diagram collaboration | A person and an agent edit one [draw.io](https://www.drawio.com/) file with revision checks. | [Diagram collaboration](features-diagrams.md) |
 | Mockups and specs | Approve a UI mockup or an architecture plan as a picture before code exists. | [Diagram collaboration](features-diagrams.md#two-jobs-for-one-file) |
 | Model per workspace | Each agent exposes its own catalog and a workspace picks one. | [Web dashboard](use-webapp.md#starting-a-workspace) |
 | First turn brief | Grove tells the agent where it is and how to report. | [Project setup](configure-project.md#tailor-the-first-turn-brief) |
@@ -52,7 +52,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 
 | Capability | What it does | Page |
 |---|---|---|
-| Ticket providers | Attach a GitHub, Gitea or Linear issue or pull request to a workspace. | [Ticket providers](features-ticket-providers.md) |
+| Ticket providers | Attach a Linear, GitHub or Gitea issue or pull request to a workspace. | [Ticket providers](features-ticket-providers.md) |
 | Refs from the branch | Grove reads the ticket off the branch name so the link follows the branch. | [Ticket providers](features-ticket-providers.md#deriving-refs-from-the-branch-name) |
 | Sticky comment | One comment on the ticket carries phase, checklist, branch, commit and links. | [Issue ops](issue-ops.md) |
 | Task phase per ticket | Each attached ticket reports its own six stage phase and a blocked flag. | [Status semantics](features-status.md#the-third-axis-task-phase) |
@@ -66,7 +66,8 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Activity dashboard | Which agent is working, waiting, blocked or idle, across every repo. | [Agent activity](features-activity.md) |
 | Session catalog | Every agent session on the host, including work Grove did not launch. | [Agent activity](features-activity.md#the-session-catalog-every-session-on-this-host) |
 | Session recovery | Sessions re-adopt across daemon restarts and a stale pointer remaps in a click. | [Workspace lifecycle](features-workspace-lifecycle.md#recovery-from-a-vanished-session) |
-| Telemetry | Send each turn to an OTLP backend. With Langfuse, rate answers in Grove for reviews and LLM judge calibration. | [Telemetry](features-telemetry.md) |
+| Telemetry | Send each turn to an OTLP backend as one trace, with workspace, branch and ticket on every span. | [Telemetry](features-telemetry.md) |
+| Feedback and evaluations | Rate turns in Grove, and label every observation with a local decision model calibrated on your own traffic. | [Feedback and evaluations](features-feedback-evals.md) |
 | Usage audit | Tokens, time, cost and subscription windows projected from transcripts on disk. | [Web dashboard](use-webapp.md#the-usage-audit) |
 | Push notifications | A push when an agent finishes a turn or needs an answer. | [Push notifications](features-notifications.md) |
 | Public share links | A read only transcript link with an expiry and an optional passcode. | [Web dashboard](use-webapp.md#working-in-a-session) |

@@ -1,0 +1,18 @@
+{
+  "model": "tev1:4b",
+  "state": {
+    "user_request": "Add a --json flag to the export command.",
+    "assistant_output": "Added `--json` to `export`. It prints one JSON object per row, and a new test covers it."
+  },
+  "questions": {
+    "answer_relevance": {
+      "type": "choice",
+      "instructions": "Classify how well `assistant_output` addresses `user_request` in an AI conversation. Judge relevance, topical alignment, completeness, and whether the output resolves the request. Assess `assistant_output` against `user_request` only; do not infer unstated requirements. Do not judge writing style or factual correctness unless it prevents the output from meaningfully answering the request. Identify the primary goal of `user_request` and any material sub-requests or constraints, then compare `assistant_output` against them. Choose relevant only when the output directly addresses the primary request, covers all material parts, and stays on topic. When evidence is ambiguous, choose the lower-supported label rather than assuming unstated coverage.",
+      "criteria": {
+        "relevant": "The output directly addresses the primary request in `user_request`, covers all of its material parts, and stays on topic.",
+        "somewhat_relevant": "The output addresses part of `user_request` but misses a material requirement, a key constraint, or a necessary next step.",
+        "not_relevant": "The output is off-topic, evasive, unrelated, or does not address the primary request in `user_request`."
+      }
+    }
+  }
+}

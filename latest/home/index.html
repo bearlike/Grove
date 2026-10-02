@@ -969,6 +969,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-feedback-evals/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.7.7 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m9 11l2 2l4-4"/></g></svg>
+
+        
+        Feedback & Evaluations
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1569,7 +1593,7 @@
     &lt;div class=&#34;swiper-slide&#34;&gt;
       &lt;figure&gt;
         &lt;img loading=&#34;lazy&#34; src=&#34;../img/screenshots/webapp-diagram.png&#34; alt=&#34;A Grove workspace&#39;s Diagram tab filling the work pane, with an architecture diagram the agent drew rendered in the embedded draw.io editor and marked Saved&#34;&gt;
-        &lt;figcaption&gt;Diagrams. An agent draws a mockup or an architecture spec in draw.io, Grove validates the XML, you approve the picture.&lt;/figcaption&gt;
+        &lt;figcaption&gt;Diagrams. An agent draws a mockup or an architecture spec in &lt;a href=&#34;https://www.drawio.com/&#34;&gt;draw.io&lt;/a&gt;, Grove validates the XML, you approve the picture.&lt;/figcaption&gt;
       &lt;/figure&gt;
     &lt;/div&gt;
     &lt;div class=&#34;swiper-slide&#34;&gt;
@@ -1587,7 +1611,7 @@
     &lt;div class=&#34;swiper-slide&#34;&gt;
       &lt;figure&gt;
         &lt;img loading=&#34;lazy&#34; src=&#34;../img/screenshots/webapp-usage.png&#34; alt=&#34;Grove&#39;s usage audit showing subscription windows, measured totals, a daily token heatmap and weekly model mix&#34;&gt;
-        &lt;figcaption&gt;Usage. Subscription windows, burn rate and a year of tokens, cost and latency from local transcripts.&lt;/figcaption&gt;
+        &lt;figcaption&gt;Usage. Subscription windows, burn rate, tokens, cost and latency from local transcripts.&lt;/figcaption&gt;
       &lt;/figure&gt;
     &lt;/div&gt;
     &lt;div class=&#34;swiper-slide&#34;&gt;
@@ -1616,12 +1640,12 @@
 
 ## What is Grove? { .ms-h2-icon data-icon=&#34;target&#34; }
 
-- **Writing the code stopped being the slow part.** Deciding what to build did. More agents can build in parallel but shared checkouts cause conflicts and laptops limit capacity. Grove turns the agents you already use into a software factory. Guide each task from ticket to delivery.
-- **Give each task its own workspace.** Each agent gets its own worktree and branch in a separate window. Agents report progress phases for the workspace and each attached ticket independently. You can see what is being planned, built or verified across the fleet.
-- **Choose how each agent runs.** Run agents on your host with the environment they normally inherit. Or use a [container](features-containers.md) defined by your repository&#39;s `.devcontainer/`. It provides separate services and ports with resource limits. Use that isolation for runs with agent permission checks disabled.
-- **Choose where the work runs.** Tests, builds and scripts compete for CPU and memory across concurrent workspaces. Move those workloads off your laptop when it slows down. Reuse the container configuration on a shared team machine or serverless cloud infrastructure.
-- **Let the tracker start the work.** Assign an issue and Grove starts a workspace for it. Progress returns to [the same ticket](issue-ops.md). Follow the task where you defined it.
-- **Show it instead of describing it.** Mark up a [screenshot](features-attachments.md) or collaborate with the agent on a [diagram](features-diagrams.md). Approve the diagram or mockup and attach it to a ticket. Then coordinate your fleet around it.
+- **Coding is no longer the slow part.** Deciding what to build is. Parallel agents hit checkout conflicts and laptop limits. Grove turns your agents into a software factory. Turn tickets into outcomes.
+- **Give each task its own workspace.** Each agent gets a worktree and branch. Agents report phases for their workspace and each attached ticket. See what&#39;s planned, built or verified across the fleet.
+- **Choose how each agent runs.** Run agents in their usual host environment or a [container](features-containers.md) defined by your repository&#39;s `.devcontainer/`. Containers provide separate services and ports with resource limits.
+- **Choose where the work runs.** Concurrent tests and builds compete for CPU and memory. Reuse your container configuration on a shared team machine or serverless cloud to free your laptop.
+- **Let the tracker start the work.** Assign an issue and Grove starts its workspace. Progress returns to [the same ticket](issue-ops.md). Follow the task where you defined it.
+- **Show it instead of describing it.** Annotate a [screenshot](features-attachments.md) or draw a [diagram](features-diagrams.md) with your agent. Approve the diagram or mockup and attach it to a ticket to coordinate your fleet.
 
 ## Choose your surface { .ms-h2-icon data-icon=&#34;route&#34; }
 
@@ -1640,7 +1664,7 @@ Every workspace is reachable from all four.
     &lt;iconify-icon icon=&#34;lucide:layout-panel-top&#34; width=&#34;20&#34; height=&#34;20&#34; aria-hidden=&#34;true&#34;&gt;&lt;/iconify-icon&gt;
   &lt;/span&gt;
   &lt;span class=&#34;ms-card__title&#34;&gt;Web dashboard&lt;/span&gt;
-  &lt;span class=&#34;ms-card__body&#34;&gt;Follow agent sessions from any device. Read the transcript beside the branch and diff. Upload files or annotate screenshots. Edit draw.io diagrams with the agent.&lt;/span&gt;
+  &lt;span class=&#34;ms-card__body&#34;&gt;Follow sessions from any device. Read the transcript beside the branch and diff. Upload files, annotate screenshots, edit draw.io diagrams.&lt;/span&gt;
 &lt;/a&gt;
 &lt;a class=&#34;ms-card&#34; href=&#34;../issue-ops/&#34;&gt;
   &lt;span class=&#34;ms-card__icon&#34;&gt;
@@ -1654,7 +1678,7 @@ Every workspace is reachable from all four.
     &lt;iconify-icon icon=&#34;lucide:plug&#34; width=&#34;20&#34; height=&#34;20&#34; aria-hidden=&#34;true&#34;&gt;&lt;/iconify-icon&gt;
   &lt;/span&gt;
   &lt;span class=&#34;ms-card__title&#34;&gt;Another agent&lt;/span&gt;
-  &lt;span class=&#34;ms-card__body&#34;&gt;An orchestrating agent can delegate work and track progress through Grove&#39;s MCP tools. Worker agents discover peers and exchange messages through the mailbox. Separate workspaces can stay coordinated without sharing files.&lt;/span&gt;
+  &lt;span class=&#34;ms-card__body&#34;&gt;An orchestrator delegates and tracks work through MCP. Workers find peers and message them through the mailbox, so isolated workspaces still coordinate.&lt;/span&gt;
 &lt;/a&gt;
 &lt;/div&gt;
 
@@ -1668,19 +1692,19 @@ Every workspace is reachable from all four.
     &lt;span class=&#34;ms-card__title&#34;&gt;Shared configuration&lt;/span&gt;
     &lt;span class=&#34;ms-card__body&#34;&gt;A committed &lt;code&gt;.grove/config.json&lt;/code&gt; carries the agents, models, setup and container policy every workspace starts from. Each engineer overrides locally, and a workspace picks its own model without touching the shared file.&lt;/span&gt;
   &lt;/a&gt;
-  &lt;a class=&#34;ms-card&#34; href=&#34;../features-telemetry/&#34;&gt;
+  &lt;a class=&#34;ms-card&#34; href=&#34;../features-feedback-evals/&#34;&gt;
     &lt;span class=&#34;ms-card__icon&#34;&gt;
       &lt;iconify-icon icon=&#34;lucide:waypoints&#34; width=&#34;20&#34; height=&#34;20&#34; aria-hidden=&#34;true&#34;&gt;&lt;/iconify-icon&gt;
     &lt;/span&gt;
     &lt;span class=&#34;ms-card__title&#34;&gt;Agent monitoring&lt;/span&gt;
-    &lt;span class=&#34;ms-card__body&#34;&gt;Each turn becomes a trace of tool calls and cost. Rate answers in Grove with a thumb and an optional reason. Langfuse keeps the scores on that trace. Usage and spend come from local transcripts.&lt;/span&gt;
+    &lt;span class=&#34;ms-card__body&#34;&gt;Each turn becomes a Langfuse trace. A small local decision model labels every observation with a confidence score. Add thumbs up or down from Grove, then calibrate against human judgement.&lt;/span&gt;
   &lt;/a&gt;
   &lt;a class=&#34;ms-card&#34; href=&#34;../features-containers/&#34;&gt;
     &lt;span class=&#34;ms-card__icon&#34;&gt;
       &lt;iconify-icon icon=&#34;lucide:box&#34; width=&#34;20&#34; height=&#34;20&#34; aria-hidden=&#34;true&#34;&gt;&lt;/iconify-icon&gt;
     &lt;/span&gt;
     &lt;span class=&#34;ms-card__title&#34;&gt;Isolated containers&lt;/span&gt;
-    &lt;span class=&#34;ms-card__body&#34;&gt;Run each agent in a containerized sandbox for its task. Separate files and services prevent collisions. Set resource limits to protect the rest of the fleet. Scale each agent container independently on serverless cloud platforms as tasks arrive.&lt;/span&gt;
+    &lt;span class=&#34;ms-card__body&#34;&gt;Run each agent in a containerized sandbox. Separate files and services prevent collisions. Resource limits protect the fleet. Containers scale independently on serverless platforms.&lt;/span&gt;
   &lt;/a&gt;
   &lt;a class=&#34;ms-card&#34; href=&#34;../features-diagrams/&#34;&gt;
     &lt;span class=&#34;ms-card__icon&#34;&gt;
@@ -1694,7 +1718,7 @@ Every workspace is reachable from all four.
       &lt;iconify-icon icon=&#34;lucide:image-plus&#34; width=&#34;20&#34; height=&#34;20&#34; aria-hidden=&#34;true&#34;&gt;&lt;/iconify-icon&gt;
     &lt;/span&gt;
     &lt;span class=&#34;ms-card__title&#34;&gt;Image annotation&lt;/span&gt;
-    &lt;span class=&#34;ms-card__body&#34;&gt;Drop a screenshot or a file into either composer, draw on the image, and the agent is handed a path inside its own worktree. The day to day handoffs your agent harness leaves out.&lt;/span&gt;
+    &lt;span class=&#34;ms-card__body&#34;&gt;Annotate screenshots and attach files for your agent.&lt;/span&gt;
   &lt;/a&gt;
   &lt;a class=&#34;ms-card&#34; href=&#34;../use-mcp/&#34;&gt;
     &lt;span class=&#34;ms-card__icon&#34;&gt;
@@ -1963,7 +1987,7 @@ Start with one agent, share your setup with the team and choose how you manage t
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/webapp-diagram.png" alt="A Grove workspace's Diagram tab filling the work pane, with an architecture diagram the agent drew rendered in the embedded draw.io editor and marked Saved">
-        <figcaption>Diagrams. An agent draws a mockup or an architecture spec in draw.io, Grove validates the XML, you approve the picture.</figcaption>
+        <figcaption>Diagrams. An agent draws a mockup or an architecture spec in <a href="https://www.drawio.com/">draw.io</a>, Grove validates the XML, you approve the picture.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
@@ -1981,7 +2005,7 @@ Start with one agent, share your setup with the team and choose how you manage t
     <div class="swiper-slide">
       <figure>
         <img loading="lazy" src="../img/screenshots/webapp-usage.png" alt="Grove's usage audit showing subscription windows, measured totals, a daily token heatmap and weekly model mix">
-        <figcaption>Usage. Subscription windows, burn rate and a year of tokens, cost and latency from local transcripts.</figcaption>
+        <figcaption>Usage. Subscription windows, burn rate, tokens, cost and latency from local transcripts.</figcaption>
       </figure>
     </div>
     <div class="swiper-slide">
@@ -2010,12 +2034,12 @@ Start with one agent, share your setup with the team and choose how you manage t
 
 <h2 class="ms-h2-icon" data-icon="target" id="what-is-grove">What is Grove?</h2>
 <ul>
-<li><strong>Writing the code stopped being the slow part.</strong> Deciding what to build did. More agents can build in parallel but shared checkouts cause conflicts and laptops limit capacity. Grove turns the agents you already use into a software factory. Guide each task from ticket to delivery.</li>
-<li><strong>Give each task its own workspace.</strong> Each agent gets its own worktree and branch in a separate window. Agents report progress phases for the workspace and each attached ticket independently. You can see what is being planned, built or verified across the fleet.</li>
-<li><strong>Choose how each agent runs.</strong> Run agents on your host with the environment they normally inherit. Or use a <a href="../features-containers/">container</a> defined by your repository's <code>.devcontainer/</code>. It provides separate services and ports with resource limits. Use that isolation for runs with agent permission checks disabled.</li>
-<li><strong>Choose where the work runs.</strong> Tests, builds and scripts compete for CPU and memory across concurrent workspaces. Move those workloads off your laptop when it slows down. Reuse the container configuration on a shared team machine or serverless cloud infrastructure.</li>
-<li><strong>Let the tracker start the work.</strong> Assign an issue and Grove starts a workspace for it. Progress returns to <a href="../issue-ops/">the same ticket</a>. Follow the task where you defined it.</li>
-<li><strong>Show it instead of describing it.</strong> Mark up a <a href="../features-attachments/">screenshot</a> or collaborate with the agent on a <a href="../features-diagrams/">diagram</a>. Approve the diagram or mockup and attach it to a ticket. Then coordinate your fleet around it.</li>
+<li><strong>Coding is no longer the slow part.</strong> Deciding what to build is. Parallel agents hit checkout conflicts and laptop limits. Grove turns your agents into a software factory. Turn tickets into outcomes.</li>
+<li><strong>Give each task its own workspace.</strong> Each agent gets a worktree and branch. Agents report phases for their workspace and each attached ticket. See what's planned, built or verified across the fleet.</li>
+<li><strong>Choose how each agent runs.</strong> Run agents in their usual host environment or a <a href="../features-containers/">container</a> defined by your repository's <code>.devcontainer/</code>. Containers provide separate services and ports with resource limits.</li>
+<li><strong>Choose where the work runs.</strong> Concurrent tests and builds compete for CPU and memory. Reuse your container configuration on a shared team machine or serverless cloud to free your laptop.</li>
+<li><strong>Let the tracker start the work.</strong> Assign an issue and Grove starts its workspace. Progress returns to <a href="../issue-ops/">the same ticket</a>. Follow the task where you defined it.</li>
+<li><strong>Show it instead of describing it.</strong> Annotate a <a href="../features-attachments/">screenshot</a> or draw a <a href="../features-diagrams/">diagram</a> with your agent. Approve the diagram or mockup and attach it to a ticket to coordinate your fleet.</li>
 </ul>
 <h2 class="ms-h2-icon" data-icon="route" id="choose-your-surface">Choose your surface</h2>
 <p>Every workspace is reachable from all four.</p>
@@ -2032,7 +2056,7 @@ Start with one agent, share your setup with the team and choose how you manage t
     <iconify-icon icon="lucide:layout-panel-top" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Web dashboard</span>
-  <span class="ms-card__body">Follow agent sessions from any device. Read the transcript beside the branch and diff. Upload files or annotate screenshots. Edit draw.io diagrams with the agent.</span>
+  <span class="ms-card__body">Follow sessions from any device. Read the transcript beside the branch and diff. Upload files, annotate screenshots, edit draw.io diagrams.</span>
 </a>
 <a class="ms-card" href="../issue-ops/">
   <span class="ms-card__icon">
@@ -2046,7 +2070,7 @@ Start with one agent, share your setup with the team and choose how you manage t
     <iconify-icon icon="lucide:plug" width="20" height="20" aria-hidden="true"></iconify-icon>
   </span>
   <span class="ms-card__title">Another agent</span>
-  <span class="ms-card__body">An orchestrating agent can delegate work and track progress through Grove's MCP tools. Worker agents discover peers and exchange messages through the mailbox. Separate workspaces can stay coordinated without sharing files.</span>
+  <span class="ms-card__body">An orchestrator delegates and tracks work through MCP. Workers find peers and message them through the mailbox, so isolated workspaces still coordinate.</span>
 </a>
 </div>
 
@@ -2059,19 +2083,19 @@ Start with one agent, share your setup with the team and choose how you manage t
     <span class="ms-card__title">Shared configuration</span>
     <span class="ms-card__body">A committed <code>.grove/config.json</code> carries the agents, models, setup and container policy every workspace starts from. Each engineer overrides locally, and a workspace picks its own model without touching the shared file.</span>
   </a>
-  <a class="ms-card" href="../features-telemetry/">
+  <a class="ms-card" href="../features-feedback-evals/">
     <span class="ms-card__icon">
       <iconify-icon icon="lucide:waypoints" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
     <span class="ms-card__title">Agent monitoring</span>
-    <span class="ms-card__body">Each turn becomes a trace of tool calls and cost. Rate answers in Grove with a thumb and an optional reason. Langfuse keeps the scores on that trace. Usage and spend come from local transcripts.</span>
+    <span class="ms-card__body">Each turn becomes a Langfuse trace. A small local decision model labels every observation with a confidence score. Add thumbs up or down from Grove, then calibrate against human judgement.</span>
   </a>
   <a class="ms-card" href="../features-containers/">
     <span class="ms-card__icon">
       <iconify-icon icon="lucide:box" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
     <span class="ms-card__title">Isolated containers</span>
-    <span class="ms-card__body">Run each agent in a containerized sandbox for its task. Separate files and services prevent collisions. Set resource limits to protect the rest of the fleet. Scale each agent container independently on serverless cloud platforms as tasks arrive.</span>
+    <span class="ms-card__body">Run each agent in a containerized sandbox. Separate files and services prevent collisions. Resource limits protect the fleet. Containers scale independently on serverless platforms.</span>
   </a>
   <a class="ms-card" href="../features-diagrams/">
     <span class="ms-card__icon">
@@ -2085,7 +2109,7 @@ Start with one agent, share your setup with the team and choose how you manage t
       <iconify-icon icon="lucide:image-plus" width="20" height="20" aria-hidden="true"></iconify-icon>
     </span>
     <span class="ms-card__title">Image annotation</span>
-    <span class="ms-card__body">Drop a screenshot or a file into either composer, draw on the image, and the agent is handed a path inside its own worktree. The day to day handoffs your agent harness leaves out.</span>
+    <span class="ms-card__body">Annotate screenshots and attach files for your agent.</span>
   </a>
   <a class="ms-card" href="../use-mcp/">
     <span class="ms-card__icon">
@@ -2739,6 +2763,30 @@ Start with one agent, share your setup with the team and choose how you manage t
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-feedback-evals/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.7.7 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m9 11l2 2l4-4"/></g></svg>
+
+        
+        Feedback & Evaluations
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -3340,7 +3388,7 @@ Start with one agent, share your setup with the team and choose how you manage t
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
+      <p class="mewbo-footer__tagline">Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace.</p>
       
     </div>
 

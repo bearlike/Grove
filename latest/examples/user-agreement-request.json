@@ -1,0 +1,17 @@
+{
+  "model": "tev1:4b",
+  "state": {
+    "input": "That's not what I asked. The date belongs in the header, not the footer."
+  },
+  "questions": {
+    "user_agreement": {
+      "type": "choice",
+      "instructions": "`input` is the user's latest message to an AI coding agent. What does `input` show about the user's view of the agent's previous work or direction?",
+      "criteria": {
+        "disagrees": "The user says or implies the agent made a mistake, did not do what was asked, misunderstood, or is heading in the wrong direction, including complaints that the result is still wrong.",
+        "agrees": "The user approves, confirms success, or tells the agent to go ahead with what it proposed.",
+        "neutral": "A new request, question or information with no judgement of the agent's previous work."
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Let another agent coordinate your fleet
 
-Give an orchestrating agent Grove's MCP tools to launch work across the fleet. Worker agents can find and message peers through the mailbox without sharing a workspace. The `leading-in-grove` skill covers task splitting and peer coordination.
+An orchestrator launches work across the fleet through Grove's MCP tools. Workers find and message peers through the mailbox without sharing a workspace. The `leading-in-grove` skill covers task splitting and coordination.
 
 <figure class="ms-shot">
   <div class="ms-shot__frame"><img loading="lazy" src="../img/screenshots/grove-mcp-tools.png" alt="Claude Code listing Grove's MCP tools: create, list, peek, pause, and steer workspaces" /></div>

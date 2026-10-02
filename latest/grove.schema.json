@@ -1109,6 +1109,18 @@
       "title": "NotificationsConfig",
       "type": "object"
     },
+    "NudgesConfig": {
+      "additionalProperties": false,
+      "description": "Short reminders the Grove daemon puts into a working agent's session.",
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/PhaseNudgeConfig",
+          "description": "Remind an agent that stopped reporting its task phase."
+        }
+      },
+      "title": "NudgesConfig",
+      "type": "object"
+    },
     "PanelConfig": {
       "additionalProperties": false,
       "description": "One embeddable view served by a service in this workspace's compose stack.\n\nA panel deliberately names a compose service rather than an origin. A\ncommitted ``.grove/config.json`` is untrusted input, and arbitrary hosts or\nURLs would turn an iframe convenience into a host-network proxy. Resolution\ntherefore proves that this service belongs to the workspace's already-owned\ncompose project before the daemon connects. No committed-layer stripping is\nneeded: the service and port are contained by that ownership proof.",
@@ -1177,6 +1189,28 @@
         }
       },
       "title": "PermissionConfig",
+      "type": "object"
+    },
+    "PhaseNudgeConfig": {
+      "additionalProperties": false,
+      "description": "Remind a working agent to report its task phase when it has gone quiet about it.\n\nThe reminder is one short line, sent only to an agent that is running, working, has\nreported a phase before, and has not changed it for a whole interval while it kept\nmaking progress. A session that is paused, idle, waiting, blocked, errored, handed\noff, or stuck inside one long tool call is never reminded, and each phase report is\nreminded about at most once.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Send the reminder at all.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "every_minutes": {
+          "default": 10.0,
+          "description": "How long a phase may stand unchanged while the agent works before it is reminded.\nAlso how often Grove checks.",
+          "maximum": 1440.0,
+          "minimum": 1.0,
+          "title": "Every Minutes",
+          "type": "number"
+        }
+      },
+      "title": "PhaseNudgeConfig",
       "type": "object"
     },
     "ProxyConfig": {
@@ -2387,6 +2421,9 @@
     },
     "notifications": {
       "$ref": "#/$defs/NotificationsConfig"
+    },
+    "nudges": {
+      "$ref": "#/$defs/NudgesConfig"
     },
     "panels": {
       "description": "Embeddable compose-service views this project permits in each workspace.\n\nEmpty by default. A panel is visible only while the workspace's persisted\ncompose project is verified, running, and contains the named service; a\ndeclaration alone never opens a network destination.",

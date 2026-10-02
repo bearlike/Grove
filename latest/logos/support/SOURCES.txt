@@ -24,6 +24,11 @@ the pinned library sources. Its digests make an upstream change fail closed.
   Source: https://github.com/lobehub/lobe-icons
   License: MIT, https://github.com/lobehub/lobe-icons/blob/master/LICENSE
 
+- langfuse.png: standalone transparent mark (`langfuse-color.png`) from LobeHub
+  Icons static-png, version 1.95.0, the same package and treatment as Codex.
+  Source: https://github.com/lobehub/lobe-icons
+  License: MIT, https://github.com/lobehub/lobe-icons/blob/master/LICENSE
+
 - opencode.png: supplied by the maintainer as a finished 240x240 tile and
   resized to the shared 192x192 grid with Lanczos. It carries its own rounded
   shell, so neither the finishing pass nor the upstream reset touches it.

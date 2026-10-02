@@ -1,0 +1,32 @@
+{
+  "model": "tev1:4b",
+  "state": {
+    "tool_call": "{\"command\":\"git fetch -q origin main && git log --oneline HEAD..origin/main\",\"arguments\":{\"description\":\"See what landed on main\"}}"
+  },
+  "questions": {
+    "shell_purpose": {
+      "type": "choice",
+      "instructions": "`tool_call` is one shell command an AI coding agent ran, as JSON: `command` is the shell command and `arguments.description` (when present) is the agent's own one-line statement of why it ran it. Prefer the stated description when it names a purpose. Which option best describes the PRIMARY purpose of this command? For a compound command, choose the purpose of its main step, not of setup such as cd, date or env.",
+      "criteria": {
+        "explore_code": "Read, search or list source code, docs, config or file structure to understand it (cat, sed -n, grep, rg, ls, find, git grep) without changing anything.",
+        "edit_files": "Change the CONTENT of project source, docs or test files: write or rewrite a file through python/sed/heredoc, apply a patch, rename or delete source files. Not deploying, copying builds or config into a running service.",
+        "run_tests": "Run an existing test suite, a single test, or a test/probe script and read its pass/fail result (pytest, vitest, playwright specs, node test scripts).",
+        "lint_typecheck_build": "Run linters, formatters, type checkers, code generators, or build/bundle steps (make lint, ruff, mypy, tsc, npm run build, esbuild, codegen) including rebuilding an artifact before a check.",
+        "git_history": "Inspect or change local git state: status, diff, log, branch, checkout, stash, add, commit, rebase, merge, conflict resolution, worktrees.",
+        "forge_collab": "Work with the remote forge or tracker: push, pull requests, issues, comments, labels, CI run status or logs (git push, gh, tea, Gitea/GitHub API).",
+        "service_ops": "Operate or deploy running services and hosts: start, stop, restart, reinstall, systemctl, docker/compose, swap a build or config into a live service, process or port management, ssh to a host to change it.",
+        "diagnose_runtime": "Investigate the live behaviour of a running system: read service logs, check health, processes, ports, resource use, reachability, timings, or whether a background job is still running.",
+        "data_query": "Query or modify a datastore or a remote data/observability API to read records: SQL/ClickHouse/psql, Langfuse or LiteLLM APIs, curl to JSON endpoints.",
+        "secrets_config": "Discover, read, inject or write credentials, environment variables or tool configuration (ssm, .env, config files, auth tokens).",
+        "dependency_env": "Install, upgrade or inspect packages, toolchains or the execution environment (uv, pip, npm install, versions, which, PATH).",
+        "agent_fleet": "Coordinate the agent platform itself: Grove workspaces, phase reports, mailbox, watches, todo, sessions (grove ...).",
+        "web_fetch_research": "Fetch documentation, web pages or external references to learn something (curl/wget of docs, search APIs), not to operate a service.",
+        "wait_poll": "Wait or poll for something to finish: sleep, loops that re-check status, waiting on CI or a background job.",
+        "cleanup_scratch": "Remove temporary files, scratch worktrees, probes or leftover processes created during the work.",
+        "visual_verify": "Check how a UI or rendered page actually looks or behaves: screenshots, headless-browser renders, DOM or scene inspection, contrast, layout or frame-rate measurements.",
+        "compute_analyze": "Run an ad-hoc calculation or analysis over local data with a throwaway script (statistics, colour maths, counting or categorizing records already on disk), not querying a service.",
+        "other": "Anything that fits none of the purposes above."
+      }
+    }
+  }
+}

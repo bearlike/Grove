@@ -2,7 +2,7 @@
 
 ## Give each agent an isolated environment
 
-Run each agent in a containerized sandbox for its task. Separate services and ports keep parallel work from colliding. Each task can run its own database.
+Run each agent in a containerized sandbox. Separate services and ports keep parallel work from colliding, and each task can run its own database.
 
 <video preload="auto" poster="../img/posters/devcontainer-still.png">
   <source src="../videos/3-grove-devcontainer.mp4" type="video/mp4" />
@@ -12,7 +12,7 @@ Run each agent in a containerized sandbox for its task. Separate services and po
 
 - **No file conflicts.** Each agent edits a separate worktree and runs its own services. Parallel tasks cannot overwrite each other's files or fight over a port.
 - **Control resource use.** Set CPU and memory limits per container.
-- **Elastic capacity.** Scale each agent container independently on serverless cloud platforms as tasks arrive.
+- **Elastic capacity.** Containers scale independently on serverless platforms as tasks arrive.
 - **One environment for the team.** Your committed `.devcontainer/` prepares each container. Teammates can open the same configuration in VS Code.
 
 ## Host or container

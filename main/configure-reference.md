@@ -309,6 +309,23 @@ Push notifications when an agent needs you. Off by default.
 | `topic` | `string` | unset | ntfy topic, included only when set. |
 | `url` | `string` | unset | The URL to POST to. |
 
+## `nudges`
+
+Short reminders the Grove daemon puts into a working agent's session.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `phase` | see below | | Remind a working agent to report its task phase when it has gone quiet about it. |
+
+### `phase`
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | `true` | Send the reminder at all. |
+| `every_minutes` | `number` | `10.0` | How long a phase may stand unchanged while the agent works before it is reminded. Also how often Grove checks. |
+
 ## `panels` (a list, one entry each)
 
 One embeddable view served by a service in this workspace's compose stack.

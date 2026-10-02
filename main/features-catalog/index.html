@@ -969,6 +969,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-feedback-evals/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.7.7 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m9 11l2 2l4-4"/></g></svg>
+
+        
+        Feedback & Evaluations
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1497,7 +1521,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | One agent, one worktree | Each workspace is its own git worktree, branch and tmux session. | [Workspace lifecycle](features-workspace-lifecycle.md) |
 | Pause, resume, respawn, kill | Pause drops the worktree and keeps the branch. Kill deletes only branches Grove created. | [Workspace lifecycle](features-workspace-lifecycle.md) |
 | Branch provenance | Grove records whether it made a branch or you attached one, and kill honours it. | [Branch provenance](features-branch-provenance.md) |
-| Containers | Run each agent in a containerized sandbox for its task. Set resource limits to protect the rest of the fleet. | [Containerized agents](features-containers.md) |
+| Containers | Run each agent in a containerized sandbox. Resource limits protect the rest of the fleet. | [Containerized agents](features-containers.md) |
 | Init scripts | A script prepares each new worktree, on the host or in the container. | [Init scripts](configure-init-scripts.md) |
 | Root placement | A workspace can run in the repo root on the branch already checked out. | [Workspace lifecycle](features-workspace-lifecycle.md#root-workspaces) |
 | Status semantics | Three axes, workspace, agent activity and task phase, each answering a different question. | [Status semantics](features-status.md) |
@@ -1510,7 +1534,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Questions and plans | A live question renders as a card and a plan approval as a dialog row. | [Web dashboard](use-webapp.md#steering-the-agent) |
 | Attachments | Paste or attach an image or file and the agent is handed its path. | [Attachments](features-attachments.md) |
 | Image annotation | Draw over a staged image before sending it. | [Attachments](features-attachments.md#annotate-before-you-send) |
-| Diagram collaboration | A person and an agent edit one draw.io file with revision checks. | [Diagram collaboration](features-diagrams.md) |
+| Diagram collaboration | A person and an agent edit one [draw.io](https://www.drawio.com/) file with revision checks. | [Diagram collaboration](features-diagrams.md) |
 | Mockups and specs | Approve a UI mockup or an architecture plan as a picture before code exists. | [Diagram collaboration](features-diagrams.md#two-jobs-for-one-file) |
 | Model per workspace | Each agent exposes its own catalog and a workspace picks one. | [Web dashboard](use-webapp.md#starting-a-workspace) |
 | First turn brief | Grove tells the agent where it is and how to report. | [Project setup](configure-project.md#tailor-the-first-turn-brief) |
@@ -1526,7 +1550,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 
 | Capability | What it does | Page |
 |---|---|---|
-| Ticket providers | Attach a GitHub, Gitea or Linear issue or pull request to a workspace. | [Ticket providers](features-ticket-providers.md) |
+| Ticket providers | Attach a Linear, GitHub or Gitea issue or pull request to a workspace. | [Ticket providers](features-ticket-providers.md) |
 | Refs from the branch | Grove reads the ticket off the branch name so the link follows the branch. | [Ticket providers](features-ticket-providers.md#deriving-refs-from-the-branch-name) |
 | Sticky comment | One comment on the ticket carries phase, checklist, branch, commit and links. | [Issue ops](issue-ops.md) |
 | Task phase per ticket | Each attached ticket reports its own six stage phase and a blocked flag. | [Status semantics](features-status.md#the-third-axis-task-phase) |
@@ -1540,7 +1564,8 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Activity dashboard | Which agent is working, waiting, blocked or idle, across every repo. | [Agent activity](features-activity.md) |
 | Session catalog | Every agent session on the host, including work Grove did not launch. | [Agent activity](features-activity.md#the-session-catalog-every-session-on-this-host) |
 | Session recovery | Sessions re-adopt across daemon restarts and a stale pointer remaps in a click. | [Workspace lifecycle](features-workspace-lifecycle.md#recovery-from-a-vanished-session) |
-| Telemetry | Send each turn to an OTLP backend. With Langfuse, rate answers in Grove for reviews and LLM judge calibration. | [Telemetry](features-telemetry.md) |
+| Telemetry | Send each turn to an OTLP backend as one trace, with workspace, branch and ticket on every span. | [Telemetry](features-telemetry.md) |
+| Feedback and evaluations | Rate turns in Grove, and label every observation with a local decision model calibrated on your own traffic. | [Feedback and evaluations](features-feedback-evals.md) |
 | Usage audit | Tokens, time, cost and subscription windows projected from transcripts on disk. | [Web dashboard](use-webapp.md#the-usage-audit) |
 | Push notifications | A push when an agent finishes a turn or needs an answer. | [Push notifications](features-notifications.md) |
 | Public share links | A read only transcript link with an expiry and an optional passcode. | [Web dashboard](use-webapp.md#working-in-a-session) |
@@ -1731,7 +1756,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.</
 </tr>
 <tr>
 <td>Containers</td>
-<td>Run each agent in a containerized sandbox for its task. Set resource limits to protect the rest of the fleet.</td>
+<td>Run each agent in a containerized sandbox. Resource limits protect the rest of the fleet.</td>
 <td><a href="../features-containers/">Containerized agents</a></td>
 </tr>
 <tr>
@@ -1783,7 +1808,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.</
 </tr>
 <tr>
 <td>Diagram collaboration</td>
-<td>A person and an agent edit one draw.io file with revision checks.</td>
+<td>A person and an agent edit one <a href="https://www.drawio.com/">draw.io</a> file with revision checks.</td>
 <td><a href="../features-diagrams/">Diagram collaboration</a></td>
 </tr>
 <tr>
@@ -1850,7 +1875,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.</
 <tbody>
 <tr>
 <td>Ticket providers</td>
-<td>Attach a GitHub, Gitea or Linear issue or pull request to a workspace.</td>
+<td>Attach a Linear, GitHub or Gitea issue or pull request to a workspace.</td>
 <td><a href="../features-ticket-providers/">Ticket providers</a></td>
 </tr>
 <tr>
@@ -1907,8 +1932,13 @@ it. Read down a table to see what an area covers. Follow a link for the depth.</
 </tr>
 <tr>
 <td>Telemetry</td>
-<td>Send each turn to an OTLP backend. With Langfuse, rate answers in Grove for reviews and LLM judge calibration.</td>
+<td>Send each turn to an OTLP backend as one trace, with workspace, branch and ticket on every span.</td>
 <td><a href="../features-telemetry/">Telemetry</a></td>
+</tr>
+<tr>
+<td>Feedback and evaluations</td>
+<td>Rate turns in Grove, and label every observation with a local decision model calibrated on your own traffic.</td>
+<td><a href="../features-feedback-evals/">Feedback and evaluations</a></td>
 </tr>
 <tr>
 <td>Usage audit</td>
@@ -2554,6 +2584,30 @@ it. Read down a table to see what an area covers. Follow a link for the depth.</
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-feedback-evals/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.7.7 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m9 11l2 2l4-4"/></g></svg>
+
+        
+        Feedback & Evaluations
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -3169,7 +3223,7 @@ it. Read down a table to see what an area covers. Follow a link for the depth.</
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
+      <p class="mewbo-footer__tagline">Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace.</p>
       
     </div>
 

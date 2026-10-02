@@ -79,16 +79,10 @@ body:has(.grove-landing) { overflow: hidden; }
    scene it only tints what is darker than the light, so the machine keeps
    its grey while its shadows pick up the room's temperature.
 
-   Motion is a marquee of sun hues, amber through orange to red and back,
-   travelling left to right in a seamless loop. It is masked by the field's
-   own LUMINANCE, so it is strongest in the hot corner and near-absent over
-   the burgundy, and the resting distribution never changes.
-
-   The strip moves by transform, but under a luminance mask and a `lighten`
-   blend the browser recomposites the whole masked field for every step, and
-   on software rendering that alone held the page near 16 fps. The gradient
-   is so smooth that a 10 Hz step (4 px) reads exactly like continuous motion,
-   and costs a sixth of the recomposites. */
+   The field is still. It used to carry a slow marquee of sun hues under a
+   luminance mask and a `lighten` blend, which recomposited the whole masked
+   field on every step and competed with the scene for the GPU; nothing but
+   the robots and the coil tops is meant to move, and nobody looks here. */
 .grove-landing__aura {
   position: absolute;
   /* The reference's field spans its hero card, which ends above its fold;
@@ -112,40 +106,13 @@ body:has(.grove-landing) { overflow: hidden; }
   -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
   mask-image: linear-gradient(to bottom, #000 55%, transparent);
 }
-.grove-landing__aura-drift {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  -webkit-mask: url("../img/landing/aura.png") 0 0 / var(--aura-size) no-repeat;
-  -webkit-mask-source-type: luminance;
-  mask: url("../img/landing/aura.png") 0 0 / var(--aura-size) no-repeat luminance;
-}
-.grove-landing__aura-drift::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 -100%;
-  width: 200%;
-  opacity: 0.45;
-  /* The same solar ramp the field uses, mirrored so the loop is seamless:
-     sun white, solar yellow, amber, sun orange, sun red, burgundy and back.
-     Because the mask is the field's luminance, the strip only shows where
-     the field is still hot, so the darkening direction never reverses. */
-  background: linear-gradient(90deg,
-    #ffd98a 0%, #fbb238 12%, #ee8214 24%, #d4520c 36%, #a82a08 44%, #5c0a07 50%,
-    #a82a08 56%, #d4520c 64%, #ee8214 76%, #fbb238 88%, #ffd98a 100%) 0 0 / 50% 100% repeat-x;
-  animation: grove-aura-marquee 36s steps(360) infinite;
-  will-change: transform;
-}
-@keyframes grove-aura-marquee {
-  from { transform: translate3d(0, 0, 0); }
-  to { transform: translate3d(50%, 0, 0); }
-}
 
 /* Very fine film grain over everything, the scene included. One small
-   turbulence tile, rasterised once and tiled; the jitter moves the layer in
-   steps so it is a compositor transform, never a per-frame repaint. It is a
-   plain low-opacity layer, not overlay or soft-light: both scale with the
-   base value, so over this near-black floor they measured as no grain. */
+   turbulence tile, rasterised once and tiled, and still: the jitter it used
+   to have was a compositor transform every 180 ms over the whole page, for a
+   texture too faint to see move. It is a plain low-opacity layer, not
+   overlay or soft-light: both scale with the base value, so over this
+   near-black floor they measured as no grain. */
 .grove-landing__grain {
   position: absolute;
   inset: -64px;
@@ -154,14 +121,6 @@ body:has(.grove-landing) { overflow: hidden; }
   opacity: 0.018;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 1'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
   background-size: 160px 160px;
-  animation: grove-grain 0.9s steps(1) infinite;
-}
-@keyframes grove-grain {
-  0% { transform: translate3d(0, 0, 0); }
-  20% { transform: translate3d(-23px, 17px, 0); }
-  40% { transform: translate3d(31px, -9px, 0); }
-  60% { transform: translate3d(-11px, -29px, 0); }
-  80% { transform: translate3d(19px, 27px, 0); }
 }
 
 .grove-landing__header {
@@ -446,11 +405,11 @@ body:has(.grove-landing) { overflow: hidden; }
    command up beside the previous one. */
 .grove-landing__install-panel code { grid-column: 1; font: inherit; color: inherit; background: none; padding: 0; }
 .grove-landing__install-note { color: rgba(205, 188, 174, 0.62); }
-.grove-landing__install-panel > .grove-landing__install-note:first-child { grid-column: 1 / -1; }
 .grove-landing__install-tool { color: var(--factory-ember); }
-/* A narrow column keeps the commands whole and drops the side notes. */
+/* A narrow column keeps the commands whole and drops the side notes. Every
+   panel is exactly two command lines, so the card never changes height. */
 @container (max-width: 25rem) {
-  .grove-landing__install-panel > .grove-landing__install-note:not(:first-child) { display: none; }
+  .grove-landing__install-panel > .grove-landing__install-note { display: none; }
 }
 .grove-landing__install-footer {
   display: flex;
@@ -617,5 +576,4 @@ body:has(.grove-landing) { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .grove-landing__button, .grove-landing__nav-pill, .grove-landing__nav-cta, .grove-landing__support a, .grove-landing__install-tab { transition: none; }
   .grove-landing__button:hover, .grove-landing__support a:hover { transform: none; }
-  .grove-landing__aura-drift::before, .grove-landing__grain { animation: none; }
 }

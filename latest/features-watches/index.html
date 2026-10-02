@@ -969,6 +969,30 @@
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-feedback-evals/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.7.7 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m9 11l2 2l4-4"/></g></svg>
+
+        
+        Feedback & Evaluations
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1526,6 +1550,7 @@ flowchart TB
 | `timer` | A wall-clock instant arrives | A durable `sleep` |
 | `cmd` | A command exits with a status you name | Anything Grove does not model |
 | `ticket` | Never: it reports each change and keeps watching | Registered by Grove for you, below |
+| `phase_nudge` | Never: it reminds a working agent whose phase went stale | Registered by Grove for you, below |
 
 ## Changes to your attached tickets
 
@@ -1536,6 +1561,20 @@ Attach an issue or pull request to a running workspace, and Grove tells the agen
 - Grove&#39;s own writes never count. Its status comment, its badge footer, its assignment and anything its bot account posts are left out of what is compared, so its progress updates cannot wake the agent in a loop.
 - Each ticket is read at most once a minute, however many workspaces are attached to it. The status comment reuses the same read.
 - The Watches card in the web dashboard lists each ticket watch as &#34;Watching while the workspace runs&#34;, and `grove watch ls` shows them too.
+
+## A reminder when the phase goes stale
+
+An agent that reported its [phase](features-status.md) and then kept working without updating it gets one short reminder from the Grove daemon.
+
+- It fires only when the agent is **working**, its phase has stood unchanged for **10 minutes**, and its reply or tool-call count **moved** during those 10 minutes.
+- A paused, idle, waiting, blocked, errored or handed-off session is never reminded. Neither is one stuck inside a single long tool call, or one that never reported a phase at all.
+- Each phase report is reminded about **once**. Writing a new phase arms it again.
+- The reminder is one line fenced as `&lt;grove-instruction kind=&#34;reminder&#34;&gt;`, so the agent and anyone reading the transcript can tell it came from Grove rather than from the person. It is never counted as a human turn.
+- It never wakes or revives a session. A reminder that finds the agent stopped is dropped.
+
+```json
+{ &#34;nudges&#34;: { &#34;phase&#34;: { &#34;enabled&#34;: true, &#34;every_minutes&#34;: 10 } } }
+```
 
 `ci` is keyed on the commit SHA, never a branch name: a force-push makes a different commit, and a watch that followed the name would answer about work nobody asked about.
 
@@ -1555,7 +1594,7 @@ Over MCP the same three verbs are `grove_register_watch`, `grove_list_watches` a
 
 A delivered callback means Grove handed the message to that session&#39;s transport. It is not evidence that a model read it or acted on it — the same contract every mailbox receipt carries.
 
-A ticket watch stays `pending` for as long as its workspace runs, and ends `cancelled` when the ticket is detached or the workspace pauses or ends. Every other watch ends in one of four states: `fired` (it settled and the callback went out), `expired` (the deadline came first), `cancelled` (withdrawn), or `undeliverable` (it settled, but the recipient was no longer live to be told). `grove watch ls` shows all of them, including recently settled ones, because that record is also what stops a restart from delivering the same callback twice.
+A ticket or phase-reminder watch stays `pending` for as long as its workspace runs, and ends `cancelled` when the ticket is detached, the reminder is turned off, or the workspace pauses or ends. Every other watch ends in one of four states: `fired` (it settled and the callback went out), `expired` (the deadline came first), `cancelled` (withdrawn), or `undeliverable` (it settled, but the recipient was no longer live to be told). `grove watch ls` shows all of them, including recently settled ones, because that record is also what stops a restart from delivering the same callback twice.
 
 ## Limits
 
@@ -1763,6 +1802,11 @@ A ticket watch stays `pending` for as long as its workspace runs, and ends `canc
 <td>Never: it reports each change and keeps watching</td>
 <td>Registered by Grove for you, below</td>
 </tr>
+<tr>
+<td><code>phase_nudge</code></td>
+<td>Never: it reminds a working agent whose phase went stale</td>
+<td>Registered by Grove for you, below</td>
+</tr>
 </tbody>
 </table></div>
 <h2 id="changes-to-your-attached-tickets">Changes to your attached tickets</h2>
@@ -1774,18 +1818,29 @@ A ticket watch stays `pending` for as long as its workspace runs, and ends `canc
 <li>Each ticket is read at most once a minute, however many workspaces are attached to it. The status comment reuses the same read.</li>
 <li>The Watches card in the web dashboard lists each ticket watch as "Watching while the workspace runs", and <code>grove watch ls</code> shows them too.</li>
 </ul>
+<h2 id="a-reminder-when-the-phase-goes-stale">A reminder when the phase goes stale</h2>
+<p>An agent that reported its <a href="../features-status/">phase</a> and then kept working without updating it gets one short reminder from the Grove daemon.</p>
+<ul>
+<li>It fires only when the agent is <strong>working</strong>, its phase has stood unchanged for <strong>10 minutes</strong>, and its reply or tool-call count <strong>moved</strong> during those 10 minutes.</li>
+<li>A paused, idle, waiting, blocked, errored or handed-off session is never reminded. Neither is one stuck inside a single long tool call, or one that never reported a phase at all.</li>
+<li>Each phase report is reminded about <strong>once</strong>. Writing a new phase arms it again.</li>
+<li>The reminder is one line fenced as <code>&lt;grove-instruction kind="reminder"&gt;</code>, so the agent and anyone reading the transcript can tell it came from Grove rather than from the person. It is never counted as a human turn.</li>
+<li>It never wakes or revives a session. A reminder that finds the agent stopped is dropped.</li>
+</ul>
+<div class="language-json codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span><span class="w"> </span><span class="nt">&quot;nudges&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;phase&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;enabled&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;every_minutes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">}</span>
+</span></code></pre></div>
 <p><code>ci</code> is keyed on the commit SHA, never a branch name: a force-push makes a different commit, and a watch that followed the name would answer about work nobody asked about.</p>
 <h2 id="using-it">Using it</h2>
-<div class="language-bash codehilite"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>grove<span class="w"> </span>watch<span class="w"> </span>ci<span class="w"> </span>&lt;commit-sha&gt;<span class="w"> </span>--owner<span class="w"> </span>&lt;owner&gt;<span class="w"> </span>--repo<span class="w"> </span>&lt;repo&gt;<span class="w"> </span>--deadline<span class="w"> </span><span class="m">45</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>grove<span class="w"> </span>watch<span class="w"> </span>timer<span class="w"> </span><span class="m">20</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>grove<span class="w"> </span>watch<span class="w"> </span>cmd<span class="w"> </span>--<span class="w"> </span>&lt;command&gt;
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>grove<span class="w"> </span>watch<span class="w"> </span>ls
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>grove<span class="w"> </span>watch<span class="w"> </span>cancel<span class="w"> </span>&lt;id&gt;
+<div class="language-bash codehilite"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>grove<span class="w"> </span>watch<span class="w"> </span>ci<span class="w"> </span>&lt;commit-sha&gt;<span class="w"> </span>--owner<span class="w"> </span>&lt;owner&gt;<span class="w"> </span>--repo<span class="w"> </span>&lt;repo&gt;<span class="w"> </span>--deadline<span class="w"> </span><span class="m">45</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>grove<span class="w"> </span>watch<span class="w"> </span>timer<span class="w"> </span><span class="m">20</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>grove<span class="w"> </span>watch<span class="w"> </span>cmd<span class="w"> </span>--<span class="w"> </span>&lt;command&gt;
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>grove<span class="w"> </span>watch<span class="w"> </span>ls
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>grove<span class="w"> </span>watch<span class="w"> </span>cancel<span class="w"> </span>&lt;id&gt;
 </span></code></pre></div>
 <p>Over <abbr title="Model Context Protocol">MCP</abbr> the same three verbs are <code>grove_register_watch</code>, <code>grove_list_watches</code> and <code>grove_cancel_watch</code>. The recipient defaults to the calling workspace, read from <code>GROVE_PHASE_FILE</code>, exactly as the mailbox does — so an agent registers for itself without knowing its own id.</p>
 <h2 id="what-a-callback-does-and-does-not-say">What a callback does and does not say</h2>
 <p>A delivered callback means Grove handed the message to that session's transport. It is not evidence that a model read it or acted on it — the same contract every mailbox receipt carries.</p>
-<p>A ticket watch stays <code>pending</code> for as long as its workspace runs, and ends <code>cancelled</code> when the ticket is detached or the workspace pauses or ends. Every other watch ends in one of four states: <code>fired</code> (it settled and the callback went out), <code>expired</code> (the deadline came first), <code>cancelled</code> (withdrawn), or <code>undeliverable</code> (it settled, but the recipient was no longer live to be told). <code>grove watch ls</code> shows all of them, including recently settled ones, because that record is also what stops a restart from delivering the same callback twice.</p>
+<p>A ticket or phase-reminder watch stays <code>pending</code> for as long as its workspace runs, and ends <code>cancelled</code> when the ticket is detached, the reminder is turned off, or the workspace pauses or ends. Every other watch ends in one of four states: <code>fired</code> (it settled and the callback went out), <code>expired</code> (the deadline came first), <code>cancelled</code> (withdrawn), or <code>undeliverable</code> (it settled, but the recipient was no longer live to be told). <code>grove watch ls</code> shows all of them, including recently settled ones, because that record is also what stops a restart from delivering the same callback twice.</p>
 <h2 id="limits">Limits</h2>
 <ul>
 <li>Checks run <strong>at most every 15 seconds</strong>. A faster interval is refused: nothing real settles quicker, and a fleet of impatient watches is a rate-limit incident on somebody else's forge.</li>
@@ -2384,6 +2439,30 @@ A ticket watch stays `pending` for as long as its workspace runs, and ends `canc
             
 <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../features-feedback-evals/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        <svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.7.7 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m9 11l2 2l4-4"/></g></svg>
+
+        
+        Feedback & Evaluations
+        
+
+        
+
+        
+
+        
+
+        <span class="inline-flex lg:hidden ml-auto text-muted-foreground"><svg xmlns="http://www.w3.org/2000/svg" width="14px" height="14px" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18l6-6l-6-6"/></svg></span>
+    </a>
+</li>
+            
+            
+            
+            
+<li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../features-notifications/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative min-h-[30px] w-full lg:w-fit overflow-visible border border-transparent text-[0.8rem] font-normal leading-tight after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2915,6 +2994,13 @@ A ticket watch stays `pending` for as long as its workspace runs, and ends `canc
             </a>
             
             
+            <a href="#a-reminder-when-the-phase-goes-stale"
+                class="mewbo-toc__link"
+                data-active="false" data-depth="2">
+                A reminder when the phase goes stale
+            </a>
+            
+            
             <a href="#using-it"
                 class="mewbo-toc__link"
                 data-active="false" data-depth="2">
@@ -3006,7 +3092,7 @@ A ticket watch stays `pending` for as long as its workspace runs, and ends `canc
         <span class="mewbo-footer__name">Grove</span>
       </a>
       
-      <p class="mewbo-footer__tagline">Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</p>
+      <p class="mewbo-footer__tagline">Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace.</p>
       
     </div>
 
