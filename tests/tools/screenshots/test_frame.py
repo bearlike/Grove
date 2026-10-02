@@ -21,7 +21,9 @@ from tools.screenshots.frame import (
     ImageBackdrop,
     SolidBackdrop,
     WindowFramer,
+    save_framed,
 )
+from tools.screenshots.frame import main as frame_main
 
 
 def _rgb_image(width: int, height: int, color: tuple[int, int, int] = (10, 20, 30)) -> Image.Image:
@@ -218,3 +220,25 @@ class TestWindowFramer:
         framer = WindowFramer.build()
         assert framer.style.canvas_size == (1920, 1080)
         assert framer.backdrop.size == (1920, 1080)
+
+
+class TestFrameInPlace:
+    """The CLI frames a named set in place, so a stale frame must survive it."""
+
+    def test_an_already_framed_file_is_left_byte_identical(self, tmp_path: Path) -> None:
+        # The incident's input: a shot whose capture was skipped still holds
+        # last run's framed output, and the named list hands it back in.
+        framed = tmp_path / "webapp-diagram.png"
+        save_framed(WindowFramer.build().frame(_rgb_image(3200, 1800)), framed)
+        before = framed.read_bytes()
+
+        assert frame_main([str(framed)]) == 0
+        assert framed.read_bytes() == before
+
+    def test_a_raw_capture_is_framed_to_the_canvas(self, tmp_path: Path) -> None:
+        raw = tmp_path / "webapp-home.png"
+        _rgb_image(3200, 1800).save(raw)
+
+        assert frame_main([str(raw)]) == 0
+        with Image.open(raw) as handle:
+            assert handle.size == (1920, 1080)

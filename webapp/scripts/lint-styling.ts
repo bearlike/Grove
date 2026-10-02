@@ -51,7 +51,8 @@ const PORTED_FILES: Record<string, string> = {
   // The native timeline has no trigger or row-body slots for tool disclosures.
   "components/grove/workspace/tool-timeline.tsx": "components/elements/tool-timeline.tsx",
   // The vendored dialog is thumbs-down only (its mark and question are
-  // hard-coded); the port takes the verdict as `tone` and changes nothing else.
+  // hard-coded), sized in literal pixels and lit as an overlay; the port takes
+  // `tone`, the rem ramp and the raised rung, and morphs in place on send.
   "components/grove/workspace/feedback-dialog.tsx": "components/elements/feedback-dialog.tsx",
 };
 

@@ -43,6 +43,7 @@ import {
 } from "@/lib/grove/runtime/feedback";
 
 import { FeedbackDialog } from "./feedback-dialog";
+import { TurnFiles } from "./turn-files";
 
 export const TurnActions: FC = () => {
   const startedAt = useAuiState((s) => turnAnswerOf(s.message.metadata.custom));
@@ -51,6 +52,7 @@ export const TurnActions: FC = () => {
   if (!startedAt) return null;
   return (
     <div data-testid="turn-actions" className="mt-3 mb-2 flex flex-col gap-3">
+      <TurnFiles startedAt={startedAt} />
       <div
         data-slot="aui_assistant-message-footer"
         className="ms-2 flex min-h-7.5 items-center"

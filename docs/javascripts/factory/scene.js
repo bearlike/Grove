@@ -5,7 +5,8 @@ import { UnrealBloomPass } from "../vendor/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "../vendor/postprocessing/OutputPass.js";
 import { bake, shareRobotGeometry } from "./bake.js";
 import { buildBelt, buildFloor, moveSlats } from "./belt.js";
-import { FrameGovernor } from "./frame-governor.js";
+import { FrameGovernor, POLICY } from "./frame-governor.js";
+import { GpuTimer } from "./gpu-timer.js";
 import { AGENT_BADGES, BELT_TOP, COIL_DELAY, PALETTE, ROBOT_COUNT, TRAVEL } from "./palette.js";
 import { roundedBox } from "./parts.js";
 import { applyFade, buildRobot, riderOpacity } from "./robot.js";
@@ -17,6 +18,15 @@ const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
 const SPLIT_LAYOUT = window.matchMedia("(min-width: 901px)");
 const ARC_SEGMENTS = 12;
 const UP = new THREE.Vector3(0, 1, 0);
+// The second link ramps in over delayed travel LINK_IN, holds at full
+// strength until LINK_OUT, then fades. The check switches on the moment the
+// bolt is at full strength: that is when it reads as having landed.
+const LINK_IN = [-1.2, -0.35];
+const LINK_OUT = [0.35, 1.2];
+// The activation station's box in station space: where the action is, and
+// Face texture size: a face is about 200 CSS px wide on a large monitor and
+// is seen at a slant, so 1024 texels keep the glyph edges clean under MSAA.
+const DISPLAY_TEXELS = 1024;
 
 // The landing page's factory line: agent robots ride a conveyor between two
 // activation coils, are linked to both, and leave with a verified check on
@@ -41,6 +51,11 @@ export class FactoryScene {
     this.frame = null;
     this.visible = true;
     this.started = false;
+    this.pendingQuality = null;
+    // Read-only diagnostics for a console probe: the governor's rung, the
+    // last measured GPU ms and how many frames and quality changes so far.
+    this.stats = { frames: 0, changes: 0, gpuMs: null, quality: null };
+    Object.defineProperty(this.canvas ?? {}, "groveStats", { value: this.stats });
     this.textureLoads = [];
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.initialize();
@@ -86,10 +101,16 @@ export class FactoryScene {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, alpha: false, powerPreference: "high-performance" });
     const { width, height } = this.container.getBoundingClientRect();
     this.governor = new FrameGovernor({
-      ...FrameGovernor.range({ devicePixelRatio: window.devicePixelRatio || 1, cssPixels: width * height }),
-      samples: Math.min(2, this.renderer.capabilities.maxSamples),
+      ...FrameGovernor.range({
+        devicePixelRatio: window.devicePixelRatio || 1,
+        cssPixels: width * height,
+        maxSamples: this.renderer.capabilities.maxSamples,
+      }),
       software: isSoftwareRenderer(this.renderer.getContext()),
     });
+    this.gpuTimer = new GpuTimer(this.renderer.getContext());
+    this.stats.quality = { ...this.governor.quality };
+    this.stats.gpuTimer = this.gpuTimer.available;
     this.renderer.setPixelRatio(this.governor.quality.pixelRatio);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -115,6 +136,13 @@ export class FactoryScene {
       samples: this.governor.quality.samples,
     });
     this.composer = new EffectComposer(this.renderer, target);
+    // Only the scene is drawn with geometry edges to antialias. The composer
+    // clones its target for the ping-pong buffer, which then multisampled the
+    // bloom copies too, for nothing. RenderPass draws into the read buffer
+    // and the chain swaps once a frame (output), so the read buffer is the
+    // scene target on every frame.
+    this.sceneTarget = this.composer.readBuffer;
+    this.composer.writeBuffer.samples = 0;
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.26, 0.4, 0.97);
     this.composer.addPass(this.bloom);
@@ -152,7 +180,8 @@ export class FactoryScene {
     const key = new THREE.DirectionalLight(PALETTE.warmWhite, 1.8);
     key.position.set(-6, 14, 6);
     key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.mapSize.set(this.governor.quality.shadow, this.governor.quality.shadow);
+    this.keyLight = key;
     Object.assign(key.shadow.camera, { left: -14, right: 14, top: 16, bottom: -16 });
     key.shadow.bias = -0.0008;
     this.scene.add(key);
@@ -203,9 +232,11 @@ export class FactoryScene {
   }
 
   makeCheckTexture() {
+    // Drawn in a 256 unit design space and rasterised at DISPLAY_TEXELS.
     const canvas = document.createElement("canvas");
-    canvas.width = canvas.height = 256;
+    canvas.width = canvas.height = DISPLAY_TEXELS;
     const context = canvas.getContext("2d");
+    context.scale(DISPLAY_TEXELS / 256, DISPLAY_TEXELS / 256);
     context.strokeStyle = "#ffffff";
     context.lineWidth = 16;
     context.lineCap = "round";
@@ -218,15 +249,33 @@ export class FactoryScene {
     context.lineTo(110, 170);
     context.lineTo(188, 88);
     context.stroke();
-    const texture = new THREE.CanvasTexture(canvas);
+    return this.displayTexture(new THREE.CanvasTexture(canvas));
+  }
+
+  // Mipmapped and anisotropically filtered: the faces are seen at a slant
+  // and shrink with distance, where a plain bilinear lookup shimmers.
+  displayTexture(texture) {
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = this.renderer?.capabilities.getMaxAnisotropy() ?? 1;
     return texture;
+  }
+
+  // The glyphs are SVGs whose intrinsic size is 256 px, which is what an
+  // image load rasterises them at. Rasterise at DISPLAY_TEXELS instead.
+  async loadGlyph(url) {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = url;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = DISPLAY_TEXELS;
+    canvas.getContext("2d").drawImage(image, 0, 0, DISPLAY_TEXELS, DISPLAY_TEXELS);
+    return this.displayTexture(new THREE.CanvasTexture(canvas));
   }
 
   applyRobotBadge(runner) {
     const glyph = new URL(runner.badge, this.logos).href;
-    this.textureLoads.push(new THREE.TextureLoader().loadAsync(glyph).then((texture) => {
-      texture.colorSpace = THREE.SRGBColorSpace;
+    this.textureLoads.push(this.loadGlyph(glyph).then((texture) => {
       runner.logoTexture = texture;
     }));
   }
@@ -305,7 +354,7 @@ export class FactoryScene {
     const { smoothstep } = THREE.MathUtils;
     return {
       charge: smoothstep(travel, -3, -0.6) * (1 - smoothstep(travel, 0.8, 2.2)),
-      link: smoothstep(travel, -1.2, -0.35) * (1 - smoothstep(travel, 0.35, 1.2)),
+      link: smoothstep(travel, ...LINK_IN) * (1 - smoothstep(travel, ...LINK_OUT)),
     };
   }
 
@@ -343,8 +392,14 @@ export class FactoryScene {
   }
 
   updateFaceDisplay(runner) {
-    // Verify only after the whole undercarriage clears the activation station.
-    const verified = runner.group.position.z >= runner.rear && runner.delayedTravel >= runner.rear;
+    // The check is the robot's reaction to the second strike: it appears the
+    // instant that bolt reaches full strength, not when it lets go (that was
+    // most of a second of a landed bolt with no reaction). It belongs to the
+    // pass the strike happened on: the delayed clock wraps 1.2 s after the
+    // robot does, and in that window a robot re-entering at the far end
+    // still carried the check. A robot behind the station is on a new pass
+    // and shows its logo.
+    const verified = runner.delayedTravel >= LINK_IN[1] && runner.group.position.z >= LINK_IN[1];
     const texture = verified ? this.checkTexture : runner.logoTexture;
     runner.display.visible = Boolean(texture);
     if (texture && runner.displayMaterial.map !== texture) {
@@ -362,10 +417,11 @@ export class FactoryScene {
     applyFade(runner, riderOpacity(travel));
   }
 
+  // The console and its pipes are set dressing at the edge of the shot: the
+  // packets still travel, so the sequence reads, but the console's signal
+  // lamp and the overhead lamp hold steady. Nothing outside the robots and
+  // the coil tops moves on its own.
   updateOrchestrator() {
-    let charge = 0;
-    for (const runner of this.robotRunners) charge = Math.max(charge, this.activationEnvelope(runner.delayedTravel).charge);
-    this.consoleSignal.emissiveIntensity = 0.2 + charge * 0.4;
     const { smoothstep } = THREE.MathUtils;
     for (const flow of this.messageFlows) {
       const [start, end] = flow.direction === "inbound" ? [-3, -0.6] : [1.2, 3.6];
@@ -421,7 +477,6 @@ export class FactoryScene {
     }
     this.updateBelt();
     this.updateOrchestrator();
-    this.scannerLight.intensity = 1.6 + Math.max(...coilCharge) * 0.4;
   }
 
   schedule() {
@@ -478,20 +533,44 @@ export class FactoryScene {
     this.lastTime = time;
     this.elapsed += delta;
     this.updateRobots();
+    this.gpuTimer.begin();
     this.composer.render();
+    this.gpuTimer.end();
+    const gpu = this.gpuTimer.poll();
+    this.governor.measure(gpu);
+    this.stats.frames += 1;
+    if (gpu.length) this.stats.gpuMs = +gpu.at(-1).toFixed(2);
     const quality = this.governor.record(time);
-    if (quality !== null) this.applyQuality(quality);
+    // A quality change reallocates buffers, which costs one long frame.
+    // Never spend it while an arc is firing: that is the moment people are
+    // watching, and a hitch there is what "stutter" means on this page.
+    if (quality !== null) this.pendingQuality = quality;
+    if (this.pendingQuality && !this.arcFiring()) {
+      this.applyQuality(this.pendingQuality);
+      this.pendingQuality = null;
+    }
   }
 
-  applyQuality({ pixelRatio, samples }) {
-    for (const target of [this.composer.renderTarget1, this.composer.renderTarget2]) {
-      if (target.samples === samples) continue;
-      // A target's sample count is fixed at allocation; disposing it makes
-      // the next render reallocate with the new count.
-      target.samples = samples;
-      target.dispose();
+  arcFiring() {
+    return this.robotRunners.some((runner) => runner.arcs.some((arc) => arc.visible));
+  }
+
+  applyQuality(quality) {
+    const { pixelRatio, samples, shadow } = quality;
+    // A target's sample count is fixed at allocation; disposing it makes the
+    // next render reallocate with the new count. The shadow map likewise.
+    if (this.sceneTarget.samples !== samples) {
+      this.sceneTarget.samples = samples;
+      this.sceneTarget.dispose();
+    }
+    if (this.keyLight.shadow.mapSize.x !== shadow) {
+      this.keyLight.shadow.mapSize.set(shadow, shadow);
+      this.keyLight.shadow.map?.dispose();
+      this.keyLight.shadow.map = null;
     }
     this.renderer.setPixelRatio(pixelRatio);
+    this.stats.quality = { ...quality };
+    this.stats.changes += 1;
     this.resize();
   }
 }

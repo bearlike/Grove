@@ -1639,6 +1639,34 @@ class WebhookChannelConfig(BaseModel):
     """Seconds to wait on one POST before skipping it."""
 
 
+class PhaseNudgeConfig(BaseModel):
+    """Remind a working agent to report its task phase when it has gone quiet about it.
+
+    The reminder is one short line, sent only to an agent that is running, working, has
+    reported a phase before, and has not changed it for a whole interval while it kept
+    making progress. A session that is paused, idle, waiting, blocked, errored, handed
+    off, or stuck inside one long tool call is never reminded, and each phase report is
+    reminded about at most once.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = True
+    """Send the reminder at all."""
+    every_minutes: float = Field(default=10.0, ge=1.0, le=1440.0)
+    """How long a phase may stand unchanged while the agent works before it is reminded.
+    Also how often Grove checks."""
+
+
+class NudgesConfig(BaseModel):
+    """Short reminders the Grove daemon puts into a working agent's session."""
+
+    model_config = _FROZEN
+
+    phase: PhaseNudgeConfig = Field(default_factory=PhaseNudgeConfig)
+    """Remind an agent that stopped reporting its task phase."""
+
+
 class NotificationsConfig(BaseModel):
     """Push notifications when an agent needs you. Off by default.
 
@@ -3612,6 +3640,7 @@ class GroveConfig(BaseModel):
     tickets: TicketsConfig = Field(default_factory=TicketsConfig)
     issueops: IssueOpsConfig = Field(default_factory=IssueOpsConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    nudges: NudgesConfig = Field(default_factory=NudgesConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)

@@ -25,6 +25,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+from pydantic import ValidationError
+
 from grove.core import paths
 from grove.core.contracts.watches import WatchPredicate, WatchView
 from grove.core.errors import GroveError
@@ -52,6 +55,9 @@ class WatchLog:
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path if path is not None else paths.user_watches_path()
+        # Rows this build cannot parse, kept verbatim so a write puts them back.
+        # Refreshed by every load; only ever touched under the file lock.
+        self._foreign: dict[str, Any] = {}
 
     @property
     def path(self) -> Path:
@@ -203,12 +209,42 @@ class WatchLog:
         raw = data.get("watches")
         if not isinstance(raw, dict):
             raise GroveError(f"`watches` must be an object in {self._path}")
-        return {key: WatchView.model_validate(value) for key, value in raw.items()}
+        return self._parse(raw)
+
+    def _parse(self, raw: dict[str, Any]) -> dict[str, WatchView]:
+        """Every row this build understands; the rest are held aside, never dropped.
+
+        One row a build cannot parse (a watch kind added by a newer Grove, read
+        by a daemon not yet restarted onto it) used to fail the whole load, so
+        every registration and every callback on the host failed with it. A row
+        is the one unit that can be wrong on its own, so tolerance is applied
+        there. Holding it aside rather than skipping it is the other half: the
+        next write from this reader would otherwise erase a watch the newer
+        build still owns.
+        """
+        rows: dict[str, WatchView] = {}
+        foreign: dict[str, Any] = {}
+        for key, value in raw.items():
+            try:
+                rows[key] = WatchView.model_validate(value)
+            except ValidationError:
+                foreign[key] = value
+        if foreign.keys() != self._foreign.keys():
+            logger.warning(
+                "watch log {} holds {} row(s) this Grove cannot read; kept, not scheduled",
+                self._path,
+                len(foreign),
+            )
+        self._foreign = foreign
+        return rows
 
     def _write(self, records: dict[str, WatchView]) -> None:
         payload = {
             "version": _VERSION,
-            "watches": {key: row.model_dump(mode="json") for key, row in records.items()},
+            "watches": {
+                **self._foreign,
+                **{key: row.model_dump(mode="json") for key, row in records.items()},
+            },
         }
         paths.write_atomic(self._path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 

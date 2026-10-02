@@ -391,6 +391,26 @@ def test_a_message_to_a_dead_native_session_revives_it(
     assert any("grove.core.native_worker" in cmd for _, cmd in fake_tmux.layouts[1:])
 
 
+def test_a_daemon_reminder_never_revives_a_dead_native_session(
+    manager: WorkspaceManager, steer: FakeNativeSteer, fake_tmux: FakeTmux
+) -> None:
+    """The mirror of the revive above, for text nobody chose to send.
+
+    A reminder must reach a running session or nothing: reviving a dead one to
+    deliver it would restart an agent that had stopped, on Grove's own initiative.
+    """
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="n"))
+    steer.connected = False
+    fake_tmux.sessions.discard(state.tmux_session)
+    launches = len(fake_tmux.layouts)
+
+    with pytest.raises(WorkspaceStateError):
+        manager.send_message(state.id, "update your phase", revive=False)
+
+    assert steer.messages == []
+    assert len(fake_tmux.layouts) == launches, "a reminder must never respawn"
+
+
 def test_a_live_native_session_is_never_restarted_under_the_agent(
     manager: WorkspaceManager, steer: FakeNativeSteer, fake_tmux: FakeTmux
 ) -> None:

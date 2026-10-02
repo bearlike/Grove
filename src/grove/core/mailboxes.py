@@ -30,6 +30,7 @@ from grove.core.contracts.mailboxes import (
     MailboxSendRequest,
 )
 from grove.core.errors import GroveError
+from grove.core.workspace import LIVE_STATUSES
 
 if TYPE_CHECKING:  # `manager` imports the agents package, which imports this module.
     from pathlib import Path
@@ -393,6 +394,28 @@ class MailboxDelivery:
                 update={"stage": "unknown", "reason": "transport_failed", "detail": str(exc)}
             )
         return receipt
+
+    def notify(self, address: MailboxAddress, text: str) -> tuple[str, str | None]:
+        """Hand Grove's OWN short note to a session that is running right now, or refuse.
+
+        Stricter than :meth:`send` on purpose. A peer message may wake a session
+        and even revive a dead native one, because a person or agent chose to
+        write to it; a daemon reminder was chosen by nobody, so it reaches only
+        a workspace whose reconciled status is live and never triggers a revive.
+        The text is delivered as given, with no peer envelope: Grove is the
+        author, so it is fenced as Grove's voice by the caller.
+
+        Returns ``(receipt, detail)`` in the mailbox's own vocabulary.
+        """
+        resolved = self._resolve(address)
+        if resolved is None or resolved[1].status not in LIVE_STATUSES:
+            return "rejected", "workspace is not live"
+        manager, state = resolved
+        try:
+            manager.send_message(state.id, text, revive=False)
+        except GroveError as exc:
+            return "unknown", str(exc)
+        return "delivered", None
 
     def _resolve(self, address: MailboxAddress) -> tuple[WorkspaceManager, WorkspaceState] | None:
         for manager, state in self._workspaces():

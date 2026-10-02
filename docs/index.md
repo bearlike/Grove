@@ -10,8 +10,8 @@ extra_css:
 ---
 
 <div class="grove-landing" data-grove-landing>
-  <div class="grove-landing__mesh" aria-hidden="true"><object data="img/landing/factory-mesh.svg?v=4" type="image/svg+xml" tabindex="-1" aria-hidden="true"></object></div>
-  <div class="grove-landing__aura" aria-hidden="true"><div class="grove-landing__aura-drift"></div></div>
+  <div class="grove-landing__mesh" aria-hidden="true"><object data="img/landing/factory-mesh.svg?v=5" type="image/svg+xml" tabindex="-1" aria-hidden="true"></object></div>
+  <div class="grove-landing__aura" aria-hidden="true"></div>
   <header class="grove-landing__header">
     <a class="grove-landing__brand" href="." aria-label="Grove home">
       <img src="logos/grove-logo.png" alt="" width="34" height="34">
@@ -35,9 +35,10 @@ extra_css:
         <li><a href="https://linear.app" title="Linear" style="--support-surface: #3d48bb"><span class="grove-landing__support-window"><img src="logos/support/linear.png" alt="Linear" width="44" height="44" loading="lazy"></span></a></li>
         <li><a href="https://github.com" title="GitHub" style="--support-surface: #0f1218"><span class="grove-landing__support-window"><img src="logos/support/github.png" alt="GitHub" width="44" height="44" loading="lazy"></span></a></li>
         <li><a href="https://about.gitea.com/" title="Gitea" style="--support-surface: #609926"><span class="grove-landing__support-window"><img src="logos/support/gitea.png" alt="Gitea" width="44" height="44" loading="lazy"></span></a></li>
+        <li><a href="https://langfuse.com" title="Langfuse" style="--support-surface: #f1f3f8"><span class="grove-landing__support-window"><img src="logos/support/langfuse.png" alt="Langfuse" width="44" height="44" loading="lazy"></span></a></li>
       </ul>
       <p>
-        Bring the coding agents you already use. Give each task its own workspace and the tools to guide it. Follow delivery from ticket to trace.
+        Bring your own coding agents. Give each task a workspace and the tools to guide it. Follow delivery from ticket to trace.
       </p>
       <div class="grove-landing__install" id="install">
         <input type="radio" name="grove-install" id="grove-install-uv" value="uv" checked>
@@ -49,14 +50,11 @@ extra_css:
           <label class="grove-landing__install-tab" for="grove-install-pip">pip</label>
         </div>
         <div class="grove-landing__install-card">
-          <pre class="grove-landing__install-panel" data-install="uv"><span class="grove-landing__install-note"># Install</span>
-<code><span class="grove-landing__install-tool">uv</span> tool install grove-factory</code><span class="grove-landing__install-note"># recommended</span>
+          <pre class="grove-landing__install-panel" data-install="uv"><code><span class="grove-landing__install-tool">uv</span> tool install grove-factory</code><span class="grove-landing__install-note"># recommended</span>
 <code><span class="grove-landing__install-tool">uvx</span> --from grove-factory grove</code><span class="grove-landing__install-note"># try it once</span></pre>
-          <pre class="grove-landing__install-panel" data-install="pipx"><span class="grove-landing__install-note"># Install</span>
-<code><span class="grove-landing__install-tool">pipx</span> install grove-factory</code><span class="grove-landing__install-note"># isolated</span>
+          <pre class="grove-landing__install-panel" data-install="pipx"><code><span class="grove-landing__install-tool">pipx</span> install grove-factory</code><span class="grove-landing__install-note"># isolated</span>
 <code><span class="grove-landing__install-tool">pipx</span> upgrade grove-factory</code><span class="grove-landing__install-note"># update later</span></pre>
-          <pre class="grove-landing__install-panel" data-install="pip"><span class="grove-landing__install-note"># Install</span>
-<code><span class="grove-landing__install-tool">pip</span> install --user grove-factory</code><span class="grove-landing__install-note"># Python 3.12+</span>
+          <pre class="grove-landing__install-panel" data-install="pip"><code><span class="grove-landing__install-tool">pip</span> install --user grove-factory</code><span class="grove-landing__install-note"># Python 3.12+</span>
 <code><span class="grove-landing__install-tool">pip</span> install -U grove-factory</code><span class="grove-landing__install-note"># update later</span></pre>
           <div class="grove-landing__install-footer">
             <span>Works on macOS, Linux and WSL2.</span>
@@ -78,6 +76,6 @@ extra_css:
   </div>
   <div class="grove-landing__grain" aria-hidden="true"></div>
 </div>
-<script type="module" src="javascripts/grove-factory.min.js?v=2"></script>
+<script type="module" src="javascripts/grove-factory.min.js?v=8"></script>
 
 <span id="explore-the-docs"></span>

@@ -30,7 +30,7 @@ from grove.core.tickets.provider import TicketState
 from grove.core.tickets.reads import TicketReads
 from grove.core.watches.log import WatchLog
 from grove.core.watches.scheduler import WatchScheduler
-from grove.core.watches.subscriptions import TicketSubscriptions
+from grove.core.watches.subscriptions import StandingWatches
 from grove.core.watches.ticket import TicketWatcher
 from grove.core.watches.watcher import TimerWatcher, Watcher, WatcherRegistry
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
@@ -302,7 +302,7 @@ def _state(status: WorkspaceStatus, refs: list[TicketRef]) -> WorkspaceState:
 def test_subscriptions_follow_the_record_attach_detach_pause(tmp_path):
     _forge, _clock, _courier, scheduler = _rig(tmp_path)
     record: dict[str, WorkspaceState | None] = {}
-    subs = TicketSubscriptions(scheduler=scheduler, workspaces=lambda _id: record.get("ws"))
+    subs = StandingWatches(scheduler=scheduler, workspaces=lambda _id: record.get("ws"))
 
     def pending() -> set[str]:
         return {
@@ -338,7 +338,7 @@ def test_a_paused_workspace_cancels_every_pending_watch_owned_by_its_recipient(t
     """Lifecycle ownership is the callback recipient, not the predicate's subject."""
     _forge, clock, _courier, scheduler = _rig(tmp_path)
     record: dict[str, WorkspaceState | None] = {WS: _state(WorkspaceStatus.PAUSED, [])}
-    subscriptions = TicketSubscriptions(scheduler=scheduler, workspaces=record.get)
+    subscriptions = StandingWatches(scheduler=scheduler, workspaces=record.get)
     watch_ids = _all_kinds(scheduler, clock)
 
     subscriptions.observe(
@@ -356,7 +356,7 @@ def test_a_paused_workspace_cancels_every_pending_watch_owned_by_its_recipient(t
 def test_a_killed_workspace_cancels_every_pending_recipient_owned_watch(tmp_path):
     """A kill delta has no row, so reconciliation must read the now-missing record."""
     _forge, clock, _courier, scheduler = _rig(tmp_path)
-    subscriptions = TicketSubscriptions(scheduler=scheduler, workspaces=lambda _id: None)
+    subscriptions = StandingWatches(scheduler=scheduler, workspaces=lambda _id: None)
     watch_ids = _all_kinds(scheduler, clock)
 
     subscriptions.observe(
@@ -374,7 +374,7 @@ def test_a_killed_workspace_cancels_every_pending_recipient_owned_watch(tmp_path
 def test_startup_cancels_all_kinds_for_a_missing_workspace(tmp_path):
     """A deleted record while the daemon was down cannot leave any callback pending."""
     _forge, clock, _courier, scheduler = _rig(tmp_path)
-    subscriptions = TicketSubscriptions(scheduler=scheduler, workspaces=lambda _id: None)
+    subscriptions = StandingWatches(scheduler=scheduler, workspaces=lambda _id: None)
     watch_ids = _all_kinds(scheduler, clock)
 
     subscriptions.reconcile_all([])
@@ -386,7 +386,7 @@ def test_resuming_does_not_rearm_watches_cancelled_while_paused(tmp_path):
     """A fresh lifecycle cannot revive a wait that belonged to the paused session."""
     _forge, clock, _courier, scheduler = _rig(tmp_path)
     record: dict[str, WorkspaceState | None] = {WS: _state(WorkspaceStatus.PAUSED, [])}
-    subscriptions = TicketSubscriptions(scheduler=scheduler, workspaces=record.get)
+    subscriptions = StandingWatches(scheduler=scheduler, workspaces=record.get)
     watch_ids = _all_kinds(scheduler, clock)
 
     subscriptions.reconcile(WS)
@@ -402,7 +402,7 @@ def test_detaching_a_ticket_leaves_other_running_workspace_watches_pending(tmp_p
     record: dict[str, WorkspaceState | None] = {
         WS: _state(WorkspaceStatus.RUNNING, [TicketRef(provider="gitea", id="42")])
     }
-    subscriptions = TicketSubscriptions(scheduler=scheduler, workspaces=record.get)
+    subscriptions = StandingWatches(scheduler=scheduler, workspaces=record.get)
     watch_ids = _all_kinds(scheduler, clock)
 
     subscriptions.reconcile(WS)

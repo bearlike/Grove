@@ -46,6 +46,7 @@ from grove.core.contracts.watches import (
     DEFAULT_DEADLINE,
     MAX_DEADLINE,
     MIN_INTERVAL,
+    STANDING_KINDS,
     WatchList,
     WatchOutcome,
     WatchRegistration,
@@ -421,15 +422,15 @@ class WatchScheduler:
 
         Every watch an agent HALTED on gets one — there is no "wait forever" —
         because the expiry message is what hands its session back. The one
-        exception is the standing ``ticket`` watch, which nobody halts on.
+        exception is a standing watch (``STANDING_KINDS``), which nobody halts on.
         Open-ended predicates default to ``DEFAULT_DEADLINE``. A timer defaults
         to its own instant plus a small grace instead: its settle time is known,
         and capping it at the open-ended default would turn every long timer
         into a guaranteed expiry.
         """
-        if registration.predicate.kind == "ticket":
+        if registration.predicate.kind in STANDING_KINDS:
             # Standing: nobody halted on it, so there is no turn to hand back.
-            # Its workspace's lifecycle ends it (see TicketSubscriptions).
+            # Its workspace's lifecycle ends it (see StandingWatches).
             return None
         if registration.deadline is not None:
             return registration.deadline
@@ -465,6 +466,8 @@ class WatchScheduler:
             return f"the command {' '.join(p.argv)!r} to exit with {p.terminal_exit_codes}"
         if p.kind == "ticket":
             return f"changes to {p.provider} ticket #{p.ticket_id}"
+        if p.kind == "phase_nudge":
+            return "the reported phase going stale while the agent works"
         return f"the timer set for {p.at.isoformat()}"
 
 

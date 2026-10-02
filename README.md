@@ -1,9 +1,8 @@
 <p align="center">
-  <img src="docs/logos/grove-logo.png" alt="Grove" width="84" />
+  <a href="https://factory.mewbo.com/"><img src="docs/img/banners/readme-banner.png" alt="Grove: your team's agents, one software factory. Works with Claude Code, Codex, OpenCode, Linear, GitHub and Gitea." width="100%" /></a>
 </p>
 
-<h1 align="center">Grove</h1>
-<p align="center"><em>Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.</em></p>
+<p align="center"><em>Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace.</em></p>
 
 <p align="center">
   <a href="https://github.com/bearlike/Grove/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/bearlike/Grove/actions/workflows/ci.yml/badge.svg"></a>
@@ -12,24 +11,24 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
-<p align="center"><strong>Supports</strong></p>
-<p align="center">
-  <a href="https://github.com/anthropics/claude-code"><img src="docs/logos/support/claude-code.png" alt="Claude Code" title="Claude Code" width="44" height="44" /></a>&nbsp;
-  <a href="https://github.com/openai/codex"><img src="docs/logos/support/codex.png" alt="Codex" title="Codex" width="44" height="44" /></a>&nbsp;
-  <a href="https://opencode.ai"><img src="docs/logos/support/opencode.png" alt="OpenCode" title="OpenCode" width="44" height="44" /></a>&nbsp;
-  <a href="https://linear.app"><img src="docs/logos/support/linear.png" alt="Linear" title="Linear" width="44" height="44" /></a>&nbsp;
-  <a href="https://github.com"><img src="docs/logos/support/github.png" alt="GitHub" title="GitHub" width="44" height="44" /></a>&nbsp;
-  <a href="https://about.gitea.com/"><img src="docs/logos/support/gitea.png" alt="Gitea" title="Gitea" width="44" height="44" /></a>
+<p align="center"><strong>Supports</strong>
+  <a href="https://github.com/anthropics/claude-code" title="Claude Code">Claude Code</a> ·
+  <a href="https://github.com/openai/codex" title="Codex">Codex</a> ·
+  <a href="https://opencode.ai" title="OpenCode">OpenCode</a> ·
+  <a href="https://linear.app" title="Linear">Linear</a> ·
+  <a href="https://github.com" title="GitHub">GitHub</a> ·
+  <a href="https://about.gitea.com/" title="Gitea">Gitea</a> ·
+  <a href="https://langfuse.com" title="Langfuse">Langfuse</a>
 </p>
 
 ## 🌳 Overview
 
-- **Writing the code stopped being the slow part.** Deciding what to build did. More agents can build in parallel but shared checkouts cause conflicts and laptops limit capacity. Grove turns the agents you already use into a software factory. Guide each task from ticket to delivery.
-- **Give each task its own workspace.** Each agent gets its own worktree and branch in a separate window. Agents report progress phases for the workspace and each attached ticket independently. You can see what is being planned, built or verified across the fleet.
-- **Choose how each agent runs.** Run agents on your host with the environment they normally inherit. Or use a [container](https://factory.mewbo.com/latest/features-containers/) defined by your repository's `.devcontainer/`. It provides separate services and ports with resource limits. Use that isolation for runs with agent permission checks disabled.
-- **Choose where the work runs.** Tests, builds and scripts compete for CPU and memory across concurrent workspaces. Move those workloads off your laptop when it slows down. Reuse the container configuration on a shared team machine or serverless cloud infrastructure.
-- **Let the tracker start the work.** Assign an issue and Grove starts a workspace for it. Progress returns to [the same ticket](https://factory.mewbo.com/latest/issue-ops/). Follow the task where you defined it.
-- **Show it instead of describing it.** Mark up a [screenshot](https://factory.mewbo.com/latest/features-attachments/) or collaborate with the agent on a [diagram](https://factory.mewbo.com/latest/features-diagrams/). Approve the diagram or mockup and attach it to a ticket. Then coordinate your fleet around it.
+- **Coding is no longer the slow part.** Deciding what to build is. Parallel agents hit checkout conflicts and laptop limits. Grove turns your agents into a software factory. Turn tickets into outcomes.
+- **Give each task its own workspace.** Each agent gets a worktree and branch. Agents report phases for their workspace and each attached ticket. See what's planned, built or verified across the fleet.
+- **Choose how each agent runs.** Run agents in their usual host environment or a [container](https://factory.mewbo.com/latest/features-containers/) defined by your repository's `.devcontainer/`. Containers provide separate services and ports with resource limits.
+- **Choose where the work runs.** Concurrent tests and builds compete for CPU and memory. Reuse your container configuration on a shared team machine or serverless cloud to free your laptop.
+- **Let the tracker start the work.** Assign an issue and Grove starts its workspace. Progress returns to [the same ticket](https://factory.mewbo.com/latest/issue-ops/). Follow the task where you defined it.
+- **Show it instead of describing it.** Annotate a [screenshot](https://factory.mewbo.com/latest/features-attachments/) or draw a [diagram](https://factory.mewbo.com/latest/features-diagrams/) with your agent. Approve the diagram or mockup and attach it to a ticket to coordinate your fleet.
 
 ## ✨ Features
 
@@ -53,7 +52,7 @@ Use the terminal UI to see which agents need you. The CLI autocompletes commands
 
 ### The whole fleet in your browser
 
-Follow headless agent sessions from any browser. Review the transcript beside the branch and diff. Upload files or annotate screenshots to show what needs changing. Edit a draw.io diagram together without leaving the workspace.
+Follow headless agent sessions from any browser. Review the transcript beside the branch and diff. Upload files or annotate screenshots to show what needs changing. Edit a [draw.io](https://www.drawio.com/) diagram together without leaving the workspace.
 
 [Docs →](https://factory.mewbo.com/latest/use-webapp/)
 
@@ -109,34 +108,34 @@ Every ticket a Grove workspace works gets one comment, rewritten in place as the
 
 ### Audit and tune the whole fleet
 
-Trace each agent turn's work and cost. Rate the answer in Grove with a thumb. Add reasons or a note without leaving the transcript. That feedback stays on its Langfuse trace. Your team can review patterns and calibrate automated LLM judges against human scores.
+Every agent turn becomes a Langfuse trace. A small local decision model labels each observation, such as why a shell command ran, with a confidence score. Add thumbs up or down from Grove, then calibrate the labels against human judgement.
 
-[Docs →](https://factory.mewbo.com/latest/features-telemetry/)
+[Docs →](https://factory.mewbo.com/latest/features-feedback-evals/)
 
 </td>
 <td width="50%">
-  <a href="https://factory.mewbo.com/latest/features-telemetry/"><img src="docs/img/screenshots/telemetry-trace.png" alt="One Claude Code turn as a Langfuse trace: an agent-turn root with cost and duration, nested model generations, and a span for each Bash, Skill, WebFetch and WebSearch call, with GenAI and Grove attributes on the selected span" width="100%" /></a>
+  <a href="https://factory.mewbo.com/latest/features-feedback-evals/"><img src="docs/img/screenshots/telemetry-shell-purpose-scores.png" alt="Langfuse Scores view of evaluator scores beside an agent-turn trace whose Bash spans each carry a bash_purpose label such as explore_code or edit_files, with the selected call's command open" width="100%" /></a>
 </td>
 </tr>
 </table>
 
 **Also in the box:**
 
-- **[Branch-aware lifecycle](https://factory.mewbo.com/latest/features-workspace-lifecycle/).** Create, pause, resume, respawn, and kill. Pause keeps the branch and drops the worktree. Kill deletes only branches Grove created, never remotes.
-- **[Configuration cascade](https://factory.mewbo.com/latest/features-cascade/).** A committed `.grove/config.json` sets the team baseline. Six layers let each developer override locally without touching it.
-- **[Per-agent model selection](https://factory.mewbo.com/latest/use-webapp/).** Each agent exposes its own model catalog. Pick the model per workspace: a cheap one for scaffolding, a strong one for the hard refactor, side by side.
-- **[Session recovery](https://factory.mewbo.com/latest/features-workspace-lifecycle/).** Grove pane-verifies each agent session and re-adopts it across daemon restarts and a different user attaching. A stale pointer remaps to the recovered session in a click.
-- **[Ticket providers](https://factory.mewbo.com/latest/features-ticket-providers/).** Attach a GitHub, Gitea or Linear issue or pull request to a workspace, or let Grove read the link straight off the branch name so it follows the branch.
+- **[Branch-aware lifecycle](https://factory.mewbo.com/latest/features-workspace-lifecycle/).** Create, pause, resume, respawn or kill. Pausing keeps the branch.
+- **[Configuration cascade](https://factory.mewbo.com/latest/features-cascade/).** A committed `.grove/config.json` sets team defaults, overridable locally.
+- **[Per-agent model selection](https://factory.mewbo.com/latest/use-webapp/).** Pick a model per workspace.
+- **[Session recovery](https://factory.mewbo.com/latest/features-workspace-lifecycle/).** Sessions survive restarts and reattach, and a lost one remaps in a click.
+- **[Feedback and evaluations](https://factory.mewbo.com/latest/features-feedback-evals/).** Human ratings and decision-model scores in Langfuse.
+- **[Ticket providers](https://factory.mewbo.com/latest/features-ticket-providers/).** Link Linear, GitHub or Gitea tickets to show workspace phase and status.
 - **[Push notifications](https://factory.mewbo.com/latest/features-notifications/).** Get pinged when an agent finishes a turn or needs you.
-- **[Attachments and annotation](https://factory.mewbo.com/latest/features-attachments/).** Paste a screenshot or attach a file in either composer, draw on the image before it goes, and the agent is handed a path inside its own worktree.
-- **[Diagram collaboration](https://factory.mewbo.com/latest/features-diagrams/).** A person and an agent edit one draw.io file with revision checks. Quick UI mockups and architecture specs are approved as a picture before code exists.
+- **[Attachments and annotation](https://factory.mewbo.com/latest/features-attachments/).** Attach files for your agent, and draw annotations on images.
+- **[Diagram collaboration](https://factory.mewbo.com/latest/features-diagrams/).** Sketch mockups and specs with your agent in [draw.io](https://www.drawio.com/).
 - **[Subscription windows](https://factory.mewbo.com/latest/use-webapp/).** Track each plan's usage, reset and burn rate. See which limit comes first.
-- **[Usage trends](https://factory.mewbo.com/latest/use-webapp/).** Track a year's daily tokens, model cost and latency. See where agents spend time across projects.
-- **[Local by default](https://factory.mewbo.com/latest/features-telemetry/).** The audit reads local transcripts. Export is optional. Prompt bodies stay off until you enable them.
+- **[Usage trends](https://factory.mewbo.com/latest/use-webapp/).** Daily tokens, model cost and latency, and where agents spend time across projects.
 
 ## 🚀 Get started
 
-Grove needs `git` and `tmux`. It publishes to PyPI as `grove-factory`, and one install carries everything: the TUI, the CLI, the daemon, the MCP server and the web dashboard. With [uv](https://docs.astral.sh/uv/):
+Needs `git` and `tmux`. Install with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv tool install grove-factory
@@ -144,17 +143,17 @@ uv tool install grove-factory
 cd path/to/your/repo
 grove config init               # scaffold .grove/config.json
 grove                           # launch the TUI
-uv tool upgrade grove-factory   # pull the latest release later
 ```
 
-Try it without installing with `uvx --from grove-factory grove`. The web dashboard is `grove daemon serve` plus `grove web`, and brings its own Node, so nothing else to install. No uv? `pipx install grove-factory` works too. Releases are cut on [GitHub](https://github.com/bearlike/Grove/releases) and land on PyPI minutes later. See [Get Started](https://factory.mewbo.com/latest/getting-started/) for prerequisites and every install path.
+- **Try it first:** `uvx --from grove-factory grove`
+- **No uv?** `pipx install grove-factory`, or see [every install path](https://factory.mewbo.com/latest/getting-started/).
 
 <details>
 <summary><b>🤖 Let an AI agent configure Grove for you</b></summary>
 
 <br>
 
-Configuration has a few layers and many knobs, so you do not have to write it by hand. Hand the prompt below to Claude Code, Codex or any coding agent. It reads Grove's config skill and sets things up with you, then verifies every field against the version you actually installed.
+Hand this prompt to Claude Code, Codex or any coding agent. It configures Grove with you and checks every field against your installed version.
 
 ```text
 Read https://raw.githubusercontent.com/bearlike/Grove/current/src/grove/skills/configuring-grove/SKILL.md
@@ -213,7 +212,7 @@ Full documentation lives at **<https://factory.mewbo.com/>**.
 
 ## 🤝 Contributing
 
-Bugs and feature requests on the [issue tracker](https://github.com/bearlike/Grove/issues). For development setup, lint/test commands, and PR conventions, see the [contributing guide](https://factory.mewbo.com/latest/develop-contributing/) and [`CLAUDE.md`](./CLAUDE.md).
+Share bugs and ideas on the [issue tracker](https://github.com/bearlike/Grove/issues), or contribute using the [contributing guide](https://factory.mewbo.com/latest/develop-contributing/) and [`CLAUDE.md`](./CLAUDE.md).
 
 ## 📄 License
 

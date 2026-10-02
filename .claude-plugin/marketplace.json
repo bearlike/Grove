@@ -1,7 +1,7 @@
 {
   "name": "grove",
   "description": "Grove's own skills, published from the repository that implements them \u2014 orchestrating a fleet of coding-agent workspaces, working inside one, and configuring and updating Grove itself.",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "owner": {
     "name": "bearlike"
   },
@@ -9,7 +9,7 @@
     {
       "name": "grove",
       "displayName": "Grove",
-      "version": "0.0.11",
+      "version": "0.0.12",
       "description": "Grove's own skills, published from the repository that implements them: fleet orchestration, leading a fleet toward one deliverable, in-workspace reporting and native mailbox workers, configuration, reinstalling, and collaborative diagrams and mockups.",
       "author": {
         "name": "bearlike"

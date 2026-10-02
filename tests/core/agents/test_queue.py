@@ -41,6 +41,7 @@ from grove.core.agents.claude_code import (
 )
 from grove.core.agents.codex import CodexAdapter
 from grove.core.agents.generic import GenericAdapter
+from grove.core.instructions import GroveInstruction
 
 # ── record builders (real shapes, sanitized) ───────────────────────────────
 
@@ -195,6 +196,33 @@ def test_neither_non_human_queued_form_inflates_the_turn_count() -> None:
         ]
     ).activity()
 
+    assert activity.human_turns == 1
+
+
+def test_a_daemon_reminder_is_never_a_human_turn_queued_or_plain() -> None:
+    """A phase reminder goes only to a WORKING agent, so it nearly always arrives
+    QUEUED with a human origin (it rode the user's channel) and would otherwise
+    be admitted as a turn before any marker is read. Both shapes must route to
+    the notification home, and the digest carries the sentence, not the fence."""
+    reminder = GroveInstruction.reminder("Update your Grove phase.")
+    queued = _Record(raw=_queued(reminder, at="2026-08-01T10:00:00Z"), index=0)
+    plain = _Record(raw=_user(reminder, at="2026-08-01T10:00:01Z", uuid="u1"), index=1)
+
+    for rec in (queued, plain):
+        assert rec.is_grove_reminder
+        assert not rec.is_human_turn
+        message = rec.to_message()
+        assert message is not None
+        assert message.role == "notification"
+        assert message.text() == "Update your Grove phase."
+
+    activity = _parse(
+        [
+            _queued("a real steer", at="2026-08-01T10:00:00Z"),
+            _queued(reminder, at="2026-08-01T10:00:01Z"),
+            _user(reminder, at="2026-08-01T10:00:02Z", uuid="u2"),
+        ]
+    ).activity()
     assert activity.human_turns == 1
 
 

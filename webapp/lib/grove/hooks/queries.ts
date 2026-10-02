@@ -10,7 +10,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { GroveProtocolError } from "@/lib/grove/api";
+import { GroveProtocolError, isWorkspaceGone } from "@/lib/grove/api";
 import type { DiagramDocumentView, DiagramWriter } from "@/lib/grove/api";
 import type { components } from "@/lib/grove/api/types.gen";
 import type {
@@ -81,6 +81,8 @@ export function useWorkspacePeek(id: string | null): UseQueryResult<WorkspacePee
     queryKey: groveKeys.peek(id ?? ""),
     queryFn: () => groveClient.getPeek(id!),
     enabled: id !== null,
+    // A killed workspace will 404 again; retrying only delays the page leaving.
+    retry: (failures, error) => !isWorkspaceGone(error) && failures < 1,
     refetchInterval: backstopInterval(connected, POLL_MS.peek),
   });
 }

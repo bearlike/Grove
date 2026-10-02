@@ -2900,7 +2900,13 @@ class WorkspaceManager:
         return True
 
     def send_message(
-        self, workspace_id: str, text: str, *, agent: str = "", attachments: Sequence[str] = ()
+        self,
+        workspace_id: str,
+        text: str,
+        *,
+        agent: str = "",
+        attachments: Sequence[str] = (),
+        revive: bool = True,
     ) -> None:
         """Type ``text`` into the workspace's agent pane and submit it.
 
@@ -2929,6 +2935,10 @@ class WorkspaceManager:
         The ``message_sent`` audit event carries the resolved target and
         the text *length*, never the content — steering text can hold
         secrets and events fan out to every subscriber and log sink.
+
+        ``revive=False`` is for text nobody asked to deliver (a daemon
+        reminder): it must reach a running session or nothing, so a dead
+        native owner is refused rather than respawned to receive it.
         """
         if not agent and not attachments and text.strip().startswith(MACRO_PREFIX):
             # A Grove command is never agent input, so every surface that types
@@ -2947,7 +2957,10 @@ class WorkspaceManager:
             # worker's output; a paneless runtime has none), so deliver over
             # the agent's native channel instead of raising. Same
             # dispatch-point pattern as the remote arm — one seam, not a fork.
-            state = self._revive_for_steer(state)
+            if revive:
+                state = self._revive_for_steer(state)
+            else:
+                ensure_can_steer(state)
             self._steer_native(state, "message", text)
             return
         ensure_can_steer(state)

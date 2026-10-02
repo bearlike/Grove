@@ -26,7 +26,8 @@ import {
   primarySessionId,
   primarySessionIdOf,
 } from "@/lib/grove/adapters";
-import { diagramOf } from "@/lib/grove/api";
+import { diagramOf, isWorkspaceGone } from "@/lib/grove/api";
+import { workspaceLaunchHref } from "@/components/grove/fleet/project-context";
 import {
   useActivityStream,
   useRemapSession,
@@ -313,6 +314,29 @@ export function Workspace({ id }: { id: string }) {
   // Workspace → 59d472a0b0ef… → the real title on every single navigation.
   const title = peek.data?.state.title ?? "Workspace";
 
+  // Where to land once this workspace is gone: a new one in the same project.
+  // Captured while the snapshot still files it, because a kill removes the row
+  // the answer is read from — by the time the 404 arrives it would say "/".
+  const launchHref = useRef("/");
+  const ownLaunchHref = workspaceLaunchHref(snapshot?.projects ?? [], id);
+  if (ownLaunchHref !== null) launchHref.current = ownLaunchHref;
+  const leave = useCallback(() => router.replace(launchHref.current), [router]);
+  // A kill from anywhere — this page, the rail, the CLI, another tab — reads
+  // back as a 404, and "Couldn't load" is the wrong answer to a workspace that
+  // no longer exists. `replace`, so Back does not return to it either.
+  const gone = peek.isError && isWorkspaceGone(peek.error);
+  useEffect(() => {
+    if (gone) leave();
+  }, [gone, leave]);
+
+  if (gone) {
+    return (
+      <Surface>
+        <ShellHeader title={title} />
+        <TranscriptSkeleton />
+      </Surface>
+    );
+  }
   if (peek.isError) {
     return (
       <Surface>
@@ -364,7 +388,7 @@ export function Workspace({ id }: { id: string }) {
       repoRoot={peek.data.state.repo_root}
       privileged={{
         peek: peek.data,
-        onKilled: () => router.push("/"),
+        onKilled: leave,
         canInterrupt: peek.data.state.native ? canInterruptNative(peek.data.state) : thread.working,
         onExpandDiagram: () => {
           selectWorkTab("diagram");

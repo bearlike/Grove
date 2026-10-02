@@ -258,9 +258,8 @@ class PublicGroveView(BaseModel):
     #: One sentence, lifted from the project README so the two cannot drift into
     #: two different descriptions of one product.
     tagline: str = (
-        "Grove is a software factory for the coding agents you already use. "
-        "Give each task a workspace. Guide the work with files and diagrams. "
-        "Follow delivery from ticket to trace."
+        "Run your coding agents as a software factory, each task in its own "
+        "workspace and tracked from ticket to trace."
     )
 
 

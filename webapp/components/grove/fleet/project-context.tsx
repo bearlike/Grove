@@ -56,6 +56,23 @@ export function projectLaunchHref(context: ProjectContext): string {
   return context.kind === "selected" ? `/?project=${encodeURIComponent(context.cwd)}` : "/";
 }
 
+/**
+ * Where a reader goes once this workspace is gone: a new one in the SAME project.
+ *
+ * Null when the snapshot does not file the workspace under any project, so a
+ * caller can keep the answer it computed while the workspace still existed —
+ * after a kill the snapshot drops the row, and asking then would say "/".
+ */
+export function workspaceLaunchHref(
+  projects: readonly ProjectGroup[],
+  workspaceId: string,
+): string | null {
+  const project = projects.find((candidate) =>
+    candidate.workspaces.some((workspace) => workspace.state.id === workspaceId),
+  );
+  return project ? projectLaunchHref({ kind: "selected", cwd: project.cwd, project }) : null;
+}
+
 function pathParts(path: string): string[] {
   return path.split("/").filter(Boolean);
 }

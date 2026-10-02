@@ -1,7 +1,7 @@
 {
   "name": "grove",
   "description": "Grove's own skills, published from the repository that implements them: fleet orchestration, leading a fleet toward one deliverable, in-workspace reporting and native mailbox workers, configuration, reinstalling, and collaborative diagrams and mockups.",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "author": {
     "name": "bearlike"
   },

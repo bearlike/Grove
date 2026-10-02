@@ -164,13 +164,17 @@ describe("the composer theme seam speaks in TOKENS", () => {
     }
   });
 
-  it("gives the shelf the sunken rung and its OWN hairline, quieter than the bar's", () => {
-    // Two outlines, not one: the shelf takes the decorative tier and the bar
-    // above it takes a stronger mix, so the writing surface stays the anchor.
+  it("gives the shelf the sunken rung and an edge a reader can FIND", () => {
+    // The shelf's fill is a sunken wash on the sunken landing page, so its edge
+    // is the only thing drawing it. On the decorative `--border` it measured
+    // 1.07:1 light / 1.12:1 dark — invisible. It mixes the prominent `--input`
+    // over the rung beneath it instead; the bar above keeps its own outline and
+    // stays the anchor by its lifted fill, not by being the only line drawn.
     const shelf = classBody(".composer-shelf");
     expect(shelf, ".composer-shelf is missing").not.toBeNull();
     expect(shelf).toContain("var(--surface-sunken)");
-    expect(shelf).toMatch(/border:\s*1px solid var\(--border\)/);
+    expect(shelf).toMatch(/border:\s*1px solid color-mix\(in oklab, var\(--input\) 60%, var\(--surface-sunken\)\)/);
+    expect(shelf, "the decorative hairline is what made it invisible").not.toMatch(/var\(--border\)/);
     const bar = RULES.find((rule) => rule.selector === '[data-slot="composer-bar"]' && /border-color:/.test(rule.body));
     expect(bar?.body, "the composer bar has no outline of its own").toMatch(/var\(--border-source\) 43%/);
     expect(shelf).toMatch(/border-radius:\s*var\(--radius-lg\)/);

@@ -84,6 +84,16 @@ export class GroveProtocolError extends Error {
   }
 }
 
+/**
+ * The daemon has no record of this workspace — it was killed, here or anywhere.
+ *
+ * A fact about the subject, not a failed read: retrying cannot succeed, and a
+ * surface about that workspace should leave rather than offer "Retry".
+ */
+export function isWorkspaceGone(error: unknown): boolean {
+  return error instanceof GroveProtocolError && error.code === "workspace_not_found";
+}
+
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH";
 type UsageFilters = Record<string, string>;
 type WorkspaceDefaultsView = components["schemas"]["WorkspaceDefaultsView"];

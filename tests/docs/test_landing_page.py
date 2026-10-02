@@ -72,14 +72,57 @@ def test_site_root_is_the_landing_page_and_leads_into_the_docs() -> None:
     # Old inbound links pointed at the site root's anchors; keep them resolving.
     assert 'id="install"' in rendered
     assert 'id="explore-the-docs"' in rendered
-    # The supported-tool row shows the README's marks, in the README's order.
+    # The supported-tool row links the README's tools, in the README's order.
+    # The README shows them in its banner image, so its row is text links.
     readme = (ROOT / "README.md").read_text()
-    readme_marks = re.findall(r'src="docs/logos/support/([a-z-]+)\.png"', readme)
+    supports = readme.split("<strong>Supports</strong>", 1)[1].split("</p>", 1)[0]
+    readme_links = re.findall(r'<a href="([^"]+)"', supports)
+    landing_links = re.findall(r'<li><a href="([^"]+)"', rendered)
+    assert landing_links == readme_links, (landing_links, readme_links)
     landing_marks = re.findall(r'src="logos/support/([a-z-]+)\.png"', rendered)
-    assert landing_marks == readme_marks, (landing_marks, readme_marks)
-    assert len(landing_marks) >= 6
+    assert len(landing_marks) == len(landing_links) >= 6
     for mark in landing_marks:
         assert (DOCS / "logos" / "support" / f"{mark}.png").is_file(), mark
+
+
+def test_github_banners_are_the_landing_page_at_the_sizes_github_wants() -> None:
+    """Both banners are rendered from the landing page (tools/landing_banners.py).
+
+    The social preview is GitHub's 1280x640 (2:1); the README banner is a 4:1
+    strip at 2x for HiDPI, and it is what the README shows instead of a logo,
+    a title and a row of tool marks.
+    """
+    banners = DOCS / "img" / "banners"
+    with Image.open(banners / "github-social.png").convert("RGB") as social:
+        assert social.size == (1280, 640)
+        # The brand must survive the card crop: nothing but background in
+        # the top safe band.
+        band = social.crop((60, 0, 400, 70))
+        assert max(sum(p) for p in band.getdata()) < 600, "brand reaches into the cropped top band"
+    # Both carry a thin solar-ramp separator on the bottom EDGE: warm at the
+    # left, burgundy at the right, over the last rows of pixels.
+    for name in ("github-social.png", "readme-banner.png"):
+        with Image.open(banners / name).convert("RGB") as image:
+            row = image.height - 2
+            left, right = image.getpixel((8, row)), image.getpixel((image.width - 8, row))
+            assert left[0] > 240 and left[1] > 190, (name, left)
+            assert right[0] < 120 and right[1] < 30 and right[2] < 30, (name, right)
+            # A line, not a block: 40 px up it is scene again.
+            above = image.getpixel((image.width // 2, image.height - 40))
+            assert not (above[0] > 180 and above[1] < 140), (name, above)
+    # Both compositions keep the supported-tool marks; the recipe hides the
+    # install card and navigation, never the marks.
+    recipe = (ROOT / "tools" / "landing_banners.mjs").read_text()
+    for composition in recipe.split("css: `")[1:]:
+        hidden = composition.split("`", 1)[0]
+        assert not re.search(r"grove-landing__support[^{]*\{[^}]*display:\s*none", hidden)
+    with Image.open(banners / "readme-banner.png") as banner:
+        assert banner.size == (2400, 600)
+    readme = (ROOT / "README.md").read_text()
+    assert 'src="docs/img/banners/readme-banner.png"' in readme
+    assert 'src="docs/logos/grove-logo.png"' not in readme
+    assert "<h1" not in readme.split("## ", 1)[0]
+    assert 'src="docs/logos/support/' not in readme
 
 
 def test_landing_hero_reads_title_marks_body_install_actions() -> None:
@@ -92,7 +135,7 @@ def test_landing_hero_reads_title_marks_body_install_actions() -> None:
     css = (DOCS / "stylesheets" / "grove-landing.css").read_text()
     title = rendered.index('id="grove-landing-title"')
     support = rendered.index('class="grove-landing__support"')
-    body = rendered.index("Bring the coding agents")
+    body = rendered.index("Bring your own coding agents")
     install = rendered.index('class="grove-landing__install"')
     actions = rendered.index('class="grove-landing__actions"')
     assert title < support < body < install < actions
@@ -105,6 +148,13 @@ def test_landing_hero_reads_title_marks_body_install_actions() -> None:
         assert f"#grove-install-{tool}:checked ~ {panel}" in css
     commands = re.findall(r"<code>(.*?)</code>", card)
     assert commands and all("grove-factory" in re.sub(r"<[^>]+>", "", c) for c in commands)
+    # Every tab is exactly two command lines. A header line or a third command
+    # makes the card change height as the reader switches tools.
+    panels = re.findall(r'<pre class="grove-landing__install-panel"[^>]*>(.*?)</pre>', card, re.S)
+    for panel_body in panels:
+        lines = panel_body.split("\n")
+        assert len(lines) == 2, lines
+        assert all(line.startswith("<code>") for line in lines), lines
     assert 'href="getting-started/#install"' in card
     assert rendered.count('id="install"') == 1
 
@@ -318,12 +368,11 @@ def test_landing_aura_is_the_generated_field_and_grain_is_fine() -> None:
     rendered = (DOCS / "index.md").read_text()
     assert 'url("../img/landing/aura.png")' in css
     assert 'class="grove-landing__aura"' in rendered
-    assert 'class="grove-landing__aura-drift"' in rendered
     assert 'class="grove-landing__grain"' in rendered
-    # Motion is compositor-only and stops under reduced motion.
-    reduced = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
-    assert ".grove-landing__aura-drift::before" in reduced
-    assert ".grove-landing__grain" in reduced
+    # Set dressing is still. Only the robots and the coil tops move, so no
+    # CSS animation anywhere on the page competes with the scene for the GPU.
+    assert "aura-drift" not in rendered and "aura-drift" not in css
+    assert "@keyframes" not in css and "animation:" not in css
     # The accent word carries the underline, not the whole headline.
     assert 'One software <span class="grove-landing__mark">factory</span>.' in rendered
 
@@ -369,7 +418,7 @@ def test_landing_controls_share_light_text_on_machined_dark_surfaces() -> None:
     assert (
         source.count('class="grove-landing__support-window"')
         == source.count("--support-surface:")
-        == 6
+        == 7
     )
     assert "width: 112%;" in artwork and "max-width: none;" in artwork
     assert "border: 2px solid var(--factory-control-edge);" in css
@@ -387,28 +436,17 @@ def test_landing_mesh_is_subtle_decorative_and_respects_reduced_motion() -> None
     assert svg.attrib["viewBox"] == "0 0 1600 1000"
     rows = svg.findall(".//{http://www.w3.org/2000/svg}path[@class='mesh-row']")
     assert len(rows) >= 16
-    # Each row arrives at the next row's original position. The boundary
-    # rows are masked, so the whole surface wraps without a direction change.
-    for row, following in pairwise(rows):
-        assert row.attrib["style"] == f"--next-row: path('{following.attrib['d']}')"
     motion = svg.find("{http://www.w3.org/2000/svg}style")
     assert motion is not None and motion.text is not None
-    # The flow keeps its tuned pace, but every animation step repaints this
-    # whole full-viewport document, so each is stepped at a bounded rate: a
-    # `linear` curve here repaints on every display refresh.
-    for name, period in (("mesh-row-flow", 19.2), ("mesh-stream-flow", 16)):
-        step = re.search(rf"{name} {period}s steps\((\d+)\) infinite", motion.text)
-        assert step is not None, name
-        assert int(step.group(1)) / period <= 12, f"{name} repaints faster than 12 Hz"
-    # The edge fade is the page's composited CSS mask, never an SVG mask that
-    # is repainted with every step.
+    # The drawing is still: every animation step repainted this whole
+    # full-viewport document, and nothing but the scene is meant to move.
+    assert "animation" not in motion.text and "@keyframes" not in motion.text
+    assert "--next-row" not in asset.read_text() and "--delay" not in asset.read_text()
+    # The edge fade is the page's composited CSS mask, never an SVG mask.
     assert svg.find(".//{http://www.w3.org/2000/svg}mask") is None
     assert len(svg.findall(".//{http://www.w3.org/2000/svg}path[@class='mesh-stream']")) >= 5
-    assert '<object data="img/landing/factory-mesh.svg?v=4"' in source
+    assert '<object data="img/landing/factory-mesh.svg?v=5"' in source
     assert svg.attrib["preserveAspectRatio"] == "xMidYMid slice"
-    assert "alternate" not in motion.text
-    assert "prefers-reduced-motion: reduce" in motion.text
-    assert "animation: none" in motion.text
     mesh = css.split(".grove-landing__mesh {", 1)[1].split("}", 1)[0]
     opacity = re.search(r"opacity:\s*([\d.]+)", mesh)
     assert opacity is not None and float(opacity.group(1)) <= 0.16

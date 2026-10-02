@@ -38,6 +38,7 @@ import {
   ProjectContextPicker,
   projectContextLabel,
   projectLaunchHref,
+  workspaceLaunchHref,
   scopeFleetRows,
   type ProjectContextController,
 } from "./project-context";
@@ -212,6 +213,7 @@ export function FleetTree({
                 key={row.workspace.state.id}
                 row={row}
                 active={pathname === `/w/${row.workspace.state.id}`}
+                launchHref={workspaceLaunchHref(projects, row.workspace.state.id) ?? "/"}
                 grouped={search.filter.groupBy === "project"}
               />
             ))}
@@ -285,10 +287,13 @@ const ROW_STATES = cn(
 function WorkspaceRow({
   row,
   active,
+  launchHref,
   grouped,
 }: {
   row: FleetRow;
   active: boolean;
+  /** A new workspace in this row's project — where deleting the open one lands. */
+  launchHref: string;
   grouped: boolean;
 }): React.ReactNode {
   const { state, phase } = row.workspace;
@@ -503,7 +508,7 @@ function WorkspaceRow({
             {
               onSuccess: () => {
                 setKilling(false);
-                if (active) router.push("/");
+                if (active) router.replace(launchHref);
               },
             },
           )

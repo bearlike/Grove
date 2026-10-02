@@ -106,7 +106,7 @@ That is "nothing is ranked and the eye has no entry point", measured on four dif
 
 **The mono leak is a work-panel problem, not a rail problem.** Changes renders `+0 −0 0 1` in mono; Files renders `+1 −0` in mono; Info renders `11`, `1,068`, `317.9M`, `663.2K` in mono. Every one is a **metric**, and the usage page renders the same class of data in sans. Meanwhile the correct uses sit right beside them — `HEAD`, `.grove/`, `config.json`, `sonnet`, `opus`, `haiku` — so the two are genuinely indistinguishable to a reader.
 
-**Two surfaces are legitimately exempt and the doc must say so, or someone will "fix" them.** Terminal is 98 of 103 elements mono with raw ANSI colours (`rgb(148,148,148)`, `rgb(78,154,6)`) injected by `fancy-ansi` — that is *content*, not chrome. Files carries `9px/700` inside `react-file-icon`'s SVG — that is artwork, not type.
+**Two surfaces are legitimately exempt and the doc must say so, or someone will "fix" them.** Terminal is 98 of 103 elements mono with raw ANSI colours (`rgb(148,148,148)`, `rgb(78,154,6)`) injected by `fancy-ansi` — that is *content*, not chrome.
 
 **What this audit did NOT measure**, so nobody mistakes silence for a clean bill: the fleet command palette (`fleet-palette.tsx`), the fleet tree and overlays (`fleet-tree.tsx`, `fleet-overlays.tsx`), the split-view resizer, the live pending-question group, and every surface's hover/focus/error state — states cannot be sampled by walking the DOM once. Those need their own pass before their rows in the map below can be called complete.
 
@@ -116,7 +116,7 @@ That is "nothing is ranked and the eye has no entry point", measured on four dif
 
 **Buttons.** 21 explicit variants under `components/grove/**` + `app/**`: `ghost` 12, `outline` 7, `destructive` 1, `default` 1. `secondary` and `link` unused.
 
-**Icons.** One set (`lucide-react`), 30 import sites, 55 distinct glyphs, plus `@/components/icons/github` and `react-file-icon`. Both spellings of the same glyph are in use — `Activity` 4 / `ActivityIcon` 2, `GitBranch` 2 / `GitBranchIcon` 2, `Server` 2 / `ServerIcon` 3, `TriangleAlert` 2 / `TriangleAlertIcon` 2, `Clock` 1 / `ClockIcon` 2, `Timer` 1 / `TimerIcon` 2, `Terminal` 1 / `TerminalIcon` 4.
+**Icons.** One set (`lucide-react`), 30 import sites, 55 distinct glyphs, plus `@/components/icons/github` and the VS Code file-type artwork through `AppIcon`. Both spellings of the same glyph are in use — `Activity` 4 / `ActivityIcon` 2, `GitBranch` 2 / `GitBranchIcon` 2, `Server` 2 / `ServerIcon` 3, `TriangleAlert` 2 / `TriangleAlertIcon` 2, `Clock` 1 / `ClockIcon` 2, `Timer` 1 / `TimerIcon` 2, `Terminal` 1 / `TerminalIcon` 4.
 
 **The expanded rail uses `w-[23.8rem]` through the shared `RAIL_WIDTH` constant.** Shell and public share rails keep one desktop measure. Children stay `w-full` so the docked measure cannot leak into the mobile sheet. Narrowing the rail must not shrink text or pointer targets. New workspace gives up spare width while Filters and Pause retain their targets on the same action row. The `text-xl` workspace title, `text-lg` body, and `size-7` brand mark preserve hierarchy through the existing ramp; do not add inline pixel floors.
 
@@ -184,11 +184,13 @@ Three tiers. Every piece of text on every surface is exactly one of them, and th
 
 | Token | Class | Light | Dark | For |
 |---|---|---|---|---|
-| `--content-primary` | `text-content-primary` | 4.73:1 | 19.06:1 | What the surface is *about*. The name, the title, the value. **Read first.** |
-| `--content-secondary` | `text-content-secondary` | 9.21:1 | 12.34:1 | Supporting text that qualifies the primary — a description, a subtitle, a body sentence. |
-| `--content-tertiary` | `text-content-tertiary` | 4.83:1 | 7.59:1 | Metadata. Timestamps, counts, labels, units, field names. **Present, not read.** |
+| `--content-primary` | `text-content-primary` | 4.73:1 | 19.89:1 | What the surface is *about*. The name, the title, the value. **Read first.** |
+| `--content-secondary` | `text-content-secondary` | 9.21:1 | 14.74:1 | Supporting text that qualifies the primary — a description, a subtitle, a body sentence. |
+| `--content-tertiary` | `text-content-tertiary` | 4.83:1 | 9.92:1 | Metadata. Timestamps, counts, labels, units, field names. **Present, not read.** |
 
 Contrast is measured against `--background` in each theme. All three clear AA (4.5:1) for normal text at every step of the ramp.
+
+**In dark mode AA is the floor, not the target (ADD).** Dark text passed AA everywhere and still read dull, because the two GRAYS carried it: tertiary sat at 6.7:1 on screen while white was already near its ceiling. So the dark lift goes to the grays (secondary L .845→.90, tertiary .705→.78) and white takes the last step to pure. Each tier has a *crispness* floor on the page (19.5 / 14 / 9.5 : 1), and adjacent tiers stay more than 3 points apart so reading order survives. `tests/unit/dark-card-backgrounds.test.ts` holds both. **Before retuning, census the live page:** measured, it had no alpha text at all, so the token values were the whole story. Light mode is unchanged.
 
 - `--content-primary` aliases `--foreground` (light L .56); `--content-tertiary` aliases `--muted-foreground`. **Every `text-muted-foreground` in the tree today is already correct as tertiary** — adopting the ramp is a rename, never a re-pick. `--content-secondary` is the genuinely new value, and it is what supporting text should have been using all along instead of borrowing one of its neighbours.
 - **One primary per block.** A card whose title, value and description are all primary has ranked nothing. If two things want primary, one of them is secondary.
@@ -440,6 +442,7 @@ the structure adopted here.
 |---|---|---|---|
 | **prominent** | `--input`, `--ring` | 3:1, per 1.4.11 | identifies a component or its state |
 | **decorative** | `--border`, `--surface-edge`, `--sidebar-border` | 30% source opacity | card perimeters, interior separators, shell and tab-band rules, the composer bar |
+| **findable** | `--input` mixed 60% over its own rung | ~1.8:1 | a container whose fill matches the ground under it, so its edge is the only thing drawing it: the landing configuration shelf |
 | **control resting** | `--edge-control` | opaque, one step above decorative | resting outlines on labelled interactive controls; every native control's own `--border` resolves to it |
 
 **The prominent tier remains unchanged.** Its light L0.594 and dark L0.56 values were solved against the worst surface. The decorative reduction does not alter that contrast guarantee or the resting control token.
@@ -807,7 +810,7 @@ Use the card's named container, never the viewport, for that threshold. Verify a
 
 ## 7. Icons
 
-**Lucide is the default vocabulary.** `components/icons/github` and `AgentMark`'s vendored `@lobehub/icons` leaves carry brand artwork, not generic vocabulary. Model and tool values may resolve an Iconify slug through `AppIcon`; tool catalog defaults use colorful Material Icon Theme, VS Code and Flat Color Icons artwork, while supplementary MCP mappings may name a server's own mark. These fixed identity colors do not indicate success or failure; provider-state words retain that job. An unavailable slug keeps a stable fallback footprint. `react-file-icon` renders file-type artwork, not chrome.
+**Lucide is the default vocabulary.** `components/icons/github` and `AgentMark`'s vendored `@lobehub/icons` leaves carry brand artwork, not generic vocabulary. Model and tool values may resolve an Iconify slug through `AppIcon`; tool catalog defaults use colorful Material Icon Theme, VS Code and Flat Color Icons artwork, while supplementary MCP mappings may name a server's own mark. These fixed identity colors do not indicate success or failure; provider-state words retain that job. An unavailable slug keeps a stable fallback footprint. File types use VS Code's own icons: `vscode-icons-js` names the icon and `AppIcon` draws it from Iconify's `vscode-icons` set, so every file row (edit card, Files tab, turn summary) reads one vocabulary. They are file-type artwork, not chrome.
 
 **`AgentMark` imports each provider's `Color` leaf directly, never the compound icon and never the package root.** A brand mark's fixed hue is the concrete case of §4.1's **Identity** row (`--chart-1…5`, brand marks — "a fixed property of the thing"), so a vendored `fill` baked into imported path data is not a colour decision made in `components/grove/`; `lint:styling`'s ban is on a *class* fixing a colour in this tree, which a `<path fill="#…">` arriving from `node_modules` never is. The leaf import is load-bearing, not stylistic: the compound object's `.Avatar`/`.Combine` variants eagerly import `@lobehub/ui`'s `@emoji-mart` dependency, which fails to load under Vitest's Node ESM loader and would otherwise ride the bundle on tree-shaking alone — `@lobehub/icons/es/<Provider>/components/Color` touches only the one leaf (`react`, its own `../style`, and, where the artwork needs a gradient, `../../hooks/useFillId`), the same shallow profile `Mono` had. **Codex's brand colour is a blue gradient (`#3941FF`→`#7A9DFF`→`#B1A7FF`), not the near-white this section used to claim** — its `Color` leaf also draws its own opaque white rounded-square backing path behind the gradient mark, so the rendered glyph always carries its own contrast plate and reads on both the dark rail and the light theme regardless of what sits behind it. `openai` has no vendored `Color` leaf in the pinned version (`style.js` exposes per-product hex constants but no component), so it alone stays on `Mono`. `claude` renders lobehub's generic `Claude` mark, not the tool-specific `ClaudeCode` one — reversed deliberately: people recognise the Anthropic mark far more readily than a CLI-specific redraw of it, so recognisability now outweighs naming the exact binary. `codex` still keeps its own vendored mark rather than borrowing `OpenAI`'s, since Codex and OpenAI stay separate `AgentBrand`s (`fleet/tokens.ts`).
 
@@ -821,6 +824,8 @@ Use the card's named container, never the viewport, for that threshold. Verify a
 **Tool timelines use the upstream action-row anatomy (RECORD + composition).** A `text-sm` verb and `size-5` mark lead a `text-xs` monospace preview capped at `max-w-64`; state, duration and the chevron sit beside the action. The summary carries a horizontal frosted capsule with a straight centre and rounded ends; it takes its definition from luminance along its perimeter (a lit top rim, a shaded bottom one), never a drawn stroke, and stays quieter than any coin. Light and dark themes set independently selected glass, rim, shade and coin-base values: never an opaque white plate in dark mode. Each icon sits on its own glass coin whose accent concentrates around the glyph and dissipates toward a neutral rim, so a run never reads as a row of coloured badges. The first coin sits on top and each later coin tucks behind its left neighbour, the overlap marked by a lit rim and a soft cast shadow. Preserve the compact overlapping stack rather than turning it into a spaced icon row; glyphs paint above every coin rim and never cover each other. Cap the marks with an explicit `+n` remainder. Opening retains the entire stack and its geometry while reducing only the shell's opacity; glyphs and coins remain legible at full opacity.
 
 Steps, nonzero command/read categories, and changed-file counts follow the stack. Omit zero command/read categories; category-free runs use the cataloged single action or `N steps executed`. Edits stay inside the run. Their expanded body has a small `mt-1.5` breathing gap before a non-collapsible framed card with a path header and `+n −n` totals; the step is its only disclosure. Empty-original edits use native unified rows, other edits native split rows. Per-file chips sum edits at the group's footer. Both triggers retain keyboard focus; long targets have their full value available, and bodies have no height cap. Expanded groups use `ps-2 py-1`; request/response wrappers use `ps-3 pt-0.5 pb-1`.
+
+**A settled turn that changed files ends with one `Files (N)` card above its action bar (ADD).** The card is one `CardShell` and never a second boundary when opened. Collapsed, it is a `text-sm font-medium` label with a trailing `size-4` chevron that turns down when open. Expanded, the same card adds the vendored `Separator` under the header, then a `divide-y` list of the file's VS Code icon, file name (`font-medium`), muted path (truncating, never the name) and right-aligned tabular `+n −n` in `text-success`/`text-destructive`. It shows nothing while its turn is live or when the turn changed no file.
 
 ### The fixed glyph per entity
 
@@ -1148,7 +1153,7 @@ Each surface against this system, with the specific deltas it needs. **One PR pe
 | Delta | Detail |
 |---|---|
 | Adopt the ramp | Prose is the **16px root default** — an undesigned size. Set the reading column to `text-base` (14px). Accept inline code at 11.9px. |
-| Size sprawl | 16 distinct size/weight pairs, the worst in the app. Audit each: 13.6/15.3px are `text-[0.85em]` (vendored, accepted); 9px/700 is `react-file-icon` SVG artwork (not type, exclude); 11px is `elements`' `mono` (vendored, accepted) |
+| Size sprawl | 16 distinct size/weight pairs, the worst in the app. Audit each: 13.6/15.3px are `text-[0.85em]` (vendored, accepted); 11px is `elements`' `mono` (vendored, accepted) |
 | Content tiers | 2607 dark-mode elements share one near-white. Message body → secondary; metadata rows → tertiary; only the turn's subject stays primary |
 | Mono | Correct here — code spans, paths and commands are literals. No change. |
 | States | Loading skeleton must match turn shape; error state names the turn that failed |
@@ -1185,7 +1190,6 @@ Its own strings are on the tiers. **"Commit subject primary, SHA and author tert
 | Delta | Detail |
 |---|---|
 | Mono | `file-row.tsx`'s `+1 −0` and `files-tab.tsx`'s edit totals are mono at the CALL SITE, not through `CardStat` → sans + `tabular-nums`. Paths and filenames stay mono. |
-| Exempt | `9px/700` inside `react-file-icon` is SVG artwork, not type. Leave it. |
 | Content tiers | Filename primary, directory prefix tertiary, stats tertiary |
 
 #### Work · Info — done

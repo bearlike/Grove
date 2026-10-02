@@ -1,5 +1,5 @@
 site_name: Grove
-site_description: Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.
+site_description: Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace.
 repo_url: https://github.com/bearlike/Grove
 repo_name: bearlike/Grove
 site_url: https://bearlike.github.io/Grove/
@@ -117,6 +117,7 @@ theme:
     "Agent Activity & Sessions": lucide:activity
     "Watches & Callbacks": lucide:alarm-clock
     "Telemetry & Tracing": lucide:waypoints
+    "Feedback & Evaluations": lucide:message-square-check
     "Push Notifications": lucide:bell
     "Status Semantics": lucide:circle-dot
     "Configuration Cascade": lucide:layers
@@ -246,6 +247,7 @@ nav:
           - Agent Activity & Sessions: features-activity.md
           - Watches & Callbacks: features-watches.md
           - Telemetry & Tracing: features-telemetry.md
+          - Feedback & Evaluations: features-feedback-evals.md
           - Push Notifications: features-notifications.md
           - Status Semantics: features-status.md
           - Configuration Cascade: features-cascade.md

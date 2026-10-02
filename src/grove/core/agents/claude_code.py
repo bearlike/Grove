@@ -82,6 +82,7 @@ from grove.core.agents.model import (
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 from grove.core.agents.transcript_scope import config_dir_override
 from grove.core.agents.turn_projection import TurnProjection, window_turns
+from grove.core.instructions import GroveInstruction
 from grove.core.mailboxes import MailboxEnvelope
 
 # Markers that flag a ``type:"user"`` line as machinery, not a human turn:
@@ -1161,7 +1162,7 @@ class _Record:
         already asks this question.
         """
         if self.is_queued_prompt:
-            return bool(self.queued_prompt.strip())
+            return bool(self.queued_prompt.strip()) and not self.is_grove_reminder
         if self.type != "user" or self.is_sidechain or self.is_meta:
             return False
         if _as_bool(self.raw.get("isCompactSummary")):
@@ -1169,7 +1170,7 @@ class _Record:
         if self._has_block("tool_result"):
             return False
         body = self.text()
-        if not body.strip():
+        if not body.strip() or self.is_grove_reminder:
             return False
         return not any(marker in body for marker in _NON_HUMAN_MARKERS)
 
@@ -1354,7 +1355,27 @@ class _Record:
         ``"notification"``, and only that role calls :meth:`mailbox_message`.
         A marker added to ``_NON_HUMAN_MARKERS`` alone stops the turn being
         counted as human and then drops the record on the floor."""
-        return self.is_task_notification or self.is_teammate_message or self.is_grove_mailbox
+        return (
+            self.is_task_notification
+            or self.is_teammate_message
+            or self.is_grove_mailbox
+            or self.is_grove_reminder
+        )
+
+    @property
+    def is_grove_reminder(self) -> bool:
+        """A note the Grove daemon sent on its own initiative (``GroveInstruction.reminder``).
+
+        Checked on BOTH arrival shapes because the reminder is sent only to a
+        WORKING agent, so it almost always lands in the harness queue, and a
+        queued prompt is otherwise admitted as a human turn before any marker
+        is consulted.
+        """
+        if self.is_sidechain:
+            return False
+        if self.is_queued:
+            return GroveInstruction.is_reminder(self.queued_prompt)
+        return self.type == "user" and GroveInstruction.is_reminder(self.text())
 
     def teammate_message_text(self) -> str:
         """The relayed notice, human-readable — never the raw
@@ -1569,7 +1590,9 @@ class _Record:
             content = (ContentBlock(type="text", text=text),) if text.strip() else ()
         elif role == "notification":
             note = (
-                self.mailbox_text()
+                GroveInstruction.unwrap(self.text())
+                if self.is_grove_reminder
+                else self.mailbox_text()
                 if self.is_grove_mailbox
                 else self.teammate_message_text()
                 if self.is_teammate_message

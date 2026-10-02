@@ -317,7 +317,7 @@ def test_the_documented_rubrics_name_exactly_the_configured_reasons() -> None:
     """The docs page is where an operator copies the Langfuse registration from,
     and the daemon refuses any reason the config does not list — so a label
     renamed in one place and not the other is a rating that can never land."""
-    page = (Path(__file__).parents[2] / "docs" / "features-telemetry.md").read_text()
+    page = (Path(__file__).parents[2] / "docs" / "features-feedback-evals.md").read_text()
     documented = set(re.findall(r'\{"label": "([^"]+)", "value": \d+\}', page))
     telemetry = GroveConfig().telemetry
     assert documented == {*telemetry.feedback_reasons, *telemetry.positive_feedback_reasons}

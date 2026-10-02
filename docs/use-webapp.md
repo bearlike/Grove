@@ -2,7 +2,7 @@
 
 ## Manage your agents from any device
 
-Grove is a terminal program first. The web dashboard puts the same fleet on any device.
+The web dashboard puts the same fleet on any device, beside the terminal UI and CLI.
 
 <div class="swiper ms-shots">
   <div class="swiper-wrapper">

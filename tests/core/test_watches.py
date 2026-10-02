@@ -398,6 +398,38 @@ def test_a_version_mismatch_refuses_rather_than_discarding(tmp_path):
         WatchLog(path).all()
 
 
+def test_a_row_this_build_cannot_read_is_kept_and_blinds_nothing_else(tmp_path):
+    """The incident: one newer watch kind in the log took down every watch on the host.
+
+    A daemon not yet restarted onto a release that added a watch kind read the
+    file, failed validation on that one row, and answered 500 to every
+    registration. The row must be invisible to this reader but survive its
+    writes, or the newer build loses a watch it still owns.
+    """
+    clock = FakeClock()
+    log = WatchLog(tmp_path / "watches.json")
+    scheduler = WatchScheduler(
+        log=log,
+        watchers=WatcherRegistry([CountingWatcher(), TimerWatcher()]),
+        deliver=RecordingCourier(),
+        clock=clock,
+    )
+    known = scheduler.register(_registration())
+    data = json.loads(log.path.read_text(encoding="utf-8"))
+    future = dict(data["watches"][known.id], id="wch_" + "f" * 32)
+    future["predicate"] = {"kind": "from_the_future", "anything": 1}
+    data["watches"][future["id"]] = future
+    log.path.write_text(json.dumps(data), encoding="utf-8")
+
+    assert [row.id for row in log.all()] == [known.id]
+    again = scheduler.register(_registration())  # a write: this was the 500
+    log.settle(again.id, state="fired", now=clock.now)
+    log.prune(clock.now + timedelta(days=30))
+
+    kept = json.loads(log.path.read_text(encoding="utf-8"))["watches"]
+    assert kept[future["id"]] == future
+
+
 def test_rescheduling_to_the_same_instant_writes_nothing(tmp_path):
     """The one write on the polling path must not fire once per tick.
 

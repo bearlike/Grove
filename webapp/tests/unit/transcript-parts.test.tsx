@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { FileEditPart } from "@/components/grove/workspace/file-edit-part";
-import { extensionOf, fileIconStyle } from "@/components/grove/workspace/file-type-icon";
+import { fileIconSlug } from "@/components/grove/workspace/file-type-icon";
 
 const EDIT = {
   path: "/home/agent/.worktrees/x/src/grove/core/manager.py",
@@ -44,21 +44,15 @@ describe("FileEditPart", () => {
 });
 
 describe("file type icons", () => {
-  it("reads the trailing extension, and nothing from a bare or dot-prefixed name", () => {
-    expect(extensionOf("src/a/b/manager.py")).toBe("py");
-    expect(extensionOf("Makefile")).toBe("");
-    expect(extensionOf(".gitignore")).toBe("");
-    expect(extensionOf("a/B.TSX")).toBe("tsx");
+  it("names the VS Code icon for an extension, an exact filename and a dotfile", () => {
+    expect(fileIconSlug("src/a/b/manager.py")).toBe("vscode-icons:file-type-python");
+    expect(fileIconSlug("web/app.tsx")).toBe("vscode-icons:file-type-reactts");
+    expect(fileIconSlug("web/package.json")).toBe("vscode-icons:file-type-npm");
+    expect(fileIconSlug(".gitignore")).toBe("vscode-icons:file-type-git");
   });
 
-  it("colours the extensions this codebase is made of", () => {
-    for (const extension of ["ts", "tsx", "py", "json", "md", "css"]) {
-      expect(Object.keys(fileIconStyle(extension)).length).toBeGreaterThan(0);
-    }
-  });
-
-  it("falls back to a plain page rather than a lookalike of another language", () => {
-    expect(fileIconStyle("weirdext")).toEqual({});
+  it("falls back to the set's generic page rather than a lookalike of another language", () => {
+    expect(fileIconSlug("notes.weirdext")).toBe("vscode-icons:default-file");
   });
 });
 

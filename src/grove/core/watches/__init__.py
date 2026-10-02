@@ -10,8 +10,9 @@ from grove.core.watches.ci import CiWatcher
 from grove.core.watches.command import CommandWatcher
 from grove.core.watches.log import WatchLog
 from grove.core.watches.mailbox import MailboxWatchCourier
+from grove.core.watches.phase_nudge import NudgeEvidence, PhaseNudgeWatcher
 from grove.core.watches.scheduler import WatchScheduler
-from grove.core.watches.subscriptions import TicketSubscriptions
+from grove.core.watches.subscriptions import StandingWatches
 from grove.core.watches.ticket import TicketWatcher
 from grove.core.watches.watcher import TimerWatcher, Watcher, WatcherRegistry
 
@@ -19,7 +20,9 @@ __all__ = [
     "CiWatcher",
     "CommandWatcher",
     "MailboxWatchCourier",
-    "TicketSubscriptions",
+    "NudgeEvidence",
+    "PhaseNudgeWatcher",
+    "StandingWatches",
     "TicketWatcher",
     "TimerWatcher",
     "WatchLog",

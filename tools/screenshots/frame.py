@@ -452,11 +452,22 @@ def save_framed(image: Image.Image, path: Path) -> None:
     ).save(path, optimize=True)
 
 
-def _frame_file(framer: WindowFramer, source_path: Path, out_path: Path) -> None:
-    """Frame one PNG on disk, creating `out_path`'s parent directory if needed."""
+def _frame_file(framer: WindowFramer, source_path: Path, out_path: Path) -> bool:
+    """Frame one PNG on disk; `False`, writing nothing, if it is already framed.
+
+    Framing in place is not idempotent, and the input list is a named set, so
+    a shot whose capture was SKIPPED (the diagram pair degrades on a slow
+    network) leaves last run's framed file in that list, and framing it again
+    publishes a frame inside a frame — the window shrunk by one more inset.
+    Every capture is shot at 2x or a phone size, never at the canvas size, so
+    a file already at `canvas_size` can only be a frame.
+    """
     with Image.open(source_path) as handle:
         source = handle.convert("RGB")
+    if source.size == framer.style.canvas_size:
+        return False
     save_framed(framer.frame(source), out_path)
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -484,8 +495,10 @@ def main(argv: list[str] | None = None) -> int:
     framer = WindowFramer.build()
     for source_path in args.inputs:
         out_path = (args.out / source_path.name) if args.out else source_path
-        _frame_file(framer, source_path, out_path)
-        print(f"framed {source_path} -> {out_path}")
+        if _frame_file(framer, source_path, out_path):
+            print(f"framed {source_path} -> {out_path}")
+        else:
+            print(f"skipped {source_path}: already framed, so its capture did not run")
     return 0
 
 

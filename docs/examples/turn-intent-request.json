@@ -1,0 +1,26 @@
+{
+  "model": "tev1:4b",
+  "state": {
+    "input": "The login page returns a 500 since yesterday's deploy. Find out why and fix it."
+  },
+  "questions": {
+    "intent": {
+      "type": "choice",
+      "instructions": "`input` is one message a user sent to an AI coding agent that works in a software repository. Which option best describes the primary thing the user wants from the agent in `input`?",
+      "criteria": {
+        "implement_change": "Build, add or change code, UI, styling, behaviour or configuration in the product.",
+        "fix_bug": "Something is broken, failing, regressed or behaving wrongly; find the root cause and fix it.",
+        "question_explain": "Asks how or why something works, or asks for an explanation or analysis, without asking for a change.",
+        "status_check": "Asks about progress, current state, what happened, or whether something was already done.",
+        "git_release": "Commit, push, branch, rebase, open or update a pull request, merge, tag or publish a release.",
+        "ops_infra": "Operate hosts, services, containers, CI runners, credentials, tokens or deployment infrastructure.",
+        "docs_writing": "Write or edit documentation, README, docs-site pages or prose wording.",
+        "planning_tracking": "Create, update or organize issues, tickets, specs, epics or a plan.",
+        "orchestration": "Manage agent workspaces, teammates, sub-agents, watches, schedules or progress reporting of the agent fleet.",
+        "approval_go_ahead": "Approves a proposal or tells the agent to proceed or continue autonomously, with no new task.",
+        "context_provision": "Only supplies information, resources, access, files or screenshots for the agent to use, with no separate request.",
+        "other": "Small talk, a test ping, or a request that fits none of the options above."
+      }
+    }
+  }
+}

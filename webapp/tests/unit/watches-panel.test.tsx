@@ -111,5 +111,6 @@ describe("watchSubject", () => {
       "Command: make test",
     );
     expect(watchSubject({ kind: "timer", at: "2026-09-23T13:00:00Z" })).toBe("Timer");
+    expect(watchSubject({ kind: "phase_nudge", workspace_id: WS })).toBe("Phase reminder");
   });
 });

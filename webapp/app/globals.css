@@ -423,11 +423,11 @@
      deliberately UNDER the 0.05 floor. The card's edge and radius carry its
      boundary, which is the redundancy §4.3 specifies for exactly this case. */
   --background: var(--surface-base);
-  --foreground: oklch(0.985 0 0);
+  --foreground: oklch(1 0 0);
   --card: var(--surface-raised);
-  --card-foreground: oklch(0.985 0 0);
+  --card-foreground: oklch(1 0 0);
   --popover: var(--surface-overlay);
-  --popover-foreground: oklch(0.985 0 0);
+  --popover-foreground: oklch(1 0 0);
   /* Clay again, lifted for the dark ground — see the light-mode note. The old
      value was chroma 0.004, which is achromatic: every `default` badge on the
      dark rail rendered as a white pill. 5.44:1 on its own foreground. */
@@ -438,7 +438,7 @@
   --secondary: oklch(0.215714 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.215714 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
+  --muted-foreground: oklch(0.78 0.012 286);
   --accent: oklch(0.215714 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
@@ -455,8 +455,15 @@
   --ring: oklch(0.56 0.008 286);
   /* Only the middle step is restated: primary and tertiary alias --foreground
      and --muted-foreground, which this block already redefines. Measured
-     against the dark --background: 19.06:1, 12.34:1, 7.59:1. */
-  --content-secondary: oklch(0.845 0.01 286);
+     against the dark --background: 19.89:1, 14.74:1, 9.92:1.
+
+     THE GRAYS ARE WHERE DARK TEXT LOST ITS EDGE. A census of the live
+     workspace page found no alpha text at all — every neutral is one of these
+     three tokens — and white was already near its ceiling while tertiary sat at
+     6.7:1 on screen. So the lift is spent on the two grays (secondary .845→.90,
+     tertiary .705→.78) with white taking the last step to pure. The ranks stay
+     apart by about 5 points each, so reading order survives the lift. */
+  --content-secondary: oklch(0.9 0.008 286);
   /*
    * The ladder, DARK. Two steps clear the 0.05 floor (sunken→base 0.050352,
    * raised→overlay 0.091141); base→raised is 0.026975 BY DECISION, see above.
@@ -1308,13 +1315,17 @@
   background-color: color-mix(in oklab, var(--card) 75%, var(--surface-sunken));
 }
 
-/* The landing configuration shelf, below the writing surface: a muted fill
-   and a hairline of its own at the decorative tier — one step quieter than the
-   composer bar above it, so the bar stays the surface you write in. Its pills
-   are toolbar controls and take the ghost rule below. Callers own geometry. */
+/* The landing configuration shelf, below the writing surface. Its fill is a
+   sunken wash on a sunken page, so the EDGE is the only thing that draws it —
+   and on the decorative 30% hairline it measured 1.07:1 light and 1.12:1 dark,
+   a pill nobody could find. It takes the prominent edge (`--input`) mixed 60%
+   over the rung beneath it instead: ~1.8:1 in both themes, above the peer band
+   (Primer 1.45, M3 outline-variant 1.70) and well short of a 3:1 control ring,
+   because the pills inside carry their own labels. Its pills are toolbar
+   controls and take the ghost rule below. Callers own geometry. */
 .composer-shelf {
   background-color: color-mix(in oklab, var(--surface-sunken) 55%, transparent);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklab, var(--input) 60%, var(--surface-sunken));
   border-radius: var(--radius-lg);
 }
 

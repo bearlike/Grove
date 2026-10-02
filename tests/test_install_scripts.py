@@ -12,6 +12,7 @@ back.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tomllib
@@ -111,6 +112,36 @@ def test_declared_versions_agree() -> None:
     }
     drifted = {name: found for name, found in manifests.items() if found != declared}
     assert not drifted, f"pyproject.toml declares {declared}, but {drifted}"
+
+
+def test_pypi_readme_carries_no_relative_urls() -> None:
+    """PyPI hosts none of the repo's files, so a relative image in the README is
+    a broken image on the project page. The build rewrites them; this replays
+    the configured substitutions over the real README and checks nothing
+    relative survives and every rewritten image names a file that exists.
+    """
+    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "readme" in pyproject["project"]["dynamic"]
+    hook = pyproject["tool"]["hatch"]["metadata"]["hooks"]["fancy-pypi-readme"]
+    assert hook["fragments"] == [{"path": "README.md"}]
+
+    readme = (_REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    for rule in hook["substitutions"]:
+        readme = re.sub(rule["pattern"], rule["replacement"], readme)
+
+    relative = [
+        target
+        for target in re.findall(r'(?:src|href)="([^"]+)"|\]\(([^)\s]+)\)', readme)
+        for target in target
+        if target and not re.match(r"https?://|#|mailto:", target)
+    ]
+    assert not relative, f"relative URLs reach PyPI: {relative}"
+
+    raw = "https://raw.githubusercontent.com/bearlike/Grove/current/"
+    images = re.findall(rf'src="{re.escape(raw)}([^"]+)"', readme)
+    assert images, "no repo image was rewritten; the substitution matched nothing"
+    missing = [path for path in images if not (_REPO_ROOT / path).is_file()]
+    assert not missing, f"README images absent from the tree: {missing}"
 
 
 def test_distribution_name_is_not_the_taken_pypi_name() -> None:

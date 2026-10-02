@@ -38,6 +38,11 @@ export const GROVE_DATA_PART = {
  * daemon rates that turn by. */
 export const GROVE_TURN_ANSWER = "groveTurnAnswer";
 
+/** The `metadata.custom` key beside {@link GROVE_TURN_ANSWER}: every
+ * {@link FileEditPartData} the turn reported, in order. Absent when it edited
+ * nothing. */
+export const GROVE_TURN_FILES = "groveTurnFiles";
+
 /** The bare `data.by_name` render keys for {@link GROVE_DATA_PART}. */
 export const GROVE_DATA_NAME = {
   note: "note",
@@ -277,6 +282,7 @@ function buildTurnMessages(
   // Held open across consecutive `tool` entries so one Read/Bash/Edit run is
   // one message with N parts rather than N messages.
   let toolRun: ToolCallPart[] = [];
+  const edits: FileEditPartData[] = [];
   const flushToolRun = (): void => {
     if (toolRun.length === 0) return;
     const id = nextId();
@@ -373,7 +379,9 @@ function buildTurnMessages(
     // diff rides the part as `fileEdit` and the step renders the native card
     // when expanded, so nothing about the diff itself is lost.
     if (entry.role === "file_edit" && entry.file_edit) {
-      toolRun.push(fileEditCallPart(entry, entry.file_edit));
+      const part = fileEditCallPart(entry, entry.file_edit);
+      toolRun.push(part);
+      edits.push(part.groveFileEdit!);
       continue;
     }
     if (!entry.text) continue;
@@ -426,10 +434,17 @@ function buildTurnMessages(
   const answer = messages.findLastIndex(
     (message) => message.role === "assistant" && isTextOnly(message),
   );
+  // The turn's edits ride the same message, so its file summary sits with the
+  // bar it belongs above and is drawn once per turn, never once per tool run.
   if (answer >= 0 && turn.started_at) {
     messages[answer] = {
       ...messages[answer]!,
-      metadata: { custom: { [GROVE_TURN_ANSWER]: turn.started_at } },
+      metadata: {
+        custom: {
+          [GROVE_TURN_ANSWER]: turn.started_at,
+          ...(edits.length > 0 ? { [GROVE_TURN_FILES]: edits } : {}),
+        },
+      },
     };
   }
 

@@ -4,9 +4,10 @@
 # we do not own, so publishing under it is impossible and a bare
 # `uv tool install grove` fetches the wrong product entirely.
 name = "grove-factory"
-version = "0.0.11"
-description = "A software factory for the coding agents you already use. Give each task a workspace, guide the work with files and diagrams, and follow delivery from ticket to trace."
-readme = "README.md"
+version = "0.0.12"
+description = "Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace."
+# Built from README.md by the fancy-pypi-readme hook at the end of this file.
+dynamic = ["readme"]
 license = { text = "MIT" }
 authors = [{ name = "Krishnakanth Alagiri" }]
 requires-python = ">=3.12"
@@ -113,11 +114,27 @@ grove-native-worker = "grove.core.native_worker:main"
 [project.urls]
 Homepage = "https://github.com/bearlike/Grove"
 Repository = "https://github.com/bearlike/Grove"
-Documentation = "https://bearlike.github.io/Grove/"
+Documentation = "https://factory.mewbo.com/"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme>=24"]
 build-backend = "hatchling.build"
+
+# PyPI renders the README but hosts none of the repository's files, so every
+# relative image and link in it resolves against pypi.org and breaks. The repo
+# README stays relative so each forge renders its own tree; only the copy baked
+# into the package metadata is made absolute, against the public branch.
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+fragments = [{ path = "README.md" }]
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = 'src="(?!https?://)(?:\./)?([^"]+)"'
+replacement = 'src="https://raw.githubusercontent.com/bearlike/Grove/current/\1"'
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '(href="|\]\()(?!https?://|#|mailto:)(?:\./)?([^")]+)'
+replacement = '\1https://github.com/bearlike/Grove/blob/current/\2'
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/grove"]

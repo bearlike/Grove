@@ -661,7 +661,11 @@ test.describe("native sidebar project context", () => {
     expect(optionBox.width).toBeGreaterThanOrEqual(28);
     expect(optionBox.height).toBeGreaterThanOrEqual(28);
 
-    await sidebar(page).getByRole("link", { name: "Grove", exact: true }).focus();
+    // Start from the rail's own filter, the last control before the rows. From the
+    // brand link, Tab leaves the rail after its header for the whole main pane and
+    // wraps around, which scrolls the page: the row then measures as moved when
+    // only the page did, and on a busier page the walk ran out of stops entirely.
+    await sidebar(page).getByRole("button", { name: /^Filter workspaces/ }).focus();
     await tabTo(page, link);
     const focused = (await link.boundingBox())!;
     expect(focused).toEqual(resting);

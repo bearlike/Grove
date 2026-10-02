@@ -33,6 +33,7 @@ import { agentExited } from "./selectors";
 import { WorkingLoader } from "@/components/grove/working-loader";
 import { GROVE_THREAD_COMPONENTS } from "./tool-call-part";
 import { TranscriptSkeleton } from "./transcript-skeleton";
+import { LiveTurnContext } from "./turn-files";
 
 /**
  * `GROVE_THREAD_COMPONENTS`, with the vendored "How can I help you today?"
@@ -174,6 +175,11 @@ export function Transcript({
             the tool-body coordinate rides a provider: `TurnActions` mounts
             inside the thread with no route for a prop. */}
         <TurnFeedbackContext.Provider value={thread.feedback}>
+        {/* While the agent works, its newest turn is still growing, so that
+            turn's file summary waits for it to conclude. */}
+        <LiveTurnContext.Provider
+          value={thread.working ? (turns.data?.turns.at(-1)?.started_at ?? null) : null}
+        >
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col"
           data-testid="transcript"
@@ -191,6 +197,7 @@ export function Transcript({
             exitReason={exitReason}
           />
         </div>
+        </LiveTurnContext.Provider>
         </TurnFeedbackContext.Provider>
         <SubagentTranscriptDialog
           workspaceId={workspaceId}

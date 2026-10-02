@@ -1,4 +1,4 @@
-export { base64FromBytes, GroveClient, GroveProtocolError } from "./client";
+export { base64FromBytes, GroveClient, GroveProtocolError, isWorkspaceGone } from "./client";
 export type { WorkspacePanelView } from "./panels";
 export type { SubagentFleetData, SubagentFleetMember, SubagentFleetSession } from "./fleet";
 export { diagramOf } from "./diagrams";

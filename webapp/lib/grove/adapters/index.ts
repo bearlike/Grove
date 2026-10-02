@@ -176,6 +176,7 @@ export {
   GROVE_DATA_PART,
   GROVE_TIME_GAP,
   GROVE_TURN_ANSWER,
+  GROVE_TURN_FILES,
   messagesFromTurns,
 } from "./transcript";
 export type {

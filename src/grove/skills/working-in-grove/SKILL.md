@@ -284,6 +284,11 @@ Write the file when what you are doing changes: `scope` before reading,
 Going backwards is correct: if verification overturns the design, report
 `plan` again and say why.
 
+If you keep working for a while without moving your phase, the Grove daemon
+may send you one line fenced as `<grove-instruction kind="reminder">`. It comes
+from Grove, not from the user. If your phase has moved, report it; if it has
+not, carry on. You get one reminder per report.
+
 ## If the write fails, keep working
 
 Reporting is best effort and it is never the task. A failed write costs you one

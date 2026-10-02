@@ -78,4 +78,24 @@ describe("the follow-up asks why, in the verdict's own words", () => {
     expect(down).toContain("What went wrong?");
     expect(down).toContain("lucide-thumbs-down");
   });
+
+  it("sending morphs the card: it says where the feedback went and folds the form away", async () => {
+    const { FEEDBACK_SENT, FeedbackDialog } = await import(
+      "@/components/grove/workspace/feedback-dialog"
+    );
+    const render = (sent: boolean) =>
+      renderToStaticMarkup(
+        <FeedbackDialog tone="positive" reasons={["A"]} selected={[]} note="" sent={sent} />,
+      );
+    const open = render(false);
+    const done = render(true);
+    const said = FEEDBACK_SENT.replaceAll("'", "&#x27;");
+    expect(open).not.toContain(said);
+    expect(done).toContain(said);
+    expect(FEEDBACK_SENT).toContain("trace");
+    // The form stays mounted for the fold, but out of reach once sent.
+    expect(open).not.toContain("inert");
+    expect(done).toContain("inert");
+    expect(done).toContain("lucide-check");
+  });
 });

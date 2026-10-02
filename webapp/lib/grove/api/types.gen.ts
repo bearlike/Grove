@@ -3951,6 +3951,35 @@ export interface components {
             state: components["schemas"]["ChallengeState"];
         };
         /**
+         * PhaseNudgePredicate
+         * @description Remind this workspace's agent to report its phase when it works on without doing so.
+         *
+         *     The second STANDING predicate, with the same lifetime as ``ticket``: Grove
+         *     registers one per running workspace, the workspace's lifecycle cancels it,
+         *     and it never settles. Each check compares what it sees now against the
+         *     baseline it recorded at the previous check, which is what lets "the phase
+         *     did not move for a whole interval while the agent kept working" be decided
+         *     from two observations rather than a clock inside the agent.
+         *
+         *     Every baseline field is ``None`` until the first check has looked, so a
+         *     fresh registration only records and never reminds.
+         */
+        PhaseNudgePredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "phase_nudge";
+            /** Workspace Id */
+            workspace_id: string;
+            /** Progress */
+            progress?: number | null;
+            /** Phase At */
+            phase_at?: string | null;
+            /** Nudged At */
+            nudged_at?: string | null;
+        };
+        /**
          * PhaseView
          * @description Wire mirror of ``grove.core.phase.PhaseReport`` — one agent's phase claim
          *     plus every per-ticket claim beside it.
@@ -4150,7 +4179,7 @@ export interface components {
             repo_url: string;
             /**
              * Tagline
-             * @default Grove is a software factory for the coding agents you already use. Give each task a workspace. Guide the work with files and diagrams. Follow delivery from ticket to trace.
+             * @default Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace.
              */
             tagline: string;
         };
@@ -6265,7 +6294,7 @@ export interface components {
         WatchRegistration: {
             recipient: components["schemas"]["MailboxAddress"];
             /** Predicate */
-            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"];
+            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"] | components["schemas"]["PhaseNudgePredicate"];
             /**
              * Every
              * Format: duration
@@ -6289,7 +6318,7 @@ export interface components {
             id: string;
             recipient: components["schemas"]["MailboxAddress"];
             /** Predicate */
-            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"];
+            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"] | components["schemas"]["PhaseNudgePredicate"];
             /**
              * State
              * @enum {string}

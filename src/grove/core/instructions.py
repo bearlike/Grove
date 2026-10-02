@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 # Which of Grove's three voices a block carries. A closed set because it drives
 # the body renderers below and because it is published to the agent verbatim —
 # a new kind is a new sentence a model reads, not a free-form label.
-InstructionKind = Literal["workspace", "question-answers", "attachments"]
+InstructionKind = Literal["workspace", "question-answers", "attachments", "reminder"]
 
 
 class GroveInstruction:
@@ -170,6 +170,39 @@ class GroveInstruction:
                 ]
             ),
         )
+
+    @classmethod
+    def reminder(cls, body: str) -> str:
+        """A short note the Grove daemon sends on its own initiative, not on a person's behalf.
+
+        The fourth voice, and the only one no human action triggered. That is why it
+        is fenced at all: arriving mid-task on the channel a person types into, an
+        unfenced line reads as the user interrupting. The body stays one or two
+        lines because it is appended to a transcript the agent re-reads every turn.
+        """
+        return cls.wrap("reminder", body)
+
+    @classmethod
+    def is_reminder(cls, text: str) -> bool:
+        """Whether *text* opens with a daemon reminder: the reader half of :meth:`reminder`.
+
+        Lives beside the renderer so the transcript adapters classify the one
+        format this module writes, rather than re-deriving the opening tag.
+        """
+        return text.lstrip().startswith(f'<{cls.TAG} kind="reminder">')
+
+    @classmethod
+    def unwrap(cls, text: str) -> str:
+        """The body inside a fenced block, or *text* unchanged when it carries no fence.
+
+        For a transcript digest, which has room for the sentence and none for
+        the tag around it.
+        """
+        body = text.strip()
+        if not body.startswith(f"<{cls.TAG} "):
+            return body
+        _, _, inner = body.partition(">")
+        return inner.removesuffix(f"</{cls.TAG}>").strip()
 
 
 def _labels(question: AgentQuestion | None, indexes: Sequence[int]) -> list[str]:

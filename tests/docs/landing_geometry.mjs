@@ -67,8 +67,13 @@ station.updateWorldMatrix(true, true);
 const consoleBounds = new THREE.Box3().setFromObject(orchestration);
 assert.ok(Math.abs(consoleBounds.min.y + 3.12) < 0.01, 'console must be grounded on the factory floor');
 assert.ok(orchestration.position.x > 3.6 && orchestration.position.z > 2, 'console sits outside the right rail, clear of the coil');
-for (const name of ['console-screen', 'console-sliders', 'console-dials', 'console-fasteners']) assert.ok(orchestration.getObjectByName(name), `missing ${name}`);
-assert.ok(orchestration.getObjectByName('console-keys')?.isInstancedMesh, 'console keys must be instanced');
+// The console is a cabinet and a screen and nothing else: it sits at the
+// edge of the shot, so it carries no instruments to draw or to animate.
+assert.ok(orchestration.getObjectByName('console-screen'), 'missing console-screen');
+const consoleMeshes = [];
+orchestration.traverse(part => { if (part.isMesh) consoleMeshes.push(part); });
+assert.ok(consoleMeshes.length <= 4, `the console is simple shapes, found ${consoleMeshes.length} meshes`);
+assert.ok(consoleMeshes.every(part => part.material.emissiveIntensity === 0), 'nothing on the console glows or pulses');
 for (const name of ['message-pipe-inbound', 'message-pipe-outbound']) {
   const pipe = station.getObjectByName(name);
   assert.ok(pipe, `missing ${name}`);
@@ -142,12 +147,42 @@ const passage = new THREE.Raycaster(
 );
 assert.equal(passage.intersectObjects(pillars, true).length, 0, 'the activation lane stays open');
 const crossing = factory.robotRunners[0];
-factory.elapsed = 1;
+factory.elapsed = 0.5;
 factory.updateRobots();
-assert.equal(crossing.displayMaterial.map, crossing.logoTexture, 'wait for the delayed coil before verification');
+assert.ok(factory.activationEnvelope(crossing.delayedTravel).link < 1, 'the second bolt is still reaching at this moment');
+assert.equal(crossing.displayMaterial.map, crossing.logoTexture, 'wait for the second bolt to land before verification');
 factory.elapsed = 3;
 factory.updateRobots();
 assert.equal(crossing.displayMaterial.map, factory.checkTexture, 'a cleared robot with both coils finished must be verified');
+// A robot enters with its logo and leaves with the check, every pass. The
+// delayed clock wraps 1.2 s after the robot does, and in that window a
+// re-entering robot used to carry the previous pass's check into view.
+{
+  for (const runner of factory.robotRunners) {
+    let previousZ = null;
+    for (let t = 0; t <= 42; t += 1 / 60) {
+      factory.elapsed = t; factory.updateRobots();
+      const z = runner.group.position.z;
+      const verified = runner.displayMaterial.map === factory.checkTexture;
+      if (z < -0.35) assert.ok(!verified, `a robot behind the station shows its logo (t=${t.toFixed(2)}, z=${z.toFixed(2)})`);
+      if (previousZ !== null && z < previousZ - TRAVEL) assert.ok(!verified, 'the frame a robot wraps to the entry end, it shows its logo');
+      previousZ = z;
+    }
+  }
+}
+// Snappy: the check appears within a frame of the second bolt reaching
+// full strength, the moment it reads as landed, not when it lets go.
+{
+  let landed = null, check = null;
+  for (let t = 0; t <= 5 && check === null; t += 1 / 120) {
+    factory.elapsed = t; factory.updateRobots();
+    const { link } = factory.activationEnvelope(crossing.delayedTravel);
+    if (landed === null && link >= 1) landed = t;
+    if (crossing.displayMaterial.map === factory.checkTexture) check = t;
+  }
+  assert.ok(landed !== null && check !== null, 'the loop has a landing and a check');
+  assert.ok(check - landed <= 1 / 60 + 1e-9, `the check lands within a frame of the bolt, lagged ${((check - landed) * 1000).toFixed(0)} ms`);
+}
 // The frame loop calls updateRobots, never updateBelt, so pin the belt there.
 factory.elapsed = 0;
 factory.updateRobots();
@@ -165,9 +200,10 @@ for (const elapsed of [0, 2, 19.9, 20.1]) {
   for (const runner of factory.robotRunners) {
     const lowest = new THREE.Box3().setFromObject(runner.group).min.y;
     assert.ok(Math.abs(lowest - (-1.1 + 0.41)) < 0.001, 'tracks must stay seated on the moving deck');
-    const inBeltSpace = new THREE.Box3().setFromObject(runner.group.clone());
-    const delayedBounds = inBeltSpace.clone().translate(new THREE.Vector3(0, 0, runner.delayedTravel - runner.group.position.z));
-    const expected = inBeltSpace.min.z >= 0 && delayedBounds.min.z >= 0 ? factory.checkTexture : runner.logoTexture;
+    // The check is the reaction to the second strike: on from the moment
+    // that bolt is at full strength, and not a frame before, and only on the
+    // pass the strike happened on.
+    const expected = runner.delayedTravel >= -0.35 && runner.group.position.z >= -0.35 ? factory.checkTexture : runner.logoTexture;
     assert.equal(runner.displayMaterial.map, expected, 'scanner transition must survive the visual redesign');
     const ray = new THREE.Raycaster(new THREE.Vector3(0, 0.24, 4), new THREE.Vector3(0, 0, -1));
     // Transform the local face ray into the moving robot's world coordinates.
@@ -214,9 +250,12 @@ for (let time = 18; time <= 23; time += 0.02) {
   factory.elapsed = time;
   factory.updateRobots();
   for (const runner of factory.robotRunners) {
-    if (runner.arcs.some(arc => arc.visible)) {
-      assert.ok(runner.displayMaterial.map !== factory.checkTexture, 'a robot must not be marked verified while either coil is still connected');
-    }
+    const { link } = factory.activationEnvelope(runner.delayedTravel);
+    const verified = runner.displayMaterial.map === factory.checkTexture;
+    const reaching = runner.delayedTravel < -0.35;
+    if (runner.arcs[0].visible && reaching) assert.ok(!verified, 'the first strike never verifies');
+    if (reaching) assert.ok(!verified, 'no check while the second bolt is still reaching');
+    if (verified) assert.ok(!reaching, 'the check only ever follows the second strike landing');
   }
   factory.robotRunners[0].arcs.forEach((arc, side) => {
     if (starts[side] === null && arc.visible && arc.getObjectByName('arc-core').material.opacity > 0.08) starts[side] = time;
@@ -334,60 +373,179 @@ for (const arc of linked.arcs.filter(a => a.visible)) {
   assert.ok(end.distanceTo(target) < 0.001, 'a baked robot\'s arc still lands on its antenna');
 }
 
-// The frame governor caps the rate and trades quality for frame rate: MSAA
-// first (half the frame under a software rasterizer), then pixel ratio.
-const { FrameGovernor } = await import('../../docs/javascripts/factory/frame-governor.js');
-// Feeds frames every `interval` ms from `start` until a quality change or `until`.
-const run = (governor, start, until, interval) => {
-  for (let time = start; time < until; time += interval) {
+// The frame governor paces at 60 fps and starts most machines part-way up
+// the quality ladder, earning the rest with measured headroom.
+const { FrameGovernor, POLICY } = await import('../../docs/javascripts/factory/frame-governor.js');
+// Drives the governor like a display: a refresh every `refresh` ms, each one
+// rendered only when the governor says so, each rendered frame taking `cost`
+// ms (a frame slower than the refresh occupies the next refreshes too).
+// Returns the quality changes with their times.
+const drive = (governor, start, until, { refresh = 1000 / 60, cost = 0 } = {}) => {
+  const changes = [];
+  let rendered = 0;
+  let busyUntil = -Infinity;
+  for (let time = start; time < until; time += refresh) {
+    if (time < busyUntil || !governor.shouldRender(time)) continue;
+    rendered += 1;
+    busyUntil = time + cost;
     const changed = governor.record(time);
-    if (changed) return { changed, time };
+    if (changed) changes.push({ time, ...changed });
   }
-  return { changed: null, time: until };
+  return { changes, fps: rendered / ((until - start) / 1000) };
 };
-const governor = new FrameGovernor({ maxFps: 60, ceiling: 1.5, floor: 0.6, samples: 2 });
-assert.deepEqual(governor.quality, { pixelRatio: 1.5, samples: 2 }, 'a hardware renderer starts at full quality');
-assert.ok(governor.shouldRender(0), 'the first refresh renders');
-governor.record(0);
-assert.ok(!governor.shouldRender(7), 'a 144 Hz refresh between frames is skipped');
-assert.ok(governor.shouldRender(16), 'a 60 Hz refresh renders');
-// Two frames a second: the rescue is measured in wall time, not frame counts.
-let step = run(governor, 500, 10_000, 500);
-assert.ok(step.time <= 1500, `a 2 fps scene must drop quality within about a second, took ${step.time} ms`);
-assert.deepEqual(step.changed, { pixelRatio: 1.5, samples: 0 }, 'multisampling is the first thing dropped');
-step = run(governor, step.time + 500, 20_000, 500);
-assert.deepEqual(step.changed, { pixelRatio: 1.35, samples: 0 }, 'then the pixel ratio steps down');
-for (let time = step.time + 500; time < 60_000; time += 500) governor.record(time);
-assert.deepEqual(governor.quality, { pixelRatio: 0.6, samples: 0 }, 'sustained slow frames settle at the floor');
-// A step larger than the headroom must clamp, not overshoot below the floor.
-const coarse = new FrameGovernor({ maxFps: 60, ceiling: 1.5, floor: 0.6, step: 1, samples: 0 });
-assert.deepEqual(run(coarse, 0, 5000, 50).changed, { pixelRatio: 0.6, samples: 0 }, 'one coarse step clamps to the floor');
-// Headroom earns quality back, one rung at a time.
-step = run(governor, 100_000, 120_000, 16);
-assert.deepEqual(step.changed, { pixelRatio: 0.75, samples: 0 }, 'sustained on-time frames restore resolution');
-// A climb that proves too slow is undone, and the next attempt waits longer.
-const undone = run(governor, step.time + 50, step.time + 5000, 50);
-assert.deepEqual(undone.changed, { pixelRatio: 0.6, samples: 0 }, 'a climb that cannot hold frame rate is undone');
-const retry = run(governor, undone.time + 16, undone.time + 60_000, 16);
-assert.ok(retry.time - undone.time >= 8000, 'after a failed climb the governor waits twice as long to retry');
-// A software rasterizer starts at the bottom and must earn quality.
-const software = new FrameGovernor({ maxFps: 60, ceiling: 1.5, floor: 0.6, samples: 2, software: true });
-assert.deepEqual(software.quality, { pixelRatio: 0.6, samples: 0 }, 'a software renderer starts at the floor without MSAA');
-assert.equal(run(software, 0, 20_000, 500).changed, null, 'a slow software renderer stays at the floor');
-// The resolution range is a pixel budget: a phone's small band renders at its
-// native density, while the desktop hero keeps its measured range.
-const desktop = FrameGovernor.range({ devicePixelRatio: 2, cssPixels: 992 * 900 });
-assert.deepEqual(desktop, { ceiling: 1.5, floor: 0.6, step: 0.15 }, 'the desktop hero keeps its range');
-const phone = FrameGovernor.range({ devicePixelRatio: 3, cssPixels: 390 * 219 });
-assert.equal(phone.ceiling, 3, 'a 3x phone renders its small band at native density, double the old cap');
-assert.ok(phone.floor >= 1.5, 'a phone shedding quality never drops below the old cap');
-assert.equal(FrameGovernor.range({ devicePixelRatio: 2.625, cssPixels: 412 * 232 }).ceiling, 2.63, 'a 2.6x phone gets its native density');
-assert.equal(FrameGovernor.range({ devicePixelRatio: 4, cssPixels: 390 * 219 }).ceiling, 3, 'density is capped at 3');
-assert.equal(FrameGovernor.range({ devicePixelRatio: 1, cssPixels: 390 * 219 }).ceiling, 1, 'never above the display density');
-assert.equal(FrameGovernor.range({ devicePixelRatio: 3, cssPixels: 1024 * 1366 }).ceiling, 1.5, 'a large canvas never drops below the old cap');
-const ladder = FrameGovernor.ladder({ ...phone, samples: 2 });
-assert.equal(ladder.at(-1).pixelRatio, phone.floor, 'the phone ladder ends at its floor');
-assert.ok(ladder.length <= 9, 'a phone sheds quality in as many steps as the desktop');
+const full = { ceiling: 1.5, floor: 0.6, step: 0.15, samples: 4 };
+
+// Pacing: 60 fps on 60, 120 and 144 Hz alike. The old "16.7 ms since the
+// last frame" rule rendered every third 144 Hz refresh, 48 fps.
+for (const hz of [60, 120, 144, 165]) {
+  const { fps } = drive(new FrameGovernor(full), 0, 10_000, { refresh: 1000 / hz });
+  assert.ok(fps > 57 && fps < 62, `${hz} Hz must pace to 60 fps, got ${fps.toFixed(1)}`);
+}
+// Nobody starts at the top: most visitors are not on high-end hardware,
+// and a top start costs them seconds of over-budget frames and a visible
+// stair of downgrades. The start is about 80 % of the way up.
+{
+  const governor = new FrameGovernor(full);
+  const bottom = governor.ladder.length - 1;
+  assert.ok(governor.level > 0, 'the start is below the top rung');
+  assert.ok(Math.abs(1 - governor.level / bottom - POLICY.startShare) <= 0.5 / bottom, `the start is at ${POLICY.startShare} of the ladder`);
+  assert.equal(governor.quality.pixelRatio, 1.5, 'and keeps full resolution');
+  assert.equal(governor.quality.samples, 2, 'with 2x MSAA, one rung below full');
+}
+// A capable machine on a 144 Hz panel never loses quality, and climbs the
+// rest of the way on its own.
+{
+  const governor = new FrameGovernor(full);
+  const { changes } = drive(governor, 0, 60_000, { refresh: 1000 / 144, cost: 4 });
+  assert.ok(changes.every((change, index) => index === 0 || change.samples >= changes[index - 1].samples), 'a fast machine at 144 Hz only climbs');
+  assert.equal(governor.level, 0, 'and reaches the top');
+}
+// Page load is not a verdict: a stall in the warm-up changes nothing.
+{
+  const governor = new FrameGovernor(full);
+  const start = governor.level;
+  drive(governor, 0, 2000, { cost: 400 });
+  const during = drive(governor, 2000, 2400).changes;
+  assert.deepEqual(during, [], 'slow frames during warm-up cost nothing');
+  assert.equal(governor.level, start);
+}
+// One slow second is a hiccup; two in a row is a verdict.
+{
+  const governor = new FrameGovernor(full);
+  drive(governor, 0, 4000);
+  assert.deepEqual(drive(governor, 4000, 5100, { cost: 45 }).changes, [], 'one slow second changes nothing');
+  const after = drive(governor, 5100, 9000).changes;
+  assert.ok(after.every(change => governor.ladder.indexOf(governor.quality) <= governor.ladder.findIndex(rung => rung.samples === change.samples && rung.pixelRatio === change.pixelRatio && rung.shadow === change.shadow)), 'and is forgotten once frames are on time again: only climbs follow');
+  assert.ok(governor.level <= Math.round((governor.ladder.length - 1) * (1 - POLICY.startShare)), 'never below the start');
+}
+// Without GPU timing (Firefox, Safari), frame intervals decide: a 2 fps
+// machine is rescued within warm-up plus two windows and walks the ladder in
+// order to the floor.
+{
+  const governor = new FrameGovernor(full);
+  const { changes } = drive(governor, 0, 120_000, { cost: 500 });
+  assert.ok(changes[0].time <= POLICY.warmUpMs + 2 * POLICY.windowMs + 1000, `the first drop must come promptly, came at ${changes[0].time} ms`);
+  assert.deepEqual(changes.slice(0, 3).map(({ pixelRatio, samples, shadow }) => [pixelRatio, samples, shadow]), [[1.35, 2, 1024], [1.2, 2, 1024], [1.05, 2, 1024]], 'from the 80 % start (2x MSAA, small shadow map) resolution steps down keeping 2x');
+  assert.deepEqual({ ...governor.quality }, { pixelRatio: 0.6, samples: 0, shadow: 1024 }, 'sustained slow frames settle at the floor');
+  // Headroom earns quality back, one rung at a time...
+  const back = drive(governor, 120_000, 140_000).changes;
+  assert.ok(back.length >= 1 && governor.level < governor.ladder.length - 1, 'on-time frames restore quality');
+  // ...and a climb that cannot hold is undone and retried later, not at once.
+  const undone = new FrameGovernor(full);
+  drive(undone, 0, 60_000, { cost: 500 });
+  const climb = drive(undone, 60_000, 60_000 + POLICY.climbAfterMs + 1500).changes;
+  assert.equal(climb.length, 1, 'one climb');
+  const fall = drive(undone, 64_600, 70_000, { cost: 30 }).changes;
+  assert.equal(fall.length, 1, 'a climb that cannot hold frame rate is undone');
+  const retry = drive(undone, 70_000, 90_000).changes;
+  assert.ok(retry.length && retry[0].time - 70_000 >= 2 * POLICY.climbAfterMs - 100, 'after a failed climb the governor waits twice as long');
+}
+// Headroom is judged against what the pacer can deliver, not a perfect 60:
+// a machine holding 55 fps on a jittery panel still earns quality back.
+{
+  const governor = new FrameGovernor(full);
+  drive(governor, 0, 60_000, { cost: 500 });
+  const level = governor.level;
+  drive(governor, 60_000, 80_000, { refresh: 1000 / 55 });
+  assert.ok(governor.level < level, 'a steady 55 fps is headroom');
+}
+// A software rasterizer starts at the bottom.
+{
+  const software = new FrameGovernor({ ...full, software: true });
+  assert.deepEqual({ ...software.quality }, { pixelRatio: 0.6, samples: 0, shadow: 1024 }, 'a software renderer starts at the floor without MSAA');
+}
+
+// Budgets per display.
+const hero = (w, h) => 0.62 * w * h;
+const at = (dpr, css) => FrameGovernor.range({ devicePixelRatio: dpr, cssPixels: css, maxSamples: 4 });
+assert.equal(at(1, hero(2560, 1440)).ceiling, 1, '1440p at 1x renders at native density');
+assert.equal(at(1, hero(2560, 1440)).samples, 4, 'with 4x MSAA on the scene');
+assert.equal(at(2, hero(1512, 982)).ceiling, 2, 'a 14-inch HiDPI laptop renders at native density');
+assert.equal(at(1.5, hero(2560, 1440)).ceiling, 1.5, 'a 4K panel at 150 % renders at native density');
+assert.equal(at(1.5, hero(2560, 1440)).samples, 2, 'and trades 4x MSAA for 2x to stay in the sample budget');
+assert.equal(at(3, 390 * 219).ceiling, 3, 'a 3x phone renders its band at native density');
+assert.equal(at(4, 390 * 219).ceiling, 3, 'density is capped at 3');
+assert.equal(at(1, 390 * 219).ceiling, 1, 'never above the display density');
+assert.equal(FrameGovernor.range({ devicePixelRatio: 1, cssPixels: 1e6, maxSamples: 0 }).samples, 0, 'no MSAA where the context has none');
+for (const [dpr, css] of [[1, hero(2560, 1440)], [2, hero(1512, 982)], [1.5, hero(2560, 1440)], [2, hero(3840, 2160)]]) {
+  const { ceiling, samples } = at(dpr, css);
+  assert.ok(css * ceiling ** 2 * samples <= POLICY.sampleBudget, `within the sample budget at ${dpr}x`);
+}
+
+// The ladder gives up the most cost for the least visible loss first, and
+// keeps MSAA on the robots' and coils' thin moving edges until the bottom.
+const ladder = FrameGovernor.ladder({ ceiling: 1.19, floor: 0.71, step: 0.12, samples: 4 });
+assert.deepEqual(ladder.slice(0, 3), [
+  { pixelRatio: 1.19, samples: 4, shadow: 2048 },
+  { pixelRatio: 1.19, samples: 2, shadow: 2048 },
+  { pixelRatio: 1.19, samples: 2, shadow: 1024 },
+], 'MSAA halves, then the shadow map halves, all at full resolution');
+assert.ok(ladder.slice(0, -1).every(rung => rung.samples >= 2), 'MSAA survives every rung but the last');
+assert.deepEqual(ladder.at(-2), { pixelRatio: 0.71, samples: 2, shadow: 1024 }, 'resolution reaches its floor with 2x MSAA');
+assert.deepEqual(ladder.at(-1), { pixelRatio: 0.71, samples: 0, shadow: 1024 });
+assert.ok(ladder.filter(rung => rung.pixelRatio < 1.19).every(rung => rung.shadow === 1024), 'resolution is never traded before the shadow map');
+assert.ok(FrameGovernor.ladder({ ceiling: 1, floor: 0.6, step: 0.1, samples: 0 }).every(rung => rung.samples === 0), 'a context without MSAA gets a ladder without MSAA');
+
+// Replays the reported machine: GPU ms per rung modelled from its dump, a
+// 60 Hz grid. The dump had the focus pass at 14 ms; it is gone.
+const cost = ({ pixelRatio, samples, shadow }) => (3.9 + (samples === 4 ? 5 : samples === 2 ? 2.5 : 0)) * (pixelRatio / 0.79) ** 2 + (shadow === 2048 ? 1.5 : 0.4);
+const replay = (governor, start, until, gpuOf = cost) => {
+  const changes = [];
+  for (let time = start; time < until; time += 1000 / 60) {
+    if (!governor.shouldRender(time)) continue;
+    const ms = gpuOf(governor.quality);
+    governor.measure([ms]);
+    // A frame over 16.7 ms of GPU delays the next one.
+    if (ms > 16.7) time += ms - 16.7;
+    const changed = governor.record(time);
+    if (changed) changes.push({ time, ...changed });
+  }
+  return changes;
+};
+{
+  const range = { ceiling: 1.19, floor: 0.71, step: 0.12, samples: 4 };
+  const governor = new FrameGovernor(range);
+  const changes = replay(governor, 0, 60_000);
+  const settled = governor.quality;
+  // Leaves about a third of the 16.7 ms frame for the compositor and page.
+  assert.ok(cost(settled) <= 11, `settles within the GPU budget, at ${cost(settled).toFixed(1)} ms`);
+  assert.ok(settled.samples >= 2, 'keeps MSAA on the thin moving edges');
+  const best = governor.ladder.findIndex(rung => cost(rung) <= 11);
+  assert.equal(governor.level, best, `settles on the best rung that fits (${JSON.stringify(governor.ladder[best])})`);
+  assert.ok(changes.at(-1).time <= POLICY.warmUpMs + 4000, `from the 80 % start it settles within a few seconds, took ${Math.round(changes.at(-1).time)} ms`);
+  assert.ok(changes.every(change => change.time < 12_000), 'and then stays put: no retry dips');
+  // The GPU gets faster (a background load ends): quality comes back.
+  const faster = replay(governor, 60_000, 90_000, rung => cost(rung) * 0.4);
+  assert.ok(faster.length >= 1, 'a clearly faster GPU earns quality back');
+  // Unchanged GPU: a failed rung is never retried.
+  const steady = new FrameGovernor(range);
+  replay(steady, 0, 30_000);
+  assert.deepEqual(replay(steady, 30_000, 120_000), [], 'an unchanged GPU never retries a rung that failed');
+  // A GPU with room climbs to the top and no further.
+  const strong = new FrameGovernor(range);
+  replay(strong, 0, 30_000, rung => cost(rung) * 0.3);
+  assert.equal(strong.level, 0, 'a strong GPU climbs to the top rung');
+}
 let scheduled = 0;
 globalThis.requestAnimationFrame = () => { scheduled += 1; return scheduled; };
 globalThis.cancelAnimationFrame = () => {};
@@ -408,4 +566,35 @@ assert.equal(scheduled, 0, 'hidden documents must not schedule animation');
 document.hidden = false;
 factory.schedule();
 assert.equal(scheduled, 1, 'a visible moving scene must schedule a frame');
+
+// A quality change reallocates buffers, one long frame. It waits for a
+// moment nobody is watching: never while an arc is firing.
+{
+  const applied = [];
+  factory.applyQuality = quality => applied.push(quality);
+  factory.pendingQuality = null;
+  factory.gpuTimer = { begin() {}, end() {}, poll: () => [] };
+  factory.composer = { render() {} };
+  factory.stats = { frames: 0, changes: 0, gpuMs: null, quality: null };
+  const rung = { pixelRatio: 1, samples: 2, shadow: 1024 };
+  let verdict = null;
+  factory.governor = { shouldRender: () => true, measure() {}, record: () => { const v = verdict; verdict = null; return v; } };
+  factory.paused = false; factory.visible = true; document.hidden = false;
+  // Find an elapsed time with an arc lit and one with none.
+  const lit = [], dark = [];
+  for (let elapsed = 0; elapsed <= 20; elapsed += 0.05) {
+    factory.elapsed = elapsed; factory.updateRobots();
+    (factory.arcFiring() ? lit : dark).push(elapsed);
+  }
+  assert.ok(lit.length && dark.length, 'the loop has both arc and no-arc moments');
+  factory.elapsed = lit[0]; factory.lastTime = 0;
+  verdict = rung;
+  factory.render(0);
+  assert.deepEqual(applied, [], 'a verdict during an arc is held back');
+  assert.equal(factory.pendingQuality, rung, 'and remembered');
+  factory.elapsed = dark.find(t => t > lit[0]) - 0.016; factory.lastTime = 0;
+  factory.render(16);
+  assert.deepEqual(applied, [rung], 'and applied once the arc has released');
+  assert.equal(factory.pendingQuality, null);
+}
 console.log('Robot geometry, conveyor geometry, synchronized motion, screen visibility, and lifecycle passed');

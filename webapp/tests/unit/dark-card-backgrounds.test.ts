@@ -78,6 +78,22 @@ describe("dark card backgrounds", () => {
     }
   }
 
+  // AA is the legal floor, not the look. Dark text read dull at tertiary 7.6:1
+  // on the page, so each tier now has a CRISPNESS floor on the page itself,
+  // and the three stay separated so the lift never flattens reading order.
+  const crisp = { foreground: 19.5, "content-secondary": 14, "muted-foreground": 9.5 };
+  for (const [text, floor] of Object.entries(crisp)) {
+    it(`${text} reads crisp on the page, not merely legal`, () => {
+      expect(contrast(token(text), token("surface-base"))).toBeGreaterThanOrEqual(floor);
+    });
+  }
+
+  it("keeps the three text tiers distinct after the lift", () => {
+    const on = (text: string) => contrast(token(text), token("surface-base"));
+    expect(on("foreground") - on("content-secondary")).toBeGreaterThan(3);
+    expect(on("content-secondary") - on("muted-foreground")).toBeGreaterThan(3);
+  });
+
   it("foreground clears AA on the header highlight that the loader crosses", () => {
     expect(contrast(token("foreground"), token("surface-header-highlight"))).toBeGreaterThanOrEqual(4.5);
   });

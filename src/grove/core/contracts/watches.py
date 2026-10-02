@@ -182,10 +182,45 @@ class TicketPredicate(BaseModel):
     baseline: TicketSnapshot | None = None
 
 
+class PhaseNudgePredicate(BaseModel):
+    """Remind this workspace's agent to report its phase when it works on without doing so.
+
+    The second STANDING predicate, with the same lifetime as ``ticket``: Grove
+    registers one per running workspace, the workspace's lifecycle cancels it,
+    and it never settles. Each check compares what it sees now against the
+    baseline it recorded at the previous check, which is what lets "the phase
+    did not move for a whole interval while the agent kept working" be decided
+    from two observations rather than a clock inside the agent.
+
+    Every baseline field is ``None`` until the first check has looked, so a
+    fresh registration only records and never reminds.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["phase_nudge"] = "phase_nudge"
+    workspace_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    # The primary session's assistant replies plus tool calls at the previous
+    # check. A change means the agent did something during the interval, which
+    # is the only evidence that separates working on from one long tool call.
+    progress: int | None = None
+    # When the phase report last changed, as of the previous check.
+    phase_at: datetime | None = None
+    # The phase report a reminder was already sent about. One reminder per
+    # report: a long `build` is a long task, not a stale claim, so a reminder
+    # repeated every interval would nag an agent that had nothing to change.
+    nudged_at: datetime | None = None
+
+
 WatchPredicate = Annotated[
-    TimerPredicate | CiPredicate | CommandPredicate | TicketPredicate,
+    TimerPredicate | CiPredicate | CommandPredicate | TicketPredicate | PhaseNudgePredicate,
     Field(discriminator="kind"),
 ]
+
+# Kinds that never settle and have no deadline. Grove registers and cancels them
+# with the workspace's lifecycle, and nobody halts on one, so there is no turn
+# to hand back when time runs out.
+STANDING_KINDS: frozenset[str] = frozenset({"ticket", "phase_nudge"})
 
 
 class WatchRegistration(BaseModel):
@@ -263,7 +298,7 @@ class WatchView(BaseModel):
     # time the watch is re-armed, so a 30s watch was probed at 30, 60, 120, 240s.
     every: timedelta = DEFAULT_INTERVAL
     created_at: datetime
-    # `None` only for a standing watch (`ticket`), which has no halted agent to
+    # `None` only for a standing watch (`STANDING_KINDS`), which has no halted agent to
     # hand a turn back to and lives exactly as long as its workspace.
     expires_at: datetime | None
     next_due: datetime | None = None
@@ -286,8 +321,10 @@ __all__ = [
     "DEFAULT_INTERVAL",
     "MAX_DEADLINE",
     "MIN_INTERVAL",
+    "STANDING_KINDS",
     "CiPredicate",
     "CommandPredicate",
+    "PhaseNudgePredicate",
     "TicketPredicate",
     "TicketSnapshot",
     "TimerPredicate",

@@ -23,7 +23,8 @@ from pathlib import Path
 import pytest
 
 from grove.core.agents import AgentActivityState, TokenUsage, get_adapter
-from grove.core.agents.codex import CodexAdapter, _RolloutParser
+from grove.core.agents.codex import CodexAdapter, _RolloutLine, _RolloutParser
+from grove.core.instructions import GroveInstruction
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASIC = FIXTURES / "codex_basic.jsonl"
@@ -1730,3 +1731,23 @@ def test_context_window_is_absent_not_zero_when_the_record_does_not_carry_it(
     act2 = adapter.parse_activity(Path("/home/dev/work/old2"), sid2)
     assert act2.context is None
     assert act2.tokens_in == 500
+
+
+def test_a_grove_daemon_reminder_is_not_a_codex_human_turn() -> None:
+    """The reminder rides the user channel, so without the guard it is a turn."""
+
+    def line(text: str) -> _RolloutLine:
+        return _RolloutLine(
+            raw={
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            },
+            index=0,
+        )
+
+    assert line("fix the parser").is_human_turn
+    assert not line(GroveInstruction.reminder("Update your Grove phase.")).is_human_turn

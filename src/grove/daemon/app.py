@@ -188,13 +188,16 @@ from grove.core.watches import (
     CiWatcher,
     CommandWatcher,
     MailboxWatchCourier,
-    TicketSubscriptions,
+    NudgeEvidence,
+    PhaseNudgeWatcher,
+    StandingWatches,
     TicketWatcher,
     TimerWatcher,
     WatcherRegistry,
     WatchLog,
     WatchScheduler,
 )
+from grove.core.watches.phase_nudge import EvidenceLookup
 from grove.core.watches.ticket import ProviderLookup
 from grove.core.workspace import WorkspaceState
 from grove.core.workspace_history import WorkspaceHistoryStore
@@ -575,6 +578,29 @@ def _ticket_provider_lookup(registry: RepoRegistry) -> ProviderLookup:
     return lookup
 
 
+def _nudge_evidence(registry: RepoRegistry, activity: ActivityService) -> EvidenceLookup:
+    """Fresh evidence for the phase reminder, computed for ONE workspace and never published.
+
+    Deliberately not the maintained projection: a row the poll has not
+    refreshed (the poll waits while no dashboard is open) can still read
+    WORKING for an agent that has since stopped, and a reminder sent on that
+    is the one case this feature must never hit. ``workspace_row`` would serve
+    the maintained row, so this asks for a new one. The check runs once per
+    workspace per interval on the watch worker, so its cost is one row read
+    every ten minutes, not a fleet scan.
+    """
+
+    def lookup(workspace_id: str) -> NudgeEvidence | None:
+        try:
+            manager, state = registry.resolve_workspace(workspace_id)
+            row = activity.prepare_workspace_refresh(str(manager.repo_root), state.id)
+        except GroveError:
+            return None
+        return NudgeEvidence.of(row) if row is not None else None
+
+    return lookup
+
+
 def build_app(  # noqa: PLR0915
     *,
     cfg: GroveConfig,
@@ -744,6 +770,7 @@ def build_app(  # noqa: PLR0915
     # explicitly, so there is no repo in hand to resolve a cascade against at
     # probe time — and the credential a forge read needs is the same one at
     # either scope.
+    phase_nudge_every = timedelta(minutes=cfg.nudges.phase.every_minutes)
     watch_scheduler = WatchScheduler(
         log=WatchLog(),
         watchers=WatcherRegistry(
@@ -759,13 +786,19 @@ def build_app(  # noqa: PLR0915
                 # A ticket is named the way its workspace names it, so the
                 # provider comes from THAT workspace's repo cascade.
                 TicketWatcher(_ticket_provider_lookup(registry), ticket_reads),
+                PhaseNudgeWatcher(
+                    _nudge_evidence(registry, activity_service), every=phase_nudge_every
+                ),
             ]
         ),
         deliver=MailboxWatchCourier(MailboxDelivery(registry)),
     )
-    # Standing ticket watches follow each running workspace's attached tickets.
-    ticket_subscriptions = TicketSubscriptions(
-        scheduler=watch_scheduler, workspaces=_workspace_lookup(registry)
+    # Standing watches follow each running workspace: one per attached ticket,
+    # plus the phase reminder unless it is turned off.
+    standing_watches = StandingWatches(
+        scheduler=watch_scheduler,
+        workspaces=_workspace_lookup(registry),
+        phase_nudge_every=phase_nudge_every if cfg.nudges.phase.enabled else None,
     )
     if release_checker is None:
         release_checker = ReleaseChecker()
@@ -877,9 +910,9 @@ def build_app(  # noqa: PLR0915
         # from any process); the start-up pass repairs whatever changed while
         # the daemon was down. No `audience.join()`: these edges arrive by
         # invalidation, not by the fleet poll. Off the loop: store + log reads.
-        ticket_subscriptions.bind(activity_service.subscribe)
+        standing_watches.bind(activity_service.subscribe)
         await asyncio.to_thread(
-            ticket_subscriptions.reconcile_all,
+            standing_watches.reconcile_all,
             [state.id for state in registry.workspace_states()],
         )
         # The issue-ops status publisher is the bus's third subscriber
@@ -950,7 +983,7 @@ def build_app(  # noqa: PLR0915
             await _aclose_best_effort("activity sources", activity_sources.close)
             await _aclose_best_effort("runtime sources", runtime_sources.close)
             await _aclose_best_effort("activity runtime", activity_runtime.close)
-            _close_best_effort("ticket watches", ticket_subscriptions.close)
+            _close_best_effort("standing watches", standing_watches.close)
             _close_best_effort("watch scheduler", watch_scheduler.close)
             if notification_broker is not None:
                 _close_best_effort("notification broker", notification_broker.close)

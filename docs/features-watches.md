@@ -52,6 +52,7 @@ flowchart TB
 | `timer` | A wall-clock instant arrives | A durable `sleep` |
 | `cmd` | A command exits with a status you name | Anything Grove does not model |
 | `ticket` | Never: it reports each change and keeps watching | Registered by Grove for you, below |
+| `phase_nudge` | Never: it reminds a working agent whose phase went stale | Registered by Grove for you, below |
 
 ## Changes to your attached tickets
 
@@ -62,6 +63,20 @@ Attach an issue or pull request to a running workspace, and Grove tells the agen
 - Grove's own writes never count. Its status comment, its badge footer, its assignment and anything its bot account posts are left out of what is compared, so its progress updates cannot wake the agent in a loop.
 - Each ticket is read at most once a minute, however many workspaces are attached to it. The status comment reuses the same read.
 - The Watches card in the web dashboard lists each ticket watch as "Watching while the workspace runs", and `grove watch ls` shows them too.
+
+## A reminder when the phase goes stale
+
+An agent that reported its [phase](features-status.md) and then kept working without updating it gets one short reminder from the Grove daemon.
+
+- It fires only when the agent is **working**, its phase has stood unchanged for **10 minutes**, and its reply or tool-call count **moved** during those 10 minutes.
+- A paused, idle, waiting, blocked, errored or handed-off session is never reminded. Neither is one stuck inside a single long tool call, or one that never reported a phase at all.
+- Each phase report is reminded about **once**. Writing a new phase arms it again.
+- The reminder is one line fenced as `<grove-instruction kind="reminder">`, so the agent and anyone reading the transcript can tell it came from Grove rather than from the person. It is never counted as a human turn.
+- It never wakes or revives a session. A reminder that finds the agent stopped is dropped.
+
+```json
+{ "nudges": { "phase": { "enabled": true, "every_minutes": 10 } } }
+```
 
 `ci` is keyed on the commit SHA, never a branch name: a force-push makes a different commit, and a watch that followed the name would answer about work nobody asked about.
 
@@ -81,7 +96,7 @@ Over MCP the same three verbs are `grove_register_watch`, `grove_list_watches` a
 
 A delivered callback means Grove handed the message to that session's transport. It is not evidence that a model read it or acted on it — the same contract every mailbox receipt carries.
 
-A ticket watch stays `pending` for as long as its workspace runs, and ends `cancelled` when the ticket is detached or the workspace pauses or ends. Every other watch ends in one of four states: `fired` (it settled and the callback went out), `expired` (the deadline came first), `cancelled` (withdrawn), or `undeliverable` (it settled, but the recipient was no longer live to be told). `grove watch ls` shows all of them, including recently settled ones, because that record is also what stops a restart from delivering the same callback twice.
+A ticket or phase-reminder watch stays `pending` for as long as its workspace runs, and ends `cancelled` when the ticket is detached, the reminder is turned off, or the workspace pauses or ends. Every other watch ends in one of four states: `fired` (it settled and the callback went out), `expired` (the deadline came first), `cancelled` (withdrawn), or `undeliverable` (it settled, but the recipient was no longer live to be told). `grove watch ls` shows all of them, including recently settled ones, because that record is also what stops a restart from delivering the same callback twice.
 
 ## Limits
 

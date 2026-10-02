@@ -18,6 +18,7 @@ import pytest
 from grove.core.contracts.mailboxes import MailboxAddress, MailboxReceipt, MailboxSendRequest
 from grove.core.errors import PaneNotFound
 from grove.core.mailboxes import MailboxDelivery, MailboxEnvelope
+from grove.core.workspace import WorkspaceStatus
 
 NATIVE = "a" * 32
 TERMINAL = "b" * 32
@@ -30,6 +31,7 @@ class _State:
     title: str
     agent_kind: str | None = "claude_code"
     live: bool = True
+    status: WorkspaceStatus = WorkspaceStatus.ACTIVE
 
     @property
     def runtime(self) -> object:
@@ -41,6 +43,7 @@ class _Manager:
     states: list[_State]
     sent: list[tuple[str, str, str]] = field(default_factory=list)
     fail_with: Exception | None = None
+    revive: list[bool] = field(default_factory=list)
 
     def list(self) -> list[_State]:
         return self.states
@@ -48,7 +51,10 @@ class _Manager:
     def can_receive(self, state: _State) -> bool:
         return state.live
 
-    def send_message(self, workspace_id: str, text: str, *, agent: str = "") -> None:
+    def send_message(
+        self, workspace_id: str, text: str, *, agent: str = "", revive: bool = True
+    ) -> None:
+        self.revive.append(revive)
         if self.fail_with is not None:
             raise self.fail_with
         self.sent.append((workspace_id, text, agent))
@@ -241,3 +247,20 @@ def test_the_legacy_banner_still_parses_for_transcripts_on_disk() -> None:
 )
 def test_unparseable_text_degrades_to_none(text: str) -> None:
     assert MailboxEnvelope.parse(text) is None
+
+
+def test_a_daemon_note_reaches_only_a_live_session_and_never_revives() -> None:
+    """`can_receive` is TRUE for a dead native session (a message revives it), so
+    the reminder road must ask the reconciled status instead and refuse OFFLINE."""
+    delivery, manager = _fleet()
+    manager.states[0].status = WorkspaceStatus.OFFLINE  # live per can_receive
+
+    assert delivery.notify(MailboxAddress(workspace_id=NATIVE), "note") == (
+        "rejected",
+        "workspace is not live",
+    )
+    assert manager.sent == []
+
+    assert delivery.notify(MailboxAddress(workspace_id=TERMINAL), "note")[0] == "delivered"
+    assert manager.sent == [(TERMINAL, "note", "")]
+    assert manager.revive == [False]  # never a revive, even when it is delivered

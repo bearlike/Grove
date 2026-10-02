@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from grove.core.contracts.mailboxes import MailboxSendRequest
 from grove.core.contracts.watches import WatchOutcome, WatchView
+from grove.core.instructions import GroveInstruction
 from grove.core.mailboxes import MailboxDelivery
 
 
@@ -41,7 +42,16 @@ class MailboxWatchCourier:
         The return is ``(receipt, detail)`` exactly as the mailbox reported it,
         because the scheduler's durable row must record what Grove actually
         observed and nothing more.
+
+        A phase reminder is Grove's own note rather than a callback anyone
+        registered, so it skips the peer envelope (a JSON document several times
+        the reminder's size) and goes through the stricter ``notify`` road,
+        which reaches only a live session and never revives one.
         """
+        if watch.predicate.kind == "phase_nudge":
+            return self._delivery.notify(
+                watch.recipient, GroveInstruction.reminder(outcome.summary)
+            )
         receipt = self._delivery.send(
             MailboxSendRequest(
                 sender=watch.recipient,

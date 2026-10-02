@@ -110,6 +110,7 @@ from grove.core.agents.model import (
 from grove.core.agents.transcript_cache import ResultMemo, TranscriptCache
 from grove.core.agents.transcript_scope import config_dir_override
 from grove.core.agents.turn_projection import TurnProjection, window_turns
+from grove.core.instructions import GroveInstruction
 
 # A ``response_item message`` is the human prompt EXCEPT the injected preamble:
 # the first user message wraps ``# AGENTS.md`` instructions and an
@@ -608,7 +609,8 @@ class _RolloutLine:
         if self.role != "user":
             return False
         body = self._content_text()
-        if not body.strip():
+        if not body.strip() or GroveInstruction.is_reminder(body):
+            # A daemon reminder rides the user channel and is not a person's turn.
             return False
         return not any(marker in body for marker in _PREAMBLE_MARKERS)
 

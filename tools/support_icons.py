@@ -52,7 +52,7 @@ class IconSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: Literal["codex", "linear", "github", "gitea"]
+    name: Literal["codex", "linear", "github", "gitea", "langfuse"]
     provider: Literal["lobe-avatar", "lobe-png", "selfhst"]
     member: str
     sha256: str
@@ -72,6 +72,14 @@ SOURCES: Final[tuple[IconSource, ...]] = (
         provider="lobe-png",
         member="package/dark/codex-color.png",
         sha256="fcea9ddbaafdca236a8380cef2ecd3342ecd9914a7b080873873cf45f415686d",
+        background=("#f8f9fb", "#e9edf5"),
+        scale=1.08,
+    ),
+    IconSource(
+        name="langfuse",
+        provider="lobe-png",
+        member="package/dark/langfuse-color.png",
+        sha256="0f54ad1923186a259ad128fc43da75a3b67adba996a074b5c3eb20515af48930",
         background=("#f8f9fb", "#e9edf5"),
         scale=1.08,
     ),
