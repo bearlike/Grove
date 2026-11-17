@@ -149,7 +149,7 @@ grove web --host 0.0.0.0        # or reachable from a phone on your LAN
 ```
 
 - Open <http://127.0.0.1:3000>, or `http://<machine-ip>:3000` from a phone once you [pair](use-auth.md) it. `grove web --daemon-url` (or `GROVE_DAEMON_URL`) points it at a remote daemon.
-- From a source checkout, `make webapp-bundle` stages the copy `grove web` runs, built on Grove's own Node. `./reinstall.sh` does that and restarts the service in one step.
+- From a source checkout, `make webapp-bundle` stages the copy `grove web` runs, built on Grove's own Node. `./tools/reinstall.sh` does that and restarts the service in one step.
 - The browser only calls the web app's own origin. Next.js proxies each call to the daemon with the paired session's token, a receptionist carrying each request to the back office. See [Authentication & pairing](use-auth.md) and the [`webapp/` README](https://github.com/bearlike/Grove/tree/current/webapp) for the dev server.
 
 ```mermaid
@@ -169,7 +169,7 @@ WITH_WEBAPP=1 make systemd-enable # reload, enable, start now
 loginctl enable-linger "$USER"    # survive logout (remote hosts)
 ```
 
-The dashboard unit runs `grove web`, so it serves whatever version is installed on the Node that ships with it. A daemon hiccup reports unreachable without taking the dashboard down. After `uv tool upgrade grove-factory`, restart both units. From a checkout, `./reinstall.sh` rebuilds and restarts everything. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
+The dashboard unit runs `grove web`, so it serves whatever version is installed on the Node that ships with it. A daemon hiccup reports unreachable without taking the dashboard down. After `uv tool upgrade grove-factory`, restart both units. From a checkout, `./tools/reinstall.sh` rebuilds and restarts everything. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
 
 ## Reaching it from outside the network
 
