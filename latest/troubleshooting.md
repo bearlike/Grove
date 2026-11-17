@@ -165,6 +165,35 @@ Set `kind` to `claude_code`, `codex`, `opencode`, or `mewbo` and confirm with
 [Agents](configure-agents.md#telling-grove-what-kind-of-agent-it-is).
 `grove sessions list` finds sessions whatever the `kind`.
 
+## Spinners never stop, or events reach the dashboard seconds late
+
+A workspace whose agent finished long ago still shows the working animation,
+its sub-agents still read as running, and on a busy host each edge takes
+several seconds to appear in the web dashboard even over loopback.
+
+Both come from one workspace with a very large session: a Claude Code session
+that ran many Workflow or sub-agent fan-outs leaves thousands of
+`agent-*.jsonl` files under `~/.claude/projects/<cwd>/<session>/subagents/`.
+Grove reads a sub-agent file as live only while it changed within the last
+five minutes; a file older than that has settled and leaves the fleet list,
+so an upgrade clears the stale rows on the next refresh. Until the daemon is
+restarted onto the new code, the old one keeps re-reading every file.
+
+To confirm it is this and not something else, watch the daemon while an agent
+types: `top -pid "$(pgrep -f 'grove daemon serve')"`. One core at 100% for
+longer than the agent's own tool call is a single workspace refresh holding
+up every other workspace. Then count the rows:
+
+```sh
+curl -s -H "Authorization: Bearer $GROVE_TOKEN" http://127.0.0.1:7421/activity \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); print([(w["state"]["title"], len(w["sessions"])) for p in d["projects"] for w in p["workspaces"]])'
+```
+
+A workspace with more than a few dozen sessions is the one. Restart the
+daemon (`launchctl kickstart -k gui/$(id -u)/com.grove.daemon` on macOS,
+`systemctl --user restart grove-daemon` on Linux). The files themselves are
+Claude Code's own history and can stay.
+
 ## Web dashboard shows "unreachable"
 
 The dashboard loads but the status bar reads "unreachable", or no workspaces ever

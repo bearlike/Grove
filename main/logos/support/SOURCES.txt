@@ -39,6 +39,11 @@ the pinned library sources. Its digests make an upstream change fail closed.
   Source: https://github.com/selfhst/icons
   License: CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
 
+- slack.png: logo asset from selfh.st/icons, retrieved 2026-11-17, on the shared
+  light tile rendered by tools/support_icons.py.
+  Source: https://github.com/selfhst/icons
+  License: CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+
 The edited backgrounds, logo colors and compositions are the artwork of record;
 the finishing pass never normalizes them into one shell. Product names and logos
 remain trademarks of their respective owners; inclusion indicates compatibility,

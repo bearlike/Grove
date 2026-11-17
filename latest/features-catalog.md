@@ -14,7 +14,9 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Web dashboard | The fleet, one workspace's transcript and work panel, sessions and usage from any device. | [Web dashboard](use-webapp.md) |
 | MCP server | Claude Code, Codex and OpenCode drive workspaces themselves over stdio or HTTP. | [MCP server](use-mcp.md) |
 | Issue ops | A tracker comment or assignment starts and steers a workspace. | [Issue ops](issue-ops.md) |
+| Slack | Mention Grove in a thread to start a workspace. Replies steer it and the agent's answers come back. | [Slack](features-slack.md) |
 | Device pairing | A new browser pairs once with a code the host approves. | [Authentication](use-auth.md) |
+| Sign in with OIDC | People sign in through your identity provider, in the browser or the CLI, and the fleet opens on their own workspaces. | [Authentication](use-auth.md#sign-in-as-a-person) |
 
 ## Workspaces
 
@@ -24,6 +26,10 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Pause, resume, respawn, kill | Pause drops the worktree and keeps the branch. Kill deletes only branches Grove created. | [Workspace lifecycle](features-workspace-lifecycle.md) |
 | Branch provenance | Grove records whether it made a branch or you attached one, and kill honours it. | [Branch provenance](features-branch-provenance.md) |
 | Containers | Run each agent in a containerized sandbox. Resource limits protect the rest of the fleet. | [Containerized agents](features-containers.md) |
+| Remote runtimes | Serverless platforms as a third runtime beside host and container, resident or one turn at a time. | [Runtimes](features-runtimes.md) |
+| Federation | Several daemons behind one hub that places creates by label and capacity and forwards every verb to the owner. | [Federation](features-federation.md) |
+| Reaping | Leaked tmux servers, processes and files are marked, given a grace and swept; `grove vacuum` runs it by hand. | [Reaping](features-reaping.md) |
+| Idle suspension | An agent at rest past a cooldown has its container paused in place; the next message wakes it. | [Idle suspension](features-idle.md) |
 | Init scripts | A script prepares each new worktree, on the host or in the container. | [Init scripts](configure-init-scripts.md) |
 | Root placement | A workspace can run in the repo root on the branch already checked out. | [Workspace lifecycle](features-workspace-lifecycle.md#root-workspaces) |
 | Status semantics | Three axes, workspace, agent activity and task phase, each answering a different question. | [Status semantics](features-status.md) |
@@ -35,7 +41,10 @@ it. Read down a table to see what an area covers. Follow a link for the depth.
 | Steering | Send a message to a running agent without attaching. | [Web dashboard](use-webapp.md#steering-the-agent) |
 | Questions and plans | A live question renders as a card and a plan approval as a dialog row. | [Web dashboard](use-webapp.md#steering-the-agent) |
 | Attachments | Paste or attach an image or file and the agent is handed its path. | [Attachments](features-attachments.md) |
+| Artifacts | A file or a link the agent attaches, opened read-only from the workspace. | [Artifacts](features-artifacts.md) |
 | Image annotation | Draw over a staged image before sending it. | [Attachments](features-attachments.md#annotate-before-you-send) |
+| Dictation | A mic on the web composer records, transcribes and inserts the text into your draft. Nothing is sent until you send. | [Web dashboard](use-webapp.md#dictation-and-read-aloud) |
+| Read aloud | A speaker button under each answer plays it, and a second click stops it. | [Web dashboard](use-webapp.md#dictation-and-read-aloud) |
 | Diagram collaboration | A person and an agent edit one [draw.io](https://www.drawio.com/) file with revision checks. | [Diagram collaboration](features-diagrams.md) |
 | Mockups and specs | Approve a UI mockup or an architecture plan as a picture before code exists. | [Diagram collaboration](features-diagrams.md#two-jobs-for-one-file) |
 | Model per workspace | Each agent exposes its own catalog and a workspace picks one. | [Web dashboard](use-webapp.md#starting-a-workspace) |

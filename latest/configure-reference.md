@@ -25,6 +25,8 @@ These fields also read a fixed environment variable, so a deployment can set the
 | `lifecycle_max_pending` | `integer` | `64` | Maximum accepted lifecycle operations, including lock waiters and running work. |
 | `macros` | `object` | unset | Grove commands by name, run as ``/grove:<name>``. A map, so every layer adds or replaces commands by name; none ship built in, because which model is fast is a fact about your fleet. |
 | `projects` | `array<string>` | unset | Repo roots kept visible in every picker even with zero workspaces. `~` expands, and a path that is not a git repo is ignored. |
+| `projects_root` | `string` | `"~/Projects"` | The directory new projects are created or cloned into, and scanned for existing repositories not yet in `projects`. `~` expands. The web wizard shows it and lets one add change it. |
+| `runtimes` | `object` | unset | Remote runtimes by name. A workspace created on one runs as a long-lived container on that platform and dials this daemon; nothing dials in. |
 
 ## `activity_admission`
 
@@ -55,13 +57,23 @@ One selectable agent in the create picker. Anything terminal based works.
 |---|---|---|---|
 | `command` | `string` | **required** | Shell command sent to the agent window. Quoted arguments and `$VAR` expansion work. |
 | `description` | `string` | unset | One line label shown in the picker. |
-| `env` | `object` | unset | Extra environment variables exported into the agent's window before launch. |
+| `env` | `object` | unset | Extra environment variables exported into the agent's window before launch. A `${VAR}` value is resolved from the environment when this agent launches, not when the config loads, so a variable only this agent needs never blocks another command. |
 | `env_unset` | `array<string>` | unset | Variable names cleared before `env` is applied, so an ambient value cannot leak into the agent's window. |
 | `kind` | `string` | `"generic"` | Which adapter reads this agent's session. `claude_code` and `codex` read transcripts for live state and tokens, `mewbo` reads a remote session over REST, `generic` tracks nothing. |
 | `models` | `array<string>` | unset | Model ids offered in the create form picker. A convenience list, never a validated allowlist. Empty uses the adapter's native discovery or maintained fallback catalog. |
 | `name` | `string` | **required** | Picker identifier, and the merge key across cascade layers. |
 | `native` | `boolean` | `true` | Run the agent as a Grove owned native session instead of its interactive terminal. On by default for Claude Code and Codex, ignored by other kinds, and every create surface can override it per workspace. |
+| `native_timeout_seconds` | `number` | `180` | How long a native session may take to answer one protocol exchange: the boot handshake, a submitted prompt's acceptance, a control request such as an interrupt or a model switch. A gateway that queues requests, a slow session-start hook, or a fleet booting at once all land inside this window; past it the exchange is reported as unknown and a boot ends the session. Per agent, because a gateway-backed profile and a local binary have nothing in common here. |
 | `tools_offline` | `boolean` | `false` | Launch with network facing tools disallowed. Claude Code drops `WebFetch` and `WebSearch`, Codex turns off sandbox networking. No effect on `generic` or `mewbo`. |
+
+## `artifacts`
+
+Where a workspace's file artifacts may live, beyond its own checkout.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `roots` | `array<string>` | `["/tmp"]` | Extra directories a file artifact may sit under. ``~`` expands. |
 
 ## `auth`
 
@@ -71,10 +83,20 @@ Daemon authentication and pairing limits.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | `boolean` | `true` | Master switch for daemon authentication. Only in process tests turn it off. |
+| `oidc` | see below | | Sign people in with an OpenID Connect provider. |
 | `pair_init_per_minute` | `integer` | `5` | Per source rate limit on starting a pairing, which bounds brute force. |
 | `pair_poll_per_minute` | `integer` | `60` | Per source rate limit on polling a pairing. The browser polls every two seconds while it waits for approval. |
 | `pairing_ttl_seconds` | `integer` | `300` | How long a pairing code stays valid for approval. |
 | `session_ttl_seconds` | `integer` | `2592000` | Sliding session lifetime. Every request extends it, so a daily user never re pairs and an idle device ages out. |
+
+### `oidc`
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `audience` | `string` | unset | The ID token audience the daemon accepts. Empty means ``client_id``. |
+| `client_id` | `string` | unset | This Grove's client id at the issuer, used by the CLI device flow. |
+| `issuer` | `string` | unset | The issuer URL; its ``/.well-known/openid-configuration`` names everything else. |
 
 ## `brief`
 
@@ -85,7 +107,6 @@ The one paragraph brief a new agent is handed on its first turn, pointing it at 
 |---|---|---|---|
 | `enabled` | `boolean` | `true` | Whether a new agent receives the brief at all. |
 | `instructions` | `string` | unset | Your own text, appended to the brief every agent in this repo receives. |
-| `self_naming` | `boolean` | `true` | Ask an agent whose workspace has no description to write one, and to replace a generated title with a real one. |
 
 ## `channels`
 
@@ -118,7 +139,7 @@ Run the agent inside a container built from the repo's own devcontainer.
 | `default_config` | `string` | unset | The `devcontainer.json` used for a repo that has none of its own. Empty uses the self contained config packaged with Grove. |
 | `docker_bin` | `string` | `"docker"` | The docker compatible CLI Grove shells out to. A name on `PATH` or an absolute path. |
 | `egress` | see below | | Where a containerized agent may reach on the network. |
-| `enabled` | `boolean` | `true` | The default runtime for a new workspace. `true` is container, `false` is host. Read only at create, so flipping it never moves an existing workspace. |
+| `enabled` | `boolean` | `true` | Whether Grove keeps this repo's container image warm so a container create starts faster. It does not choose the runtime: a create runs on the host unless it, or a saved `defaults.runtime`, asks for a container. |
 | `env_command` | `string \| null` | unset | Host command whose stdout is parsed as dotenv, so a secret never touches disk. Re run at every use and never honored from a committed layer. |
 | `env_file` | `string \| null` | unset | Dotenv file this section's variables are read from. Repo relative or absolute, `~` expanded. A configured file that is missing is an error at use. |
 | `resources` | see below | | Per container caps, applied at launch. |
@@ -177,6 +198,16 @@ Run the agent inside a container built from the repo's own devcontainer.
 | `shell_session` | `string` | `"shell"` | The in container tmux session `grove shell` attaches to. |
 | `term_fallback` | `string` | `"xterm-256color"` | `TERM` retried when tmux refuses the client's own. Empty disables the retry. |
 
+## `daemon`
+
+Where the daemon listens, and where a workspace runtime reaches it.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `host` | `string` | `"127.0.0.1"` | Interface `grove daemon serve` binds when no `--host` is given. |
+| `mailbox_url` | `string` | unset | The address a workspace runtime that is not on this host's loopback, such as a container, uses to reach this daemon. Empty means only the private mailbox socket (`GROVE_MAILBOX_SOCKET`) can serve one, and a container workspace without either runs its agent in the terminal instead of a native session. |
+
 ## `defaults`
 
 Your saved answers for a create that does not name one. Every field is optional and an unset one falls through to its normal source.
@@ -184,13 +215,52 @@ Your saved answers for a create that does not name one. Every field is optional 
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `agent` | `string \| null` | unset | Agent selected when a create form opens. |
+| `agent` | `string \| null` | unset | Agent a create launches when it names none. Unset uses the first configured agent. |
 | `base_ref` | `string \| null` | unset | The branch or ref a new branch starts from. |
-| `branch_mode` | `string \| null` | unset | How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`. |
+| `branch_mode` | `string \| null` | unset | How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`. Unset is `root`: the current checkout, with no new branch or worktree. |
 | `brief` | `boolean \| null` | unset | Whether a new agent receives Grove's first turn brief. Unset falls through to `brief.enabled`. |
-| `model` | `string \| null` | unset | Model id sent to the selected agent. Unset uses the agent's own default. |
-| `runtime` | `string \| null` | unset | `host` or `container` for a new workspace. Unset falls through to `container.enabled`. |
+| `model` | `string \| null` | unset | Model id sent to the saved `agent`. Another agent, or an unset model, uses the agent's own default. With no saved `agent` it applies to every agent. |
+| `profiles` | `object \| null` | unset | Which profile each tool uses on each runtime. A row is `*` (any runtime), a runtime kind (`host`, `container`, `remote`) or a configured resident `runtimes.<name>` block; a column is an agent kind; a cell names an `agents[]` entry of that kind. An omitted profile uses the named remote row, runtime kind, then `*` or a same-kind saved `agent` from the higher layer, then the first roster entry of that kind. Cells merge one by one across config layers and are checked after the final roster is known. |
+| `runtime` | `string \| null` | unset | `host` or `container` for a new workspace. Unset runs on the host; enabling containers makes them available without choosing them. |
 | `skip_init` | `boolean \| null` | unset | Whether to skip the configured init script. |
+
+## `federation`
+
+Federate several Grove daemons behind one hub.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `boolean` | `false` | Turn federation on. A committed project config can never set this. |
+| `node` | see below | | This daemon's place in a hub-and-spoke federation. |
+
+### `node`
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `advertise_url` | `string` | unset | The URL the hub dials to forward a verb to this node. Required for a node, since nothing else tells the hub where this daemon listens. |
+| `capacity` | `integer \| null` | unset | The most workspaces the hub will place on this node. Unset means no limit; the hub never overcommits a node that declares one. |
+| `heartbeat_seconds` | `number` | `15.0` | How often a node tells the hub it is alive. |
+| `hub_url` | `string` | unset | The hub's base URL. Required for a node. |
+| `join_token_env` | `string` | unset | Name of the environment variable holding a one-time join token minted by `grove node token` on the hub. Only read until the node holds its key. |
+| `join_token_ttl_seconds` | `integer` | `3600` | How long a join token minted on a hub stays usable. |
+| `labels` | `object` | unset | What this node offers, as ``key: value`` (``residency: eu``, ``gpu: a100``). A create whose selector names labels lands only on a node carrying all of them. |
+| `max_clock_skew_seconds` | `number` | `300.0` | How far apart two daemons' clocks may be before one refuses the other's signed bearer. A replay window, not a timeout: nothing waits on it. |
+| `name` | `string` | unset | How this node is listed on the hub. Empty uses the host name. |
+| `reconnect_ceiling_seconds` | `number` | `30.0` | Longest wait between a node's reconnect attempts; the backoff starts at one second and doubles up to this. |
+| `request_timeout_seconds` | `number` | `30.0` | Per request timeout on every daemon-to-daemon call. |
+| `role` | `string \| null` | unset | `hub` keeps the node catalog and forwards workspace verbs to their owners; `node` registers with `hub_url` and keeps full authority over its own workspaces. Required once federation is enabled. |
+| `unreachable_after_seconds` | `number` | `60.0` | How long the hub waits without a heartbeat before listing a node as unreachable. Unreachable is a state; nothing is killed. |
+
+## `fleet_digest`
+
+How the fleet digest flags a workspace.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `quiet_minutes` | `number` | `30.0` | A working agent with no reported phase change for this long is flagged quiet. Age alone is never called a failure. |
 
 ## `hooks`
 
@@ -201,6 +271,16 @@ Grove managed Claude Code status hooks, for exact push based state.
 |---|---|---|---|
 | `daemon_url` | `string` | unset | Base URL the hook posts each event to. |
 | `enabled` | `boolean` | `true` | Launch Claude Code with Grove's managed hooks for exact push based status. |
+
+## `idle`
+
+Suspend a workspace whose agent has been idle for a while; the next message wakes it.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cooldown_seconds` | `integer` | `900` | How long an agent must be at rest before its workspace is suspended. |
+| `hibernate_after_seconds` | `integer` | `900` | How long a suspended workspace stays suspended before a runtime that can snapshot it releases it entirely; 0 never does. |
 
 ## `init_script`
 
@@ -265,6 +345,7 @@ How a model id READS in a picker, as distinct from what it costs.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
+| `catalog_ttl_seconds` | `number` | `300.0` | How long a discovered model list is reused before the agent's own CLI is asked again; 0 asks every time. |
 | `display_names` | `object` | unset | Model id to the name a picker prints for it. Exact match only, because a prefix rule would silently name a model the operator never saw. An id with no entry keeps its own spelling rather than being guessed at. |
 
 ## `notifications`
@@ -309,23 +390,6 @@ Push notifications when an agent needs you. Off by default.
 | `topic` | `string` | unset | ntfy topic, included only when set. |
 | `url` | `string` | unset | The URL to POST to. |
 
-## `nudges`
-
-Short reminders the Grove daemon puts into a working agent's session.
-
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `phase` | see below | | Remind a working agent to report its task phase when it has gone quiet about it. |
-
-### `phase`
-
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | `boolean` | `true` | Send the reminder at all. |
-| `every_minutes` | `number` | `10.0` | How long a phase may stand unchanged while the agent works before it is reminded. Also how often Grove checks. |
-
 ## `panels` (a list, one entry each)
 
 One embeddable view served by a service in this workspace's compose stack.
@@ -363,6 +427,78 @@ A loopback proxy in front of the LLM gateway for wire level capture.
 | `max_body_bytes` | `integer` | `8192` | Cap on a captured request body. |
 | `port` | `integer` | `8788` | Port the proxy listens on. |
 | `upstreams` | `object` | unset | Per agent kind real upstream base URL. A kind absent here is not proxied. |
+
+## `reaper`
+
+The daemon's reconciliation of leaked host resources against workspace records.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `dry_run` | `boolean` | `true` | Report what would be removed and remove nothing. ``grove vacuum --apply`` removes regardless. |
+| `enabled` | `boolean` | `true` | Run the reaper in the daemon at all. |
+| `interval_seconds` | `integer` | `600` | How often the daemon reconciles. Each pass is one socket listing and one ``/proc`` scan. |
+
+## `scheduling`
+
+Where a federation hub places this project's new workspaces.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `require` | `object` | unset | Node labels a new workspace for this project requires, used when the create names no ``selector`` of its own. A committed project config may set it, so a repository can say "EU residency only" without every caller repeating it. |
+
+## `slack`
+
+Start and steer workspaces from Slack by mentioning the Grove app.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `allowed_channels` | `array<string>` | unset | Slack conversation IDs Grove works in: channels (`C…`), private channels (`G…`) and direct messages (`D…`). Empty allows none: a mention from an allowed user gets a reply naming the conversation's ID so you can add it. `"*"` allows every conversation the app is in. |
+| `allowed_users` | `array<string>` | unset | Slack member IDs (`U…`) allowed to start and steer workspaces. Empty allows nobody: a mention gets a reply naming the sender's ID so you can add it. `"*"` allows every member who can post in an allowed channel. |
+| `app_token_env` | `string` | `"GROVE_SLACK_APP_TOKEN"` | Name of the variable holding the app level token (`xapp-…`) with the `connections:write` scope, never the token. |
+| `bot_token_env` | `string` | `"GROVE_SLACK_BOT_TOKEN"` | Name of the variable holding the app's bot token (`xoxb-…`), never the token. |
+| `channel_projects` | `object` | unset | Slack channel ID to the path of the project its mentions work in. `~` expands. A mention can pick another project named here or in `default_project` with `!project <name>`, and no other. |
+| `context_messages` | `integer` | `20` | How many earlier channel messages a top level mention reads as context. A mention inside a thread always reads the whole thread instead. |
+| `deep_link_base_url` | `string` | unset | Your dashboard's base URL. Set, Grove's first thread reply links to `{base}/w/{id}`. Empty omits that reply. |
+| `default_project` | `string` | unset | Path of the project a mention works in when its channel has no entry in `channel_projects`. `~` expands. Empty refuses such mentions with a reply. |
+| `enabled` | `boolean` | `false` | Connect to Slack when the daemon starts. |
+| `env_command` | `string \| null` | unset | Host command whose stdout is parsed as dotenv, so a secret never touches disk. Re run at every use and never honored from a committed layer. |
+| `env_file` | `string \| null` | unset | Dotenv file this section's variables are read from. Repo relative or absolute, `~` expanded. A configured file that is missing is an error at use. |
+| `max_attachment_bytes` | `integer` | `10000000` | Largest Slack file copied into the workspace. Larger files are named in the prompt with their Slack link instead. `0` copies none. |
+| `prompt_template` | `string` | `"You were started from a Slack conversation in #{channel}.\n\n{author} asked:\n{command_text}\n\nThe conversation so far, oldest first:\n{thread}\n\nSlack link: {permalink}\n\nHow this session works:\n\n- Every reply you finish is posted back into that Slack thread, so write each\n  final reply for the people reading it there: lead with the answer, keep it\n  short, and say what you changed and where.\n- People may reply in the thread while you work; their messages arrive here as\n  follow-up instructions.\n- Where the request is underspecified, ask in your reply and say what you will\n  assume if nobody answers. Do not stall silently.\n- Stop and ask rather than take a risky or irreversible action: destroying\n  data, force-pushing a shared branch, or touching anything in production.\n"` | The first prompt a Slack started workspace boots on, with `{command_text}`, `{author}`, `{channel}`, `{thread}` and `{permalink}` filled from Slack. |
+| `working_reaction` | `string` | `"hourglass_flowing_sand"` | Emoji name Grove keeps on the message it is working on, removed when the agent's reply is posted. Name a custom animated emoji (such as `loading`) for a spinner. |
+| `workspace` | see below | | Launch options for the workspace a Slack mention creates. |
+
+### `workspace`
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `agent` | `string \| null` | unset | Agent the workspace runs. Must name an entry in `agents`. A mention can override it with `!agent <name>`. |
+| `base_ref` | `string \| null` | unset | The branch or ref an `auto` branch starts from. Unset starts from `HEAD`. |
+| `branch_mode` | `string` | `"auto"` | `auto` gives each session a new branch and worktree. `root` runs it in the project's current checkout, which sessions then share. |
+| `brief` | `boolean \| null` | unset | Whether the agent receives Grove's first turn brief. |
+| `effort` | `string \| null` | unset | Reasoning effort sent to the agent. Must be a level the agent lists. |
+| `model` | `string \| null` | unset | Model id sent to the agent. |
+| `native` | `boolean \| null` | unset | Whether the agent runs as a Grove owned native session instead of its interactive terminal. |
+| `remote_runtime` | `string \| null` | unset | Which `runtimes.<name>` block runs a `remote` workspace. |
+| `runtime` | `string \| null` | unset | Where the agent runs. |
+| `skip_init` | `boolean \| null` | unset | Whether to skip the configured init script. |
+
+## `speech`
+
+Dictation into the composer and read-aloud of an answer, on every workspace.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `api_key_env` | `string` | `"OPENAI_API_KEY"` | Name of the environment variable holding the API key, never the key itself. |
+| `base_url` | `string` | `"https://api.openai.com/v1"` | OpenAI-compatible API base, for example a gateway's ``/v1``. |
+| `stt_model` | `string` | `"whisper-1"` | Transcription model, passed verbatim. |
+| `tts_model` | `string` | `"tts-1"` | Speech model, passed verbatim. |
+| `voice` | `string` | `"alloy"` | Voice name for read-aloud, passed verbatim. |
 
 ## `telemetry`
 
@@ -511,6 +647,17 @@ Process-wide retention budgets per filesystem agent adapter.
 | `memo_max_bytes` | `integer` | `67108864` | Maximum estimated bytes retained by derived read products per adapter. |
 | `memo_max_entries` | `integer` | `512` | Maximum retained derived products, including empty answers. |
 
+## `triggers`
+
+Instructions the Grove daemon puts into a working agent's session on its own.
+
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `check_seconds` | `integer` | `60` | How often the daemon checks each running workspace. Idle waiting costs nothing; each check reads one workspace's activity row. |
+| `enabled` | `boolean` | `true` | Run triggers at all. Off stops every rule, the first-turn brief included. |
+| `rules` | `array<object>` | unset | The rules, merged by ``name`` across layers. Grove's own four are layer 0. |
+
 ## `ui`
 
 TUI preferences.
@@ -604,4 +751,5 @@ Where worktrees live and how branches are named.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `branch_prefix` | `string` | `"grove/"` | Prefix on every auto created branch. |
+| `push_token_env` | `string` | unset | Name of the environment variable holding a token that can push the workspace branch from a remote workload, never the token itself. Empty hands over none. |
 | `root_template` | `string` | `"${repo}/.worktrees"` | Where worktrees live. Supports `${repo}`, `${repo_name}` and `~`. |

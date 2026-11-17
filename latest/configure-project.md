@@ -107,13 +107,12 @@ Labels make the choice readable in every create surface, paths stay relative and
 ```json title=".grove/config.json"
 {
   "brief": {
-    "instructions": "Run the focused checks before asking for review.",
-    "self_naming": true
+    "instructions": "Run the focused checks before asking for review."
   }
 }
 ```
 
-The nearest cascade layer supplies the text. With `self_naming` on, Grove asks an agent in a workspace with no description to give it a title and description.
+The nearest cascade layer supplies the text. The brief is the `start` [trigger rule](features-watches.md#instructions-grove-sends-on-its-own), delivered once the agent starts working; the same rules ask an agent to name a workspace that still carries a generated `wk-…` title or has no description.
 
 ## Known projects
 

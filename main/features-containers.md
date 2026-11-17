@@ -91,7 +91,8 @@ Grove bind mounts read only terminal assets at `/grove/decor`, so attach shows a
 | Vocabulary follows your terminal's fonts | Nerd Font icons by default. Set `GROVE_STATUSLINE_GLYPHS=ascii` for words instead. |
 | Figures come from the container's own cgroup, not the host | `/proc/loadavg` isn't namespaced. The bundled script reads cgroup CPU and memory limits, with a v1 fallback. |
 | An absent segment means an absent fact, not a bug | An API-key login has no quota pools, so that segment is absent, not zero. |
-| Toggles: `container.decor.enabled`, `.statusline`, `.tmux_conf`, `.payload` | Turn pieces off or replace the bundle. A host workspace already has your own. |
+| Your own tmux styling | Put plain tmux options in `tmux-user.conf` beside Grove's user config. Every workspace tmux server sources it, host and container alike, and the container badge stays in front. No plugin manager or host paths: a container has neither. |
+| Toggles: `container.decor.enabled`, `.statusline`, `.tmux_conf`, `.payload` | Turn pieces off or replace the bundle. |
 
 ## Several agents in one container
 

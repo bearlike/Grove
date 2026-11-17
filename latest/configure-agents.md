@@ -138,7 +138,7 @@ A Grove command chains session controls under one name you type as `/grove:<name
 
 - **Each step waits for the one before it.** Firing `/model`, `/compact` and `/model` back to back would switch the model back before the compaction ran. Grove sends one step, waits until the agent reports it finished, then sends the next.
 - **`{model}` is the model you started on.** It is read once when the command begins, so a command can move to a fast model for one job and hand the session back exactly where it was.
-- **Grove runs it, the agent never sees it.** Type it in the composer, pass it to `grove message`, or pick it from the `/` menu and the Controls tab, where it is listed first. A mistyped name is refused and nothing reaches the agent.
+- **Grove runs it, the agent never sees it.** Type it in the composer, pass it to `grove message` or `grove control run grove:<name>`, or pick it from the `/` menu and the Controls tab, where it is listed first. A mistyped name is refused and nothing reaches the agent.
 - **It stops at the first step that did not finish.** A refused model or a failed compaction ends the command there, and each step is logged in the workspace's **Stream** tab.
 - **It needs a native Claude Code session**, the one runtime that reports when a step is done. A terminal workspace refuses the command rather than guess. After upgrading Grove, respawn a session before its first command, because a session started on an older Grove hands the command to the agent as a message.
 

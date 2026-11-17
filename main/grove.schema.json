@@ -1,5 +1,200 @@
 {
   "$defs": {
+    "AcaFunctionsEpisodicRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace run one turn per HTTP request to Azure Functions on Container Apps.\n\nAn ingress-scaled app with no documented long-running guarantee, so one\nrequest carries exactly one turn. The app is yours, applied from the\nemitted template; Grove calls it with an Entra ID token minted by ``az``.",
+      "properties": {
+        "app": {
+          "description": "Name of the function app.",
+          "minLength": 1,
+          "title": "App",
+          "type": "string"
+        },
+        "az_bin": {
+          "default": "az",
+          "description": "The ``az`` executable, used to mint the invoker's token.",
+          "title": "Az Bin",
+          "type": "string"
+        },
+        "cli_timeout_seconds": {
+          "default": 60.0,
+          "description": "How long minting a token may take before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Cli Timeout Seconds",
+          "type": "number"
+        },
+        "client_secret_env": {
+          "default": "AZURE_CLIENT_SECRET",
+          "description": "Name of the environment variable holding the driver's service principal secret.",
+          "title": "Client Secret Env",
+          "type": "string"
+        },
+        "environment": {
+          "description": "Container Apps environment the emitted app runs in.",
+          "minLength": 1,
+          "title": "Environment",
+          "type": "string"
+        },
+        "image": {
+          "description": "Runtime image the emitted app runs.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "kind": {
+          "const": "aca_functions_episodic",
+          "default": "aca_functions_episodic",
+          "description": "Selects the Azure Functions on Container Apps episodic driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "request_timeout_seconds": {
+          "default": 3600.0,
+          "description": "Longest one turn may run before Grove stops waiting.",
+          "exclusiveMinimum": 0,
+          "title": "Request Timeout Seconds",
+          "type": "number"
+        },
+        "resource_group": {
+          "description": "Resource group holding the app.",
+          "minLength": 1,
+          "title": "Resource Group",
+          "type": "string"
+        },
+        "subscription": {
+          "description": "Azure subscription id.",
+          "minLength": 1,
+          "title": "Subscription",
+          "type": "string"
+        },
+        "token_resource": {
+          "description": "The Entra ID application the function's auth accepts tokens for.",
+          "minLength": 1,
+          "title": "Token Resource",
+          "type": "string"
+        },
+        "url": {
+          "description": "The function's HTTPS endpoint each turn is sent to.",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription",
+        "resource_group",
+        "environment",
+        "app",
+        "url",
+        "image",
+        "token_resource"
+      ],
+      "title": "AcaFunctionsEpisodicRuntime",
+      "type": "object"
+    },
+    "AcaJobRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace as one execution of an Azure Container Apps job.\n\nThe job is yours: Grove emits a manual-trigger job template for ``az containerapp\njob create --yaml`` and then only starts, reads and stops executions of it.",
+      "properties": {
+        "az_bin": {
+          "default": "az",
+          "description": "The ``az`` executable.",
+          "title": "Az Bin",
+          "type": "string"
+        },
+        "cli_timeout_seconds": {
+          "default": 120.0,
+          "description": "How long one ``az`` call may run before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Cli Timeout Seconds",
+          "type": "number"
+        },
+        "client_secret_env": {
+          "default": "AZURE_CLIENT_SECRET",
+          "description": "Name of the environment variable holding the driver's service principal secret.",
+          "title": "Client Secret Env",
+          "type": "string"
+        },
+        "cpu": {
+          "default": 2,
+          "description": "vCPUs per execution.",
+          "exclusiveMinimum": 0,
+          "title": "Cpu",
+          "type": "number"
+        },
+        "daemon_token_secret": {
+          "default": "grove-daemon-token",
+          "description": "Container Apps secret the container reads the daemon token from.",
+          "title": "Daemon Token Secret",
+          "type": "string"
+        },
+        "environment": {
+          "description": "Container Apps environment the emitted job runs in.",
+          "minLength": 1,
+          "title": "Environment",
+          "type": "string"
+        },
+        "image": {
+          "description": "Runtime image the emitted template runs.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "job": {
+          "description": "Name of the job whose executions are workspaces.",
+          "minLength": 1,
+          "title": "Job",
+          "type": "string"
+        },
+        "kind": {
+          "const": "aca_job",
+          "default": "aca_job",
+          "description": "Selects the Azure Container Apps job driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "memory": {
+          "default": "4Gi",
+          "description": "Memory per execution.",
+          "title": "Memory",
+          "type": "string"
+        },
+        "replica_timeout_seconds": {
+          "default": 86400,
+          "description": "Longest one execution may run before the platform ends it.",
+          "exclusiveMinimum": 0,
+          "title": "Replica Timeout Seconds",
+          "type": "integer"
+        },
+        "resource_group": {
+          "description": "Resource group holding the job.",
+          "minLength": 1,
+          "title": "Resource Group",
+          "type": "string"
+        },
+        "storage_name": {
+          "default": "",
+          "description": "Azure Files storage mounted into the execution, or empty for none.",
+          "title": "Storage Name",
+          "type": "string"
+        },
+        "subscription": {
+          "description": "Azure subscription id.",
+          "minLength": 1,
+          "title": "Subscription",
+          "type": "string"
+        }
+      },
+      "required": [
+        "subscription",
+        "resource_group",
+        "environment",
+        "job",
+        "image"
+      ],
+      "title": "AcaJobRuntime",
+      "type": "object"
+    },
     "AdmissionLimits": {
       "additionalProperties": false,
       "description": "Capacity includes work already handed to consumers.",
@@ -68,7 +263,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Extra environment variables exported into the agent's window before launch.",
+          "description": "Extra environment variables exported into the agent's window before launch. A\n`${VAR}` value is resolved from the environment when this agent launches, not when\nthe config loads, so a variable only this agent needs never blocks another command.",
           "title": "Env",
           "type": "object"
         },
@@ -114,6 +309,13 @@
           "title": "Native",
           "type": "boolean"
         },
+        "native_timeout_seconds": {
+          "default": 180,
+          "description": "How long a native session may take to answer one protocol exchange: the boot\nhandshake, a submitted prompt's acceptance, a control request such as an interrupt\nor a model switch. A gateway that queues requests, a slow session-start hook, or a\nfleet booting at once all land inside this window; past it the exchange is reported\nas unknown and a boot ends the session. Per agent, because a gateway-backed profile\nand a local binary have nothing in common here.",
+          "exclusiveMinimum": 0,
+          "title": "Native Timeout Seconds",
+          "type": "number"
+        },
         "tools_offline": {
           "default": false,
           "description": "Launch with network facing tools disallowed. Claude Code drops `WebFetch` and\n`WebSearch`, Codex turns off sandbox networking. No effect on `generic` or `mewbo`.",
@@ -128,6 +330,25 @@
       "title": "AgentSpec",
       "type": "object"
     },
+    "ArtifactsConfig": {
+      "additionalProperties": false,
+      "description": "Where a workspace's file artifacts may live, beyond its own checkout.\n\nThe workspace checkout and the project root are always allowed. This adds\nhost directories on top. It is host configuration: a committed project\nconfig cannot set it, so a cloned repository cannot widen what the\ndashboard may read.",
+      "properties": {
+        "roots": {
+          "default": [
+            "/tmp"
+          ],
+          "description": "Extra directories a file artifact may sit under. ``~`` expands.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Roots",
+          "type": "array"
+        }
+      },
+      "title": "ArtifactsConfig",
+      "type": "object"
+    },
     "AuthConfig": {
       "additionalProperties": false,
       "description": "Daemon authentication and pairing limits.\n\nThe handshake-based pairing flow gates every HTTP entry point on a valid\nbearer token (no loopback bypass; see CLAUDE.md). ``enabled = false`` is\na test-only escape hatch; production daemons leave it ``true``.",
@@ -137,6 +358,10 @@
           "description": "Master switch for daemon authentication. Only in process tests turn it off.",
           "title": "Enabled",
           "type": "boolean"
+        },
+        "oidc": {
+          "$ref": "#/$defs/OidcConfig",
+          "description": "People sign in through this OpenID Connect issuer, when one is configured."
         },
         "pair_init_per_minute": {
           "default": 5,
@@ -185,12 +410,6 @@
           "description": "Your own text, appended to the brief every agent in this repo receives.\n\nGrove's own brief says where the agent is and which skill carries the rules.\nThis is where a team adds what only they know: the review conventions, the\ntracker etiquette, the one command that must be run before pushing. It rides\nthe same first-turn delivery, so it reaches a containerized agent that can\nreach neither the daemon nor the ``grove`` command.\n\nIt cascades like everything else, so a machine-wide default set once in the\nuser config applies to every project, and a repository's own\n``.grove/config.json`` refines it for the people working in that repository.\n\nKeep it short. It is spent on the first turn of every session of every\nworkspace, and a long one costs more attention than it buys. Anything a\nreader could look up on demand belongs in the repository's own guidance\nfiles, which the agent is already standing in.",
           "title": "Instructions",
           "type": "string"
-        },
-        "self_naming": {
-          "default": true,
-          "description": "Ask an agent whose workspace has no description to write one, and to replace a\ngenerated title with a real one.\n\nA workspace created without a title is named after a short generated id, on\nthe promise that it stays renameable \u2014 but nothing was renaming it, so a\nfleet ended up named after hashes that say nothing about what each agent is\ndoing. The agent is the one participant that learns the answer, usually\nwithin its first few turns.\n\nThe nudge is added only for a workspace whose description is empty, so one\na person already described is never asked to re-describe itself.",
-          "title": "Self Naming",
-          "type": "boolean"
         }
       },
       "title": "BriefConfig",
@@ -222,6 +441,174 @@
       "title": "ChannelsConfig",
       "type": "object"
     },
+    "CloudRunEpisodicRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace run one turn per request on a Cloud Run service.\n\nNothing runs between turns: each request restores the worktree from the\nworkspace branch, runs exactly one turn, pushes and exits, so a turn must\nfinish inside one request. The service is yours, applied from the emitted\ndefinition with ``gcloud run services replace``; Grove only calls it.",
+      "properties": {
+        "cli_timeout_seconds": {
+          "default": 60.0,
+          "description": "How long minting a token may take before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Cli Timeout Seconds",
+          "type": "number"
+        },
+        "credentials_env": {
+          "default": "GOOGLE_APPLICATION_CREDENTIALS",
+          "description": "Name of the environment variable naming the credential that may invoke the service.",
+          "title": "Credentials Env",
+          "type": "string"
+        },
+        "gcloud_bin": {
+          "default": "gcloud",
+          "description": "The ``gcloud`` executable, used to mint the invoker's identity token.",
+          "title": "Gcloud Bin",
+          "type": "string"
+        },
+        "image": {
+          "description": "Runtime image the emitted service runs.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "kind": {
+          "const": "cloud_run_episodic",
+          "default": "cloud_run_episodic",
+          "description": "Selects the Cloud Run episodic driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "project": {
+          "description": "Google Cloud project id.",
+          "minLength": 1,
+          "title": "Project",
+          "type": "string"
+        },
+        "region": {
+          "description": "Cloud Run region, for example ``us-central1``.",
+          "minLength": 1,
+          "title": "Region",
+          "type": "string"
+        },
+        "request_timeout_seconds": {
+          "default": 3600,
+          "description": "Longest one turn may run. Cloud Run allows at most 60 minutes per request.",
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Request Timeout Seconds",
+          "type": "integer"
+        },
+        "service": {
+          "description": "Name of the service each turn is a request to.",
+          "minLength": 1,
+          "title": "Service",
+          "type": "string"
+        },
+        "url": {
+          "description": "The service URL turns are sent to.",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "region",
+        "service",
+        "url",
+        "image"
+      ],
+      "title": "CloudRunEpisodicRuntime",
+      "type": "object"
+    },
+    "CloudRunJobRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace as one execution of a Cloud Run job.\n\nThe job itself is yours: Grove emits its definition for ``gcloud run jobs\nreplace`` and then only executes, reads, cancels and deletes executions of it.\nCredentials are never values here, only the names of where they live.",
+      "properties": {
+        "cli_timeout_seconds": {
+          "default": 120.0,
+          "description": "How long one ``gcloud`` call may run before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Cli Timeout Seconds",
+          "type": "number"
+        },
+        "cpu": {
+          "default": "2",
+          "description": "CPU limit per execution.",
+          "title": "Cpu",
+          "type": "string"
+        },
+        "credentials_env": {
+          "default": "GOOGLE_APPLICATION_CREDENTIALS",
+          "description": "Name of the environment variable naming the driver's own credential file.",
+          "title": "Credentials Env",
+          "type": "string"
+        },
+        "daemon_token_secret": {
+          "default": "grove-daemon-token",
+          "description": "Secret Manager secret the container reads the daemon token from.",
+          "title": "Daemon Token Secret",
+          "type": "string"
+        },
+        "gcloud_bin": {
+          "default": "gcloud",
+          "description": "The ``gcloud`` executable.",
+          "title": "Gcloud Bin",
+          "type": "string"
+        },
+        "image": {
+          "description": "Runtime image the emitted job definition runs.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "job": {
+          "description": "Name of the job whose executions are workspaces.",
+          "minLength": 1,
+          "title": "Job",
+          "type": "string"
+        },
+        "kind": {
+          "const": "cloud_run_job",
+          "default": "cloud_run_job",
+          "description": "Selects the Cloud Run job driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "memory": {
+          "default": "4Gi",
+          "description": "Memory limit per execution.",
+          "title": "Memory",
+          "type": "string"
+        },
+        "project": {
+          "description": "Google Cloud project id.",
+          "minLength": 1,
+          "title": "Project",
+          "type": "string"
+        },
+        "region": {
+          "description": "Cloud Run region, for example ``us-central1``.",
+          "minLength": 1,
+          "title": "Region",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "default": 604800,
+          "description": "Task timeout in the emitted job definition. Cloud Run allows up to 168 hours.",
+          "exclusiveMinimum": 0,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "project",
+        "region",
+        "job",
+        "image"
+      ],
+      "title": "CloudRunJobRuntime",
+      "type": "object"
+    },
     "ContainerAgentConfig": {
       "additionalProperties": false,
       "description": "What the container shares from your host agent configuration.\n\nDefault ``full``: native integration with the host \u2014 config, sign-in,\nskills \u2014 is a *feature*, delivered through bind mounts, and it is what makes\na fully-autonomous agent useful rather than a second sign-in chore.\n``isolated`` restores the credential boundary for an untrusted repository at\nthe cost of that sign-in; ``projects`` shares transcripts only.\n\n**Trust rule (enforced in :class:`CommittedShareFloor`): a committed layer\nmay force a tighter value but never raise sharing.** A committed\n``.grove/config.json`` is untrusted input \u2014 a repo that could set\n``share: full`` would be granting itself the host's credentials.",
@@ -249,7 +636,7 @@
     },
     "ContainerConfig": {
       "additionalProperties": false,
-      "description": "Run the agent inside a container built from the repo's own devcontainer.\n\n**Default-ON, deliberately reversing Grove's earlier \"containers are\nstrictly opt-in\" default.** The container is what lets an agent run fully\nautonomously (relaxed permissions) with its blast radius bounded to the\nworkspace, so it is the default new workspaces get; ``--runtime host`` is\nthe per-create escape hatch and the persisted ``WorkspaceState.runtime``\nmeans an existing workspace never moves. Turning it back off is a policy\nchoice about isolation, not a bug fix.\n\nEvery value cascades like the rest of the config; a future Podman driver\nreads the SAME submodel behind the same protocol \u2014 ``docker_bin`` names the\nCLI, it is not the driver-swap seam.\n\nThe inherited ``env_file`` / ``env_command`` knobs (:class:`EnvSourceConfig`)\nare resolved TWICE per workspace start: once to provision (the values reach\nthe project's lifecycle hooks via ``--secrets-file``) and once to launch (they\nreach the agent via the launch env). A missing file or a failing command is\nfatal at create, which is what keeps an agent from booting without its\ncredentials.",
+      "description": "Run the agent inside a container built from the repo's own devcontainer.\n\nThe container is what lets an agent run fully autonomously (relaxed\npermissions) with its blast radius bounded to the workspace. A create uses\nit when it asks for ``--runtime container`` or when ``defaults.runtime`` is\n``container``; configuring this section makes the runtime available but\nnever selects it. The persisted ``WorkspaceState.runtime`` means an existing\nworkspace never moves.\n\nEvery value cascades like the rest of the config; a future Podman driver\nreads the SAME submodel behind the same protocol \u2014 ``docker_bin`` names the\nCLI, it is not the driver-swap seam.\n\nThe inherited ``env_file`` / ``env_command`` knobs (:class:`EnvSourceConfig`)\nare resolved TWICE per workspace start: once to provision (the values reach\nthe project's lifecycle hooks via ``--secrets-file``) and once to launch (they\nreach the agent via the launch env). A missing file or a failing command is\nfatal at create, which is what keeps an agent from booting without its\ncredentials.",
       "properties": {
         "agent_config": {
           "$ref": "#/$defs/ContainerAgentConfig",
@@ -277,7 +664,7 @@
         },
         "enabled": {
           "default": true,
-          "description": "The default runtime for a new workspace. `true` is container, `false` is host. Read\nonly at create, so flipping it never moves an existing workspace.",
+          "description": "Whether Grove keeps this repo's container image warm so a container create starts\nfaster. It does not choose the runtime: a create runs on the host unless it, or a saved\n`defaults.runtime`, asks for a container.",
           "title": "Enabled",
           "type": "boolean"
         },
@@ -413,6 +800,26 @@
       "title": "ContainerTmuxConfig",
       "type": "object"
     },
+    "DaemonConfig": {
+      "additionalProperties": false,
+      "description": "Where the daemon listens, and where a workspace runtime reaches it.\n\nLoopback is the default and stays the safe choice: the daemon authenticates\nevery route, but TLS is left to whatever ingress fronts it. A container or a\nremote runtime cannot reach the host's loopback, so it is given\n``mailbox_url`` instead, together with a credential minted for that one\nworkspace.",
+      "properties": {
+        "host": {
+          "default": "127.0.0.1",
+          "description": "Interface `grove daemon serve` binds when no `--host` is given.",
+          "title": "Host",
+          "type": "string"
+        },
+        "mailbox_url": {
+          "default": "",
+          "description": "The address a workspace runtime that is not on this host's loopback, such as a\ncontainer, uses to reach this daemon. Empty means only the private mailbox\nsocket (`GROVE_MAILBOX_SOCKET`) can serve one, and a container workspace\nwithout either runs its agent in the terminal instead of a native session.",
+          "title": "Mailbox Url",
+          "type": "string"
+        }
+      },
+      "title": "DaemonConfig",
+      "type": "object"
+    },
     "EgressConfig": {
       "additionalProperties": false,
       "description": "Where a containerized agent may reach on the network.\n\nWith credentials shared and permission prompts off, egress is the control\nthat carries the weight: it bounds where a token can be *sent*. The list is\n**derived, not restated** \u2014 the planner (``core.container_policy``) unions\nthe agent plane for the workspace's kind, the package plane, the repo's own\ngit remotes, the Grove plane and the telemetry endpoint's host, so normal\ndev work needs zero config. ``allow`` is purely additive on top.\n\nThe telemetry entry has no field of its own for the same reason the git\nremotes do not: the destination is already stated once, as the host the\n``telemetry`` section resolves, and a second place to write it is a second\nplace for it to be wrong. A self-hosted LAN endpoint is therefore covered\nby default \u2014 which matters because a firewalled OTLP export fails as\nsilence, not as an error.\n\nDocumented ceilings, carried from the reference implementation this follows:\nUDP/53 stays open (DNS tunneling is not defended against) and name-based\nfiltering loses to domain fronting. ``open`` is the supported, un-nagged\nno-firewall path \u2014 never a warning, never a refusal.",
@@ -486,6 +893,153 @@
         }
       },
       "title": "EgressConfig",
+      "type": "object"
+    },
+    "FederationConfig": {
+      "additionalProperties": false,
+      "description": "Federate several Grove daemons behind one hub.\n\nOff unless a non-committed layer turns it on. A block that fails to\nvalidate does not stop the daemon: it is disabled, one warning names the\nfailing path, and `grove debug` and `/whoami` report why. `grove federation\ncheck` dry-runs the same validation.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Turn federation on. A committed project config can never set this.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "node": {
+          "$ref": "#/$defs/FederationNodeConfig",
+          "description": "This daemon's role and its peer addresses."
+        }
+      },
+      "title": "FederationConfig",
+      "type": "object"
+    },
+    "FederationNodeConfig": {
+      "additionalProperties": false,
+      "description": "This daemon's place in a hub-and-spoke federation.",
+      "properties": {
+        "advertise_url": {
+          "default": "",
+          "description": "The URL the hub dials to forward a verb to this node. Required for a node,\nsince nothing else tells the hub where this daemon listens.",
+          "title": "Advertise Url",
+          "type": "string"
+        },
+        "capacity": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The most workspaces the hub will place on this node. Unset means no limit;\nthe hub never overcommits a node that declares one.",
+          "title": "Capacity"
+        },
+        "heartbeat_seconds": {
+          "default": 15.0,
+          "description": "How often a node tells the hub it is alive.",
+          "exclusiveMinimum": 0,
+          "title": "Heartbeat Seconds",
+          "type": "number"
+        },
+        "hub_url": {
+          "default": "",
+          "description": "The hub's base URL. Required for a node.",
+          "title": "Hub Url",
+          "type": "string"
+        },
+        "join_token_env": {
+          "default": "",
+          "description": "Name of the environment variable holding a one-time join token minted by\n`grove node token` on the hub. Only read until the node holds its key.",
+          "title": "Join Token Env",
+          "type": "string"
+        },
+        "join_token_ttl_seconds": {
+          "default": 3600,
+          "description": "How long a join token minted on a hub stays usable.",
+          "minimum": 60,
+          "title": "Join Token Ttl Seconds",
+          "type": "integer"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "What this node offers, as ``key: value`` (``residency: eu``, ``gpu: a100``).\nA create whose selector names labels lands only on a node carrying all of\nthem.",
+          "title": "Labels",
+          "type": "object"
+        },
+        "max_clock_skew_seconds": {
+          "default": 300.0,
+          "description": "How far apart two daemons' clocks may be before one refuses the other's\nsigned bearer. A replay window, not a timeout: nothing waits on it.",
+          "exclusiveMinimum": 0,
+          "title": "Max Clock Skew Seconds",
+          "type": "number"
+        },
+        "name": {
+          "default": "",
+          "description": "How this node is listed on the hub. Empty uses the host name.",
+          "title": "Name",
+          "type": "string"
+        },
+        "reconnect_ceiling_seconds": {
+          "default": 30.0,
+          "description": "Longest wait between a node's reconnect attempts; the backoff starts at one\nsecond and doubles up to this.",
+          "exclusiveMinimum": 0,
+          "title": "Reconnect Ceiling Seconds",
+          "type": "number"
+        },
+        "request_timeout_seconds": {
+          "default": 30.0,
+          "description": "Per request timeout on every daemon-to-daemon call.",
+          "exclusiveMinimum": 0,
+          "title": "Request Timeout Seconds",
+          "type": "number"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "enum": [
+                "hub",
+                "node"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`hub` keeps the node catalog and forwards workspace verbs to their owners;\n`node` registers with `hub_url` and keeps full authority over its own\nworkspaces. Required once federation is enabled.",
+          "title": "Role"
+        },
+        "unreachable_after_seconds": {
+          "default": 60.0,
+          "description": "How long the hub waits without a heartbeat before listing a node as\nunreachable. Unreachable is a state; nothing is killed.",
+          "exclusiveMinimum": 0,
+          "title": "Unreachable After Seconds",
+          "type": "number"
+        }
+      },
+      "title": "FederationNodeConfig",
+      "type": "object"
+    },
+    "FleetDigestConfig": {
+      "additionalProperties": false,
+      "description": "How the fleet digest flags a workspace.",
+      "properties": {
+        "quiet_minutes": {
+          "default": 30.0,
+          "description": "A working agent with no reported phase change for this long is flagged quiet.\nAge alone is never called a failure.",
+          "maximum": 1440.0,
+          "minimum": 1.0,
+          "title": "Quiet Minutes",
+          "type": "number"
+        }
+      },
+      "title": "FleetDigestConfig",
       "type": "object"
     },
     "GitHubTicketConfig": {
@@ -691,6 +1245,28 @@
       "title": "HooksConfig",
       "type": "object"
     },
+    "IdleConfig": {
+      "additionalProperties": false,
+      "description": "Suspend a workspace whose agent has been idle for a while; the next message wakes it.\n\nIdle means the agent finished its turn with no question pending and nothing\nqueued, and its transcript has not moved for the cooldown. A container is\npaused in place (memory kept, no CPU); a host workspace is left as it is.",
+      "properties": {
+        "cooldown_seconds": {
+          "default": 900,
+          "description": "How long an agent must be at rest before its workspace is suspended.",
+          "minimum": 60,
+          "title": "Cooldown Seconds",
+          "type": "integer"
+        },
+        "hibernate_after_seconds": {
+          "default": 900,
+          "description": "How long a suspended workspace stays suspended before a runtime that can snapshot it\nreleases it entirely; 0 never does.",
+          "minimum": 0,
+          "title": "Hibernate After Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "IdleConfig",
+      "type": "object"
+    },
     "InitScriptConfig": {
       "additionalProperties": false,
       "description": "A setup script run in its own tmux window before the agent starts.",
@@ -861,6 +1437,174 @@
       "title": "IssueOpsConfig",
       "type": "object"
     },
+    "LambdaEpisodicRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace run one turn per invocation of a classic Lambda function.\n\nA function runs at most 15 minutes, so a turn must fit inside one invocation,\nand the worker must push before its own deadline: Lambda gives no SIGTERM.\nThe function is yours, applied from the emitted template.",
+      "properties": {
+        "access_key_env": {
+          "default": "AWS_ACCESS_KEY_ID",
+          "description": "Name of the environment variable holding the driver's access key id.",
+          "title": "Access Key Env",
+          "type": "string"
+        },
+        "aws_bin": {
+          "default": "aws",
+          "description": "The ``aws`` executable.",
+          "title": "Aws Bin",
+          "type": "string"
+        },
+        "cli_timeout_seconds": {
+          "default": 960.0,
+          "description": "How long one invoke may take; a little over the 900 second function limit.",
+          "exclusiveMinimum": 0,
+          "title": "Cli Timeout Seconds",
+          "type": "number"
+        },
+        "ephemeral_mb": {
+          "default": 10240,
+          "description": "``/tmp`` size, which must hold the restored worktree.",
+          "maximum": 10240,
+          "minimum": 512,
+          "title": "Ephemeral Mb",
+          "type": "integer"
+        },
+        "function": {
+          "description": "Name or ARN of the function each turn invokes.",
+          "minLength": 1,
+          "title": "Function",
+          "type": "string"
+        },
+        "image": {
+          "description": "Runtime image URI the emitted function runs.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "kind": {
+          "const": "lambda_episodic",
+          "default": "lambda_episodic",
+          "description": "Selects the classic Lambda episodic driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "memory_mb": {
+          "default": 4096,
+          "description": "Function memory.",
+          "maximum": 10240,
+          "minimum": 128,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "region": {
+          "description": "AWS region.",
+          "minLength": 1,
+          "title": "Region",
+          "type": "string"
+        },
+        "secret_key_env": {
+          "default": "AWS_SECRET_ACCESS_KEY",
+          "description": "Name of the environment variable holding the driver's secret access key.",
+          "title": "Secret Key Env",
+          "type": "string"
+        }
+      },
+      "required": [
+        "region",
+        "function",
+        "image"
+      ],
+      "title": "LambdaEpisodicRuntime",
+      "type": "object"
+    },
+    "LambdaMicrovmRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace as one AWS Lambda MicroVM, with native suspend and resume.\n\nA MicroVM lives at most eight hours, running and suspended time together, and\nruns only on arm64. Grove launches it with inbound connectivity off and the\nplatform's traffic-based idle suspend disabled, since the worker dials out and\nGrove's own idle policy decides when to freeze.",
+      "properties": {
+        "access_key_env": {
+          "default": "AWS_ACCESS_KEY_ID",
+          "description": "Name of the environment variable holding the driver's access key id.",
+          "title": "Access Key Env",
+          "type": "string"
+        },
+        "aws_bin": {
+          "default": "aws",
+          "description": "The ``aws`` executable.",
+          "title": "Aws Bin",
+          "type": "string"
+        },
+        "cli_timeout_seconds": {
+          "default": 120.0,
+          "description": "How long one ``aws`` call may run before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Cli Timeout Seconds",
+          "type": "number"
+        },
+        "daemon_token_secret_arn_env": {
+          "default": "GROVE_DAEMON_TOKEN_ARN",
+          "description": "Name of the environment variable holding the Secrets Manager ARN of the daemon token.",
+          "title": "Daemon Token Secret Arn Env",
+          "type": "string"
+        },
+        "execution_role_arn": {
+          "default": "",
+          "description": "IAM role the MicroVM runs as, or empty for none.",
+          "title": "Execution Role Arn",
+          "type": "string"
+        },
+        "image": {
+          "description": "ARN of the MicroVM image built from the runtime image.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "image_version": {
+          "default": "",
+          "description": "Image version to run, or empty for the latest active one.",
+          "title": "Image Version",
+          "type": "string"
+        },
+        "kind": {
+          "const": "lambda_microvm",
+          "default": "lambda_microvm",
+          "description": "Selects the Lambda MicroVM driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_duration_seconds": {
+          "default": 28800,
+          "description": "Total lifetime of one MicroVM, running plus suspended.",
+          "maximum": 28800,
+          "minimum": 1,
+          "title": "Max Duration Seconds",
+          "type": "integer"
+        },
+        "memory_gb": {
+          "default": 2,
+          "description": "Memory in the emitted image definition.",
+          "exclusiveMinimum": 0,
+          "title": "Memory Gb",
+          "type": "integer"
+        },
+        "region": {
+          "description": "AWS region.",
+          "minLength": 1,
+          "title": "Region",
+          "type": "string"
+        },
+        "secret_key_env": {
+          "default": "AWS_SECRET_ACCESS_KEY",
+          "description": "Name of the environment variable holding the driver's secret access key.",
+          "title": "Secret Key Env",
+          "type": "string"
+        }
+      },
+      "required": [
+        "region",
+        "image"
+      ],
+      "title": "LambdaMicrovmRuntime",
+      "type": "object"
+    },
     "LinearTicketConfig": {
       "additionalProperties": false,
       "description": "Linear provider settings.\n\nLinear keys are alphanumeric (``ENG-123``), so there is no numeric\n``branch_prefix`` \u2014 the team key IS the discriminator. ``team_key`` scopes\nboth branch parsing (only ``{team_key}-N`` keys are claimed) and the\n``get_ticket`` lookup; leave it unset to match any uppercase key on parse.",
@@ -1017,6 +1761,13 @@
       "additionalProperties": false,
       "description": "How a model id READS in a picker, as distinct from what it costs.\n\nA provider id is an address, not a name: a gateway publishes\n``anthropic-gpt-5.6-luna`` and every catalog endpoint measured on the\nreference host publishes no display name beside it. So the name is declared\nhere rather than derived \u2014 an operator names the models their fleet actually\nruns, and a model nobody named keeps its id.\n\nDisplay only. Nothing here ever changes what is sent to a provider, which is\nwhat keeps a rename safe for a workspace already pinned to the id.",
       "properties": {
+        "catalog_ttl_seconds": {
+          "default": 300.0,
+          "description": "How long a discovered model list is reused before the agent's own CLI is asked\nagain; 0 asks every time.",
+          "minimum": 0,
+          "title": "Catalog Ttl Seconds",
+          "type": "number"
+        },
         "display_names": {
           "additionalProperties": {
             "type": "string"
@@ -1109,16 +1860,223 @@
       "title": "NotificationsConfig",
       "type": "object"
     },
-    "NudgesConfig": {
+    "OidcConfig": {
       "additionalProperties": false,
-      "description": "Short reminders the Grove daemon puts into a working agent's session.",
+      "description": "Sign people in with an OpenID Connect provider.\n\nAny provider that publishes a discovery document works. Sign-in is for\npeople reaching the dashboard and the CLI; daemons federate with their own\nkey and never use this. Empty ``issuer`` keeps OIDC off.",
       "properties": {
-        "phase": {
-          "$ref": "#/$defs/PhaseNudgeConfig",
-          "description": "Remind an agent that stopped reporting its task phase."
+        "audience": {
+          "default": "",
+          "description": "The ID token audience the daemon accepts. Empty means ``client_id``.",
+          "title": "Audience",
+          "type": "string"
+        },
+        "client_id": {
+          "default": "",
+          "description": "This Grove's client id at the issuer, used by the CLI device flow.",
+          "title": "Client Id",
+          "type": "string"
+        },
+        "issuer": {
+          "default": "",
+          "description": "The issuer URL; its ``/.well-known/openid-configuration`` names everything else.",
+          "title": "Issuer",
+          "type": "string"
         }
       },
-      "title": "NudgesConfig",
+      "title": "OidcConfig",
+      "type": "object"
+    },
+    "OpenFaasRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace as one OpenFaaS function, on a self-hosted gateway.\n\nOne function per workspace (``grove-<id>``), pinned to one replica. Freezing\nscales it to zero, which OpenFaaS licenses only in its Pro edition. The\ngateway's ``upstream_timeout`` must be at least ``exec_timeout``.",
+      "properties": {
+        "daemon_token_secret": {
+          "default": "grove-daemon-token",
+          "description": "OpenFaaS secret the function reads the daemon token from.",
+          "title": "Daemon Token Secret",
+          "type": "string"
+        },
+        "exec_timeout": {
+          "default": "168h",
+          "description": "Watchdog exec, read and write timeout for each function.",
+          "title": "Exec Timeout",
+          "type": "string"
+        },
+        "gateway_url": {
+          "description": "Gateway root, for example ``https://faas.example.com``.",
+          "minLength": 1,
+          "title": "Gateway Url",
+          "type": "string"
+        },
+        "http_timeout_seconds": {
+          "default": 30.0,
+          "description": "How long one gateway request may take before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Http Timeout Seconds",
+          "type": "number"
+        },
+        "image": {
+          "description": "Runtime image each function runs.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "kind": {
+          "const": "openfaas",
+          "default": "openfaas",
+          "description": "Selects the OpenFaaS driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "namespace": {
+          "default": "openfaas-fn",
+          "description": "Namespace the functions are deployed into.",
+          "title": "Namespace",
+          "type": "string"
+        },
+        "password_env": {
+          "default": "OPENFAAS_PASSWORD",
+          "description": "Name of the environment variable holding the gateway password.",
+          "title": "Password Env",
+          "type": "string"
+        },
+        "username": {
+          "default": "admin",
+          "description": "Gateway basic-auth user.",
+          "title": "Username",
+          "type": "string"
+        }
+      },
+      "required": [
+        "gateway_url",
+        "image"
+      ],
+      "title": "OpenFaasRuntime",
+      "type": "object"
+    },
+    "OpenSandboxRuntime": {
+      "additionalProperties": false,
+      "description": "A remote workspace as one sandbox on a self-hosted OpenSandbox server.\n\nOne sandbox per workspace, created from the Grove runtime image over the\nserver's lifecycle API. Freezing and stopping both pause it; deleting it is\nthe only way to end it. Outbound traffic is denied except to the daemon,\nthe repository's git host and ``allow_hosts``.",
+      "properties": {
+        "allow_hosts": {
+          "description": "Further hosts, addresses or CIDRs the sandbox may reach, such as the model API.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Allow Hosts",
+          "type": "array"
+        },
+        "api_key_env": {
+          "default": "OPEN_SANDBOX_API_KEY",
+          "description": "Name of the environment variable holding the server's API key.",
+          "title": "Api Key Env",
+          "type": "string"
+        },
+        "docker_bin": {
+          "default": "docker",
+          "description": "The ``docker`` executable reaching the same engine as the OpenSandbox server.",
+          "title": "Docker Bin",
+          "type": "string"
+        },
+        "http_timeout_seconds": {
+          "default": 30.0,
+          "description": "How long one server request may take before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Http Timeout Seconds",
+          "type": "number"
+        },
+        "image": {
+          "description": "Runtime image each sandbox runs.",
+          "minLength": 1,
+          "title": "Image",
+          "type": "string"
+        },
+        "image_auth_password_env": {
+          "default": "",
+          "description": "Name of the environment variable holding that registry password, or empty.",
+          "title": "Image Auth Password Env",
+          "type": "string"
+        },
+        "image_auth_user_env": {
+          "default": "",
+          "description": "Name of the environment variable holding the registry user for a private image, or empty.",
+          "title": "Image Auth User Env",
+          "type": "string"
+        },
+        "kind": {
+          "const": "opensandbox",
+          "default": "opensandbox",
+          "description": "Selects the OpenSandbox driver.",
+          "title": "Kind",
+          "type": "string"
+        },
+        "registry_password_env": {
+          "default": "",
+          "description": "Name of the environment variable holding that registry's password or token.",
+          "title": "Registry Password Env",
+          "type": "string"
+        },
+        "registry_user_env": {
+          "default": "",
+          "description": "Name of the environment variable holding that registry's user.",
+          "title": "Registry User Env",
+          "type": "string"
+        },
+        "resources": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Resource limits by name, for example ``{\"cpu\": \"2\", \"memory\": \"4Gi\"}``. Required:\nthe server refuses a sandbox with no limits unless it names a pool.",
+          "minProperties": 1,
+          "title": "Resources",
+          "type": "object"
+        },
+        "snapshot_poll_seconds": {
+          "default": 2.0,
+          "description": "How often a snapshot still being written is asked whether it is ready.",
+          "exclusiveMinimum": 0,
+          "title": "Snapshot Poll Seconds",
+          "type": "number"
+        },
+        "snapshot_registry": {
+          "default": "",
+          "description": "Optional image repository for hibernated snapshots. Empty uses this runtime image's\nrepository with a ``snap-`` tag, so its registry can reuse the runtime's base layers.",
+          "title": "Snapshot Registry",
+          "type": "string"
+        },
+        "snapshot_timeout_seconds": {
+          "default": 1800.0,
+          "description": "How long one snapshot, push or pull may take before it counts as no answer.",
+          "exclusiveMinimum": 0,
+          "title": "Snapshot Timeout Seconds",
+          "type": "number"
+        },
+        "timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds before the server expires a sandbox, or none for no expiry. The server may cap it.",
+          "title": "Timeout Seconds"
+        },
+        "url_env": {
+          "default": "OPEN_SANDBOX_URL",
+          "description": "Name of the environment variable holding the server's root URL; the driver adds ``/v1``.",
+          "title": "Url Env",
+          "type": "string"
+        }
+      },
+      "required": [
+        "image",
+        "resources"
+      ],
+      "title": "OpenSandboxRuntime",
       "type": "object"
     },
     "PanelConfig": {
@@ -1189,28 +2147,6 @@
         }
       },
       "title": "PermissionConfig",
-      "type": "object"
-    },
-    "PhaseNudgeConfig": {
-      "additionalProperties": false,
-      "description": "Remind a working agent to report its task phase when it has gone quiet about it.\n\nThe reminder is one short line, sent only to an agent that is running, working, has\nreported a phase before, and has not changed it for a whole interval while it kept\nmaking progress. A session that is paused, idle, waiting, blocked, errored, handed\noff, or stuck inside one long tool call is never reminded, and each phase report is\nreminded about at most once.",
-      "properties": {
-        "enabled": {
-          "default": true,
-          "description": "Send the reminder at all.",
-          "title": "Enabled",
-          "type": "boolean"
-        },
-        "every_minutes": {
-          "default": 10.0,
-          "description": "How long a phase may stand unchanged while the agent works before it is reminded.\nAlso how often Grove checks.",
-          "maximum": 1440.0,
-          "minimum": 1.0,
-          "title": "Every Minutes",
-          "type": "number"
-        }
-      },
-      "title": "PhaseNudgeConfig",
       "type": "object"
     },
     "ProxyConfig": {
@@ -1313,6 +2249,34 @@
       "title": "RangeSource",
       "type": "object"
     },
+    "ReaperConfig": {
+      "additionalProperties": false,
+      "description": "The daemon's reconciliation of leaked host resources against workspace records.\n\nA tmux server or Grove process that no workspace record accounts for is a\nleak a crash, a SIGKILL or a test run left behind. The reaper marks each one\nthe first time it sees it and removes it only when it is still there on a\nlater pass, so a workspace being created right now is never touched.",
+      "properties": {
+        "dry_run": {
+          "default": true,
+          "description": "Report what would be removed and remove nothing. ``grove vacuum --apply`` removes\nregardless.",
+          "title": "Dry Run",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Run the reaper in the daemon at all.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "interval_seconds": {
+          "default": 600,
+          "description": "How often the daemon reconciles. Each pass is one socket listing and one ``/proc``\nscan.",
+          "maximum": 86400,
+          "minimum": 60,
+          "title": "Interval Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "ReaperConfig",
+      "type": "object"
+    },
     "ResourcesConfig": {
       "additionalProperties": false,
       "description": "Per container caps, applied at launch.\n\nOne knob on the policy cascade, deliberately NOT a slice hierarchy: the\nagent container gets them via ``docker update`` after ``up`` (the\ndevcontainer CLI owns creation, so post-hoc update is the one dependable\napplication point) and compose stack services via ``deploy.resources`` in\nthe generated override. Empty/zero means \"do not cap\" \u2014 every field is\nindependently optional, so a memory-only policy emits a memory-only update.\n\n``hostRequirements`` in a ``devcontainer.json`` is a different question \u2014 a\n*declaration* Grove checks and refuses on, never a cap it applies.",
@@ -1337,6 +2301,324 @@
         }
       },
       "title": "ResourcesConfig",
+      "type": "object"
+    },
+    "SchedulingConfig": {
+      "additionalProperties": false,
+      "description": "Where a federation hub places this project's new workspaces.",
+      "properties": {
+        "require": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Node labels a new workspace for this project requires, used when the create\nnames no ``selector`` of its own. A committed project config may set it, so a\nrepository can say \"EU residency only\" without every caller repeating it.",
+          "title": "Require",
+          "type": "object"
+        }
+      },
+      "title": "SchedulingConfig",
+      "type": "object"
+    },
+    "SlackConfig": {
+      "additionalProperties": false,
+      "description": "Start and steer workspaces from Slack by mentioning the Grove app.\n\nMention the app in a channel or a thread and Grove starts a workspace with the\nconversation as its first prompt, then posts each finished reply back into that\nthread. Later replies in the thread steer the same workspace. Grove connects OUT\nto Slack over Socket Mode, so the daemon needs no public address.\n\nThe two tokens are read from the variables `bot_token_env` and `app_token_env`\nname, first from this section's `env_file` or `env_command`, then from the\ndaemon's own environment. Config never holds a token.\n\nWho may use it, where, and on which project is read from the daemon's own\nconfig only: `allowed_users`, `allowed_channels`, `default_project` and\n`channel_projects`. All four are closed until set. `workspace` and\n`prompt_template` are read from the chosen project's config, so a project's\n`.grove/config.json` can override yours.",
+      "properties": {
+        "allowed_channels": {
+          "description": "Slack conversation IDs Grove works in: channels (`C\u2026`), private channels\n(`G\u2026`) and direct messages (`D\u2026`). Empty allows none: a mention from an allowed\nuser gets a reply naming the conversation's ID so you can add it. `\"*\"` allows\nevery conversation the app is in.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Channels",
+          "type": "array"
+        },
+        "allowed_users": {
+          "description": "Slack member IDs (`U\u2026`) allowed to start and steer workspaces. Empty allows\nnobody: a mention gets a reply naming the sender's ID so you can add it. `\"*\"`\nallows every member who can post in an allowed channel.\n\nA workspace runs an agent with your credentials on this machine, so the default\nis closed. Everyone else in the channel can still read the thread.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Users",
+          "type": "array"
+        },
+        "app_token_env": {
+          "default": "GROVE_SLACK_APP_TOKEN",
+          "description": "Name of the variable holding the app level token (`xapp-\u2026`) with the\n`connections:write` scope, never the token.",
+          "title": "App Token Env",
+          "type": "string"
+        },
+        "bot_token_env": {
+          "default": "GROVE_SLACK_BOT_TOKEN",
+          "description": "Name of the variable holding the app's bot token (`xoxb-\u2026`), never the token.",
+          "title": "Bot Token Env",
+          "type": "string"
+        },
+        "channel_projects": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Slack channel ID to the path of the project its mentions work in. `~`\nexpands. A mention can pick another project named here or in `default_project`\nwith `!project <name>`, and no other.",
+          "title": "Channel Projects",
+          "type": "object"
+        },
+        "context_messages": {
+          "default": 20,
+          "description": "How many earlier channel messages a top level mention reads as context. A\nmention inside a thread always reads the whole thread instead.",
+          "maximum": 200,
+          "minimum": 0,
+          "title": "Context Messages",
+          "type": "integer"
+        },
+        "deep_link_base_url": {
+          "default": "",
+          "description": "Your dashboard's base URL. Set, Grove's first thread reply links to\n`{base}/w/{id}`. Empty omits that reply.",
+          "title": "Deep Link Base Url",
+          "type": "string"
+        },
+        "default_project": {
+          "default": "",
+          "description": "Path of the project a mention works in when its channel has no entry in\n`channel_projects`. `~` expands. Empty refuses such mentions with a reply.",
+          "title": "Default Project",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Connect to Slack when the daemon starts.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "env_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Host command whose stdout is parsed as dotenv, so a secret never touches disk. Re\nrun at every use and never honored from a committed layer.\n\nExists so secrets never have to be materialized to disk: any command that\nprints dotenv to stdout works, and Grove knows nothing about any particular\nsecret manager \u2014 naming one here would be policy in code. Mutually exclusive\nwith ``env_file``. Re-run at every consumption (deliberately not cached \u2014 a\ncache in a daemon holds secrets for days and serves rotated ones), so it must\nbe idempotent and cheap.\n\n**Never honored from a committed layer** \u2014 running it would be remote code\nexecution on clone. See :class:`CommittedEnvSource`.",
+          "title": "Env Command"
+        },
+        "env_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Dotenv file this section's variables are read from. Repo relative or absolute, `~`\nexpanded. A configured file that is missing is an error at use.\n\nRepo-relative or absolute, ``~`` expanded. Mutually exclusive with\n``env_command``. A configured-but-missing file is a HARD ERROR at the point of\nuse \u2014 a silently-empty environment is the exact failure this feature exists to\nfix, and a workspace that boots without its credentials burns a whole session\ndiscovering that. The error is raised at the consumption boundary\n(``core.env_source``), not here, so the cascade can still persist a config for\na repo whose file is not present yet.\n\n**A committed layer may only name a path INSIDE the repo** \u2014 see\n:class:`CommittedEnvSource`.",
+          "title": "Env File"
+        },
+        "max_attachment_bytes": {
+          "default": 10000000,
+          "description": "Largest Slack file copied into the workspace. Larger files are named in the\nprompt with their Slack link instead. `0` copies none.",
+          "minimum": 0,
+          "title": "Max Attachment Bytes",
+          "type": "integer"
+        },
+        "prompt_template": {
+          "default": "You were started from a Slack conversation in #{channel}.\n\n{author} asked:\n{command_text}\n\nThe conversation so far, oldest first:\n{thread}\n\nSlack link: {permalink}\n\nHow this session works:\n\n- Every reply you finish is posted back into that Slack thread, so write each\n  final reply for the people reading it there: lead with the answer, keep it\n  short, and say what you changed and where.\n- People may reply in the thread while you work; their messages arrive here as\n  follow-up instructions.\n- Where the request is underspecified, ask in your reply and say what you will\n  assume if nobody answers. Do not stall silently.\n- Stop and ask rather than take a risky or irreversible action: destroying\n  data, force-pushing a shared branch, or touching anything in production.\n",
+          "description": "The first prompt a Slack started workspace boots on, with `{command_text}`,\n`{author}`, `{channel}`, `{thread}` and `{permalink}` filled from Slack.",
+          "title": "Prompt Template",
+          "type": "string"
+        },
+        "working_reaction": {
+          "default": "hourglass_flowing_sand",
+          "description": "Emoji name Grove keeps on the message it is working on, removed when the agent's\nreply is posted. Name a custom animated emoji (such as `loading`) for a spinner.",
+          "minLength": 1,
+          "title": "Working Reaction",
+          "type": "string"
+        },
+        "workspace": {
+          "$ref": "#/$defs/SlackWorkspaceConfig",
+          "description": "Launch options for the workspace a mention creates. Unset fields use the\nproject's `defaults`."
+        }
+      },
+      "title": "SlackConfig",
+      "type": "object"
+    },
+    "SlackWorkspaceConfig": {
+      "additionalProperties": false,
+      "description": "Launch options for the workspace a Slack mention creates.\n\nEvery field is optional. A set field is sent on the create and beats the\nproject's saved `defaults`. An unset one resolves exactly as on any other\ncreate: the project's `defaults`, then yours, then Grove's built in. Field\nnames match `defaults` and the create request, so one name means one thing.\n\n`branch_mode` is the exception. Unset it is `auto`, never the saved default,\nso a Slack session gets its own branch and worktree unless you choose `root`.",
+      "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Agent the workspace runs. Must name an entry in `agents`. A mention can\noverride it with `!agent <name>`.",
+          "title": "Agent"
+        },
+        "base_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The branch or ref an `auto` branch starts from. Unset starts from `HEAD`.",
+          "title": "Base Ref"
+        },
+        "branch_mode": {
+          "default": "auto",
+          "description": "`auto` gives each session a new branch and worktree. `root` runs it in the\nproject's current checkout, which sessions then share.",
+          "enum": [
+            "auto",
+            "root"
+          ],
+          "title": "Branch Mode",
+          "type": "string"
+        },
+        "brief": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the agent receives Grove's first turn brief.",
+          "title": "Brief"
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "maxLength": 16,
+              "pattern": "^[a-z]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Reasoning effort sent to the agent. Must be a level the agent lists.",
+          "title": "Effort"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Model id sent to the agent.",
+          "title": "Model"
+        },
+        "native": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the agent runs as a Grove owned native session instead of its\ninteractive terminal.",
+          "title": "Native"
+        },
+        "remote_runtime": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which `runtimes.<name>` block runs a `remote` workspace.",
+          "title": "Remote Runtime"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "enum": [
+                "host",
+                "container",
+                "remote"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the agent runs.",
+          "title": "Runtime"
+        },
+        "skip_init": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether to skip the configured init script.",
+          "title": "Skip Init"
+        }
+      },
+      "title": "SlackWorkspaceConfig",
+      "type": "object"
+    },
+    "SpeechConfig": {
+      "additionalProperties": false,
+      "description": "Dictation into the composer and read-aloud of an answer, on every workspace.\n\nBoth go to an OpenAI-compatible ``/audio/transcriptions`` and ``/audio/speech``\nat ``base_url``. The key is read from the environment variable ``api_key_env``\nnames. Without a key the web shows no microphone or speaker.",
+      "properties": {
+        "api_key_env": {
+          "default": "OPENAI_API_KEY",
+          "description": "Name of the environment variable holding the API key, never the key itself.",
+          "title": "Api Key Env",
+          "type": "string"
+        },
+        "base_url": {
+          "default": "https://api.openai.com/v1",
+          "description": "OpenAI-compatible API base, for example a gateway's ``/v1``.",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "stt_model": {
+          "default": "whisper-1",
+          "description": "Transcription model, passed verbatim.",
+          "title": "Stt Model",
+          "type": "string"
+        },
+        "tts_model": {
+          "default": "tts-1",
+          "description": "Speech model, passed verbatim.",
+          "title": "Tts Model",
+          "type": "string"
+        },
+        "voice": {
+          "default": "alloy",
+          "description": "Voice name for read-aloud, passed verbatim.",
+          "title": "Voice",
+          "type": "string"
+        }
+      },
+      "title": "SpeechConfig",
       "type": "object"
     },
     "TLSConfig": {
@@ -1799,6 +3081,108 @@
       "title": "TranscriptCacheConfig",
       "type": "object"
     },
+    "TriggerRule": {
+      "additionalProperties": false,
+      "description": "One instruction the Grove daemon puts into a session when its condition holds.\n\nThe daemon delivers a rule only to a session that is running and actively working\nright now. A paused, stopped, killed, errored, idle, waiting or blocked session is\nnever contacted, and a session that has stopped is never restarted to receive one.\nThe text arrives fenced as Grove's own voice, so neither the agent nor a person\nreading the transcript mistakes it for something the user typed.",
+      "properties": {
+        "after_minutes": {
+          "default": 10.0,
+          "description": "For ``phase_stale``: how long a reported phase may stand unchanged while the agent\nkeeps working. Ignored by every other condition.",
+          "maximum": 1440.0,
+          "minimum": 1.0,
+          "title": "After Minutes",
+          "type": "number"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Deliver the rule at all.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "include_instructions": {
+          "default": false,
+          "description": "Append ``brief.instructions`` and this workspace's own record (id, title, branch,\nplacement, phase file) to the text. The built-in ``start`` rule sets it.",
+          "title": "Include Instructions",
+          "type": "boolean"
+        },
+        "max_sends": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The most times this rule reaches one session. Unset means no cap. A cap is what\nkeeps a rule an agent ignores from filling its context window.",
+          "title": "Max Sends"
+        },
+        "name": {
+          "description": "Stable identifier. Layers merge rules by this name, so a project can change one\nfield of a built-in rule without restating the rest.",
+          "title": "Name",
+          "type": "string"
+        },
+        "text": {
+          "description": "The instruction itself. ``{title}``, ``{phase}``, ``{age}`` and ``{missing}`` are\nfilled in where the condition knows them; any other brace is left as written.",
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "when": {
+          "description": "What fires the rule. ``session_start``: the agent's first working moment.\n``compaction``: the agent's context was just compacted. ``phase_stale``: the agent\nreported a phase and has not changed it for ``after_minutes`` while it kept working.\n``unnamed``: the workspace still carries a generated title or has no description.\n``manual``: never on its own; only ``grove trigger fire`` sends it.",
+          "enum": [
+            "session_start",
+            "compaction",
+            "phase_stale",
+            "unnamed",
+            "manual"
+          ],
+          "title": "When",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "when",
+        "text"
+      ],
+      "title": "TriggerRule",
+      "type": "object"
+    },
+    "TriggersConfig": {
+      "additionalProperties": false,
+      "description": "Instructions the Grove daemon puts into a working agent's session on its own.\n\nGrove ships four rules: the first-turn brief (``start``), a reminder after the\nagent's context is compacted (``compaction``), a reminder when its reported phase\ngoes stale (``phase``), and a request to name a workspace that still has a generated\ntitle or no description (``unnamed``, sent at most twice). Every layer can add\nrules, switch one off with ``\"enabled\": false``, or change one field of a built-in\nby naming it, the way ``agents`` entries merge. Any rule, including one whose\n``when`` is ``manual``, can also be sent on demand with ``grove trigger fire``.",
+      "properties": {
+        "check_seconds": {
+          "default": 60,
+          "description": "How often the daemon checks each running workspace. Idle waiting costs nothing;\neach check reads one workspace's activity row.",
+          "maximum": 3600,
+          "minimum": 15,
+          "title": "Check Seconds",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Run triggers at all. Off stops every rule, the first-turn brief included.",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "The rules, merged by ``name`` across layers. Grove's own four are layer 0.",
+          "items": {
+            "$ref": "#/$defs/TriggerRule"
+          },
+          "title": "Rules",
+          "type": "array"
+        }
+      },
+      "title": "TriggersConfig",
+      "type": "object"
+    },
     "UIConfig": {
       "additionalProperties": false,
       "description": "TUI preferences.",
@@ -2217,7 +3601,7 @@
     },
     "WorkspaceDefaults": {
       "additionalProperties": false,
-      "description": "Your saved answers for a create that does not name one. Every field is optional and\nan unset one falls through to its normal source.\n\nEvery field is optional, and ``None`` means \"no saved default\" \u2014 the field\nfalls through to whatever the existing per-field cascade already resolved\n(``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's\nown default for model). Grove applies these in the engine, so every surface\nthat creates a workspace \u2014 the CLI, the TUI, the web composer, MCP and\nissue-ops \u2014 honours them identically, and a create form showing you a\npre-filled answer is showing you what will actually happen.\n\nTitle is deliberately absent: it names one task, never a default. So are\nconcrete branch and remote names, for the same reason.",
+      "description": "Your saved answers for a create that does not name one. Every field is optional and\nan unset one falls through to its normal source.\n\nEvery field is optional, and ``None`` means \"no saved default\". With nothing\nsaved a create runs the first configured agent on the host, in the current\ncheckout, with no new branch or worktree. A project's saved answer beats your\nown, and an explicit choice on the create beats both. Grove applies these in\nthe engine, so every surface that creates a workspace \u2014 the CLI, the TUI, the\nweb composer, MCP and issue-ops \u2014 honours them identically, and a create form\nshowing you a pre-filled answer is showing you what will actually happen.\n\nTitle is deliberately absent: it names one task, never a default. So are\nconcrete branch and remote names, for the same reason, which is why a saved\n`new`, `existing` or `remote` branch mode asks for the branch on each create.",
       "properties": {
         "agent": {
           "anyOf": [
@@ -2229,7 +3613,7 @@
             }
           ],
           "default": null,
-          "description": "Agent selected when a create form opens.",
+          "description": "Agent a create launches when it names none. Unset uses the first configured agent.",
           "title": "Agent"
         },
         "base_ref": {
@@ -2262,7 +3646,7 @@
             }
           ],
           "default": null,
-          "description": "How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`.",
+          "description": "How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`. Unset\nis `root`: the current checkout, with no new branch or worktree.",
           "title": "Branch Mode"
         },
         "brief": {
@@ -2288,8 +3672,36 @@
             }
           ],
           "default": null,
-          "description": "Model id sent to the selected agent. Unset uses the agent's own default.",
+          "description": "Model id sent to the saved `agent`. Another agent, or an unset model, uses the\nagent's own default. With no saved `agent` it applies to every agent.",
           "title": "Model"
+        },
+        "profiles": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "enum": [
+                    "claude_code",
+                    "codex",
+                    "opencode",
+                    "generic",
+                    "mewbo"
+                  ]
+                },
+                "type": "object"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which profile each tool uses on each runtime. A row is `*` (any runtime), a runtime\nkind (`host`, `container`, `remote`) or a configured resident `runtimes.<name>` block;\na column is an agent kind; a cell names an `agents[]` entry of that kind. An omitted\nprofile uses the named remote row, runtime kind, then `*` or a same-kind saved `agent`\nfrom the higher layer, then the first roster entry of that kind. Cells merge one by\none across config layers and are checked after the final roster is known.",
+          "title": "Profiles"
         },
         "runtime": {
           "anyOf": [
@@ -2305,7 +3717,7 @@
             }
           ],
           "default": null,
-          "description": "`host` or `container` for a new workspace. Unset falls through to\n`container.enabled`.",
+          "description": "`host` or `container` for a new workspace. Unset runs on the host; enabling\ncontainers makes them available without choosing them.",
           "title": "Runtime"
         },
         "skip_init": {
@@ -2333,6 +3745,12 @@
           "default": "grove/",
           "description": "Prefix on every auto created branch.",
           "title": "Branch Prefix",
+          "type": "string"
+        },
+        "push_token_env": {
+          "default": "",
+          "description": "Name of the environment variable holding a token that can push the workspace\nbranch from a remote workload, never the token itself. Empty hands over none.\n\nA remote workspace pushes its branch from inside its workload before every\nfreeze, hibernate or stop, and the workload holds no credential of its own,\nso against a remote that needs a login to push it can do none of them. The\ntoken rides the platform's private channel to the worker, which gives it to\nits own git commands only, never to the agent. The workload keeps it for its\nwhole life, so scope it to this one repository and to pushing code where the\nforge supports scoped tokens. Grove neither creates nor revokes it.",
+          "title": "Push Token Env",
           "type": "string"
         },
         "root_template": {
@@ -2368,6 +3786,9 @@
       "title": "Agents",
       "type": "array"
     },
+    "artifacts": {
+      "$ref": "#/$defs/ArtifactsConfig"
+    },
     "auth": {
       "$ref": "#/$defs/AuthConfig"
     },
@@ -2386,11 +3807,23 @@
     "container": {
       "$ref": "#/$defs/ContainerConfig"
     },
+    "daemon": {
+      "$ref": "#/$defs/DaemonConfig"
+    },
     "defaults": {
       "$ref": "#/$defs/WorkspaceDefaults"
     },
+    "federation": {
+      "$ref": "#/$defs/FederationConfig"
+    },
+    "fleet_digest": {
+      "$ref": "#/$defs/FleetDigestConfig"
+    },
     "hooks": {
       "$ref": "#/$defs/HooksConfig"
+    },
+    "idle": {
+      "$ref": "#/$defs/IdleConfig"
     },
     "init_script": {
       "$ref": "#/$defs/InitScriptConfig"
@@ -2422,9 +3855,6 @@
     "notifications": {
       "$ref": "#/$defs/NotificationsConfig"
     },
-    "nudges": {
-      "$ref": "#/$defs/NudgesConfig"
-    },
     "panels": {
       "description": "Embeddable compose-service views this project permits in each workspace.\n\nEmpty by default. A panel is visible only while the workspace's persisted\ncompose project is verified, running, and contains the named service; a\ndeclaration alone never opens a network destination.",
       "items": {
@@ -2444,8 +3874,72 @@
       "title": "Projects",
       "type": "array"
     },
+    "projects_root": {
+      "default": "~/Projects",
+      "description": "The directory new projects are created or cloned into, and scanned for\nexisting repositories not yet in `projects`. `~` expands. The web wizard\nshows it and lets one add change it.",
+      "title": "Projects Root",
+      "type": "string"
+    },
     "proxy": {
       "$ref": "#/$defs/ProxyConfig"
+    },
+    "reaper": {
+      "$ref": "#/$defs/ReaperConfig"
+    },
+    "runtimes": {
+      "additionalProperties": {
+        "discriminator": {
+          "mapping": {
+            "aca_functions_episodic": "#/$defs/AcaFunctionsEpisodicRuntime",
+            "aca_job": "#/$defs/AcaJobRuntime",
+            "cloud_run_episodic": "#/$defs/CloudRunEpisodicRuntime",
+            "cloud_run_job": "#/$defs/CloudRunJobRuntime",
+            "lambda_episodic": "#/$defs/LambdaEpisodicRuntime",
+            "lambda_microvm": "#/$defs/LambdaMicrovmRuntime",
+            "openfaas": "#/$defs/OpenFaasRuntime",
+            "opensandbox": "#/$defs/OpenSandboxRuntime"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/CloudRunJobRuntime"
+          },
+          {
+            "$ref": "#/$defs/AcaJobRuntime"
+          },
+          {
+            "$ref": "#/$defs/OpenFaasRuntime"
+          },
+          {
+            "$ref": "#/$defs/LambdaMicrovmRuntime"
+          },
+          {
+            "$ref": "#/$defs/OpenSandboxRuntime"
+          },
+          {
+            "$ref": "#/$defs/CloudRunEpisodicRuntime"
+          },
+          {
+            "$ref": "#/$defs/LambdaEpisodicRuntime"
+          },
+          {
+            "$ref": "#/$defs/AcaFunctionsEpisodicRuntime"
+          }
+        ]
+      },
+      "description": "Remote runtimes by name. A workspace created on one runs as a long-lived\ncontainer on that platform and dials this daemon; nothing dials in.",
+      "title": "Runtimes",
+      "type": "object"
+    },
+    "scheduling": {
+      "$ref": "#/$defs/SchedulingConfig"
+    },
+    "slack": {
+      "$ref": "#/$defs/SlackConfig"
+    },
+    "speech": {
+      "$ref": "#/$defs/SpeechConfig"
     },
     "telemetry": {
       "$ref": "#/$defs/TelemetryConfig"
@@ -2461,6 +3955,9 @@
     },
     "transcript_cache": {
       "$ref": "#/$defs/TranscriptCacheConfig"
+    },
+    "triggers": {
+      "$ref": "#/$defs/TriggersConfig"
     },
     "ui": {
       "$ref": "#/$defs/UIConfig"

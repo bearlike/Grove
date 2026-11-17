@@ -11,6 +11,23 @@ OpenCode ships a headless HTTP server. Grove starts `opencode serve` on loopback
 - **Compact and commands are the server's own verbs.** Grove asks OpenCode to summarize the session or run a discovered command rather than typing into a terminal.
 - **Models come from the server.** Grove reads the providers OpenCode itself reports, so the picker offers what this installation can actually run.
 
+## Where Grove reads and writes
+
+OpenCode keeps every session in one database and serves it over HTTP. Grove talks to the server it started and reads the database without ever writing to it.
+
+```mermaid
+flowchart LR
+    G["Grove worker"] -->|"HTTP, per-launch password"| S["opencode serve"]
+    S -->|"SSE /event"| G
+    S -->|"writes"| DB["opencode/opencode.db"]
+    DB -->|"read only"| D["Grove daemon"]
+```
+
+- **The server is loopback only** and guarded by a password minted for that launch, so nothing else on the host can drive it.
+- **Messages, interrupts, compaction and approvals are the server's own routes**, and its event stream is filtered to the session Grove owns.
+- **The transcript is read from the shared database**, read only, so your history stays OpenCode's to manage.
+- **Grove passes no MCP server or hooks to OpenCode.** The first-turn brief and every reminder arrive as messages.
+
 ## One server, many sessions
 
 This is the difference from the two adapters that speak over a pipe. A pipe is one session by construction. An OpenCode server hosts many, so Grove filters its event stream to the session it owns and ignores every frame belonging to another.

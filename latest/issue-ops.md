@@ -232,3 +232,4 @@ Find the symptom in the left column.
 - [Authentication & pairing](use-auth.md) for the CI token handshake.
 - [Configuration cascade](features-cascade.md) to layer settings.
 - [Workspace lifecycle](features-workspace-lifecycle.md) for the verbs.
+- [Slack](features-slack.md) starts and steers workspaces from a Slack thread with the same verbs.

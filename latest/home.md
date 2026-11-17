@@ -150,7 +150,7 @@ title: Grove
 - **Give each task its own workspace.** Each agent gets a worktree and branch. Agents report phases for their workspace and each attached ticket. See what's planned, built or verified across the fleet.
 - **Choose how each agent runs.** Run agents in their usual host environment or a [container](features-containers.md) defined by your repository's `.devcontainer/`. Containers provide separate services and ports with resource limits.
 - **Choose where the work runs.** Concurrent tests and builds compete for CPU and memory. Reuse your container configuration on a shared team machine or serverless cloud to free your laptop.
-- **Let the tracker start the work.** Assign an issue and Grove starts its workspace. Progress returns to [the same ticket](issue-ops.md). Follow the task where you defined it.
+- **Let the tracker start the work.** Assign an issue and Grove starts its workspace. Progress returns to [the same ticket](issue-ops.md). Mention Grove in a [Slack thread](features-slack.md) and its answers come back there. Follow the task where you defined it.
 - **Show it instead of describing it.** Annotate a [screenshot](features-attachments.md) or draw a [diagram](features-diagrams.md) with your agent. Approve the diagram or mockup and attach it to a ticket to coordinate your fleet.
 
 ## Choose your surface { .ms-h2-icon data-icon="route" }
@@ -262,6 +262,7 @@ Start with one agent, share your setup with the team and choose how you manage t
       <ul class="ms-step__links">
         <li><a href="../configure-agents/">Agents and models</a></li>
         <li><a href="../configure-init-scripts/">Init scripts</a></li>
+        <li><a href="../features-feedback-evals/">Feedback and evaluations</a></li>
         <li><a href="../issue-ops/">Issue ops</a></li>
         <li><a href="../configure-reference/">Configuration reference</a></li>
       </ul>
@@ -287,6 +288,7 @@ Start with one agent, share your setup with the team and choose how you manage t
         <li><a href="../features-catalog/">Capability catalog</a></li>
         <li><a href="../features-containers/">Containerized agents</a></li>
         <li><a href="../features-diagrams/">Diagram collaboration</a></li>
+        <li><a href="../features-artifacts/">Artifacts</a></li>
         <li><a href="../features-attachments/">Attachments and annotation</a></li>
       </ul>
     </div>
