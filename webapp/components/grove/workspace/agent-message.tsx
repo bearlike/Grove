@@ -8,7 +8,7 @@ import { toolPresentation } from "@/lib/grove/adapters/tool-catalog";
 
 const MAILBOX_ICON = toolPresentation("Mailbox").icon;
 
-const MarkdownText = lazy(() => import("@/components/assistant-ui/markdown-text").then((module) => ({ default: module.MarkdownText })));
+const MarkdownText = lazy(() => import("./markdown-text").then((module) => ({ default: module.MarkdownText })));
 import { AgentHandoff } from "@/components/elements/agent-handoff";
 import { CardDisclosure, CardShell } from "@/components/grove/card";
 import { agentLabel, type AgentMessageData } from "@/lib/grove/adapters/agent-message";

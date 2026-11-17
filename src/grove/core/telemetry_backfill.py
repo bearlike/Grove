@@ -18,9 +18,11 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 import httpx
+from loguru import logger
 
+from grove.core import paths
 from grove.core.config import TelemetryConfig
-from grove.core.trace import SpanRecord, SpanSink, TraceManifest
+from grove.core.trace import SpanRecord, SpanSink, TraceInstrumentor, TraceManifest
 
 _LEDGER_DDL = """
 CREATE TABLE IF NOT EXISTS trace_exports_v2 (
@@ -76,6 +78,25 @@ class TelemetryCheckpointLedger:
                 (self._destination_id, trace_hex),
             ).fetchone()
         return self._decode(row, manifest_hash)
+
+    def recorded(self, trace_ids: frozenset[int]) -> frozenset[int]:
+        """The subset of ``trace_ids`` with any checkpoint at this destination."""
+        if not trace_ids:
+            return frozenset()
+        by_hex = {_trace_hex(trace_id): trace_id for trace_id in trace_ids}
+        keys = list(by_hex)
+        found: set[int] = set()
+        with self._lock:
+            # Chunked under SQLite's default bound-parameter limit.
+            for start in range(0, len(keys), 500):
+                chunk = keys[start : start + 500]
+                rows = self._connection.execute(
+                    "SELECT trace_id FROM trace_exports_v2 WHERE destination_id = ? "
+                    f"AND trace_id IN ({','.join('?' * len(chunk))})",
+                    (self._destination_id, *chunk),
+                ).fetchall()
+                found.update(by_hex[str(row[0])] for row in rows)
+        return frozenset(found)
 
     def submit(self, trace_id: int, manifest_hash: str) -> LedgerCheck:
         """Record collector acceptance before remote indexing becomes visible."""
@@ -138,6 +159,67 @@ class TelemetryCheckpointLedger:
             self._connection.close()
 
 
+class LiveAcknowledgements:
+    """The live replay's once-only gate, persisted in the backfill's own ledger.
+
+    A live acknowledgement is recorded as ``submitted``: the collector accepted
+    the turn, nothing has read it back. That is the same claim the backfill
+    makes before verification, so the two paths share one row per trace and the
+    backfill never re-sends a turn the live path already delivered. Never
+    raises: a ledger that cannot be written costs a re-send after the next
+    restart, which is the behaviour without it.
+    """
+
+    def __init__(self, ledger: TelemetryCheckpointLedger) -> None:
+        self._ledger = ledger
+
+    @classmethod
+    def from_config(
+        cls, cfg: TelemetryConfig, *, env: Mapping[str, str] | None = None
+    ) -> LiveAcknowledgements | None:
+        """``None`` when the destination cannot be named, so the gate stays in-memory."""
+        destination_id = _destination_id(cfg.derive_env(env if env is not None else os.environ))
+        if destination_id is None:
+            return None
+        try:
+            ledger = TelemetryCheckpointLedger(
+                paths.telemetry_ledger_path(), destination_id=destination_id
+            )
+        except (OSError, sqlite3.Error) as exc:
+            logger.warning(
+                "telemetry ledger unavailable; live replay gate stays in-memory: {}", exc
+            )
+            return None
+        return cls(ledger)
+
+    def accepted(self, trace_ids: frozenset[int]) -> frozenset[int]:
+        try:
+            return self._ledger.recorded(trace_ids)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            logger.warning("telemetry ledger read failed: {}", exc)
+            return frozenset()
+
+    def accept(self, manifest: TraceManifest) -> None:
+        try:
+            self._ledger.submit(manifest.trace_id, manifest.fingerprint)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            logger.warning("telemetry ledger write failed: {}", exc)
+
+    def close(self) -> None:
+        self._ledger.close()
+
+
+def _destination_id(derived: Mapping[str, str]) -> str | None:
+    """The ledger key for this Langfuse host and project, or ``None`` without credentials.
+
+    Shared by the probe and the live gate so both name one row per trace."""
+    host = derived.get("LANGFUSE_HOST")
+    public_key = derived.get("LANGFUSE_PUBLIC_KEY")
+    if not (host and public_key and derived.get("LANGFUSE_SECRET_KEY")):
+        return None
+    return hashlib.sha256(f"langfuse-v4\0{host.rstrip('/')}\0{public_key}".encode()).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class TraceProbeResult:
     """A remote observation snapshot, or an explicit unavailable outcome."""
@@ -153,7 +235,16 @@ class TraceProbe(Protocol):
 
 
 class LangfuseTraceProbe:
-    """Read Langfuse's v1 trace endpoint with configured Grove credentials."""
+    """Read a trace's observation ids from Langfuse's v2 observations endpoint.
+
+    The v1 ``/api/public/traces/{id}`` read answers 404 for EVERY trace on a v4
+    deployment in events_only mode (measured on 4.48.0, 2026-10-02), and a 404
+    reads as "nothing remote", so every reconciliation re-sent its whole trace.
+    The v2 list is the read that works there; it pages by cursor.
+    """
+
+    PAGE_SIZE = 1000
+    MAX_PAGES = 50
 
     def __init__(
         self,
@@ -168,11 +259,7 @@ class LangfuseTraceProbe:
         host = derived.get("LANGFUSE_HOST")
         public_key = derived.get("LANGFUSE_PUBLIC_KEY")
         secret_key = derived.get("LANGFUSE_SECRET_KEY")
-        self.destination_id = (
-            hashlib.sha256(f"langfuse-v4\0{host.rstrip('/')}\0{public_key}".encode()).hexdigest()
-            if host and public_key and secret_key
-            else None
-        )
+        self.destination_id = _destination_id(derived)
         self._http = (
             httpx.Client(
                 base_url=host.rstrip("/"),
@@ -190,16 +277,40 @@ class LangfuseTraceProbe:
             return TraceProbeResult(
                 status="unavailable", detail="Langfuse credentials are unavailable"
             )
-        try:
-            response = self._http.get(f"/api/public/traces/{trace_hex}")
-        except httpx.HTTPError:
-            return TraceProbeResult(status="unavailable", detail="Langfuse trace probe failed")
-        return self._decode(response)
+        observation_ids: set[str] = set()
+        params: dict[str, str | int] = {
+            "traceId": trace_hex,
+            "fields": "core",
+            "limit": self.PAGE_SIZE,
+        }
+        for _ in range(self.MAX_PAGES):
+            try:
+                response = self._http.get("/api/public/v2/observations", params=params)
+            except httpx.HTTPError:
+                return TraceProbeResult(status="unavailable", detail="Langfuse trace probe failed")
+            page = self._decode(response)
+            if isinstance(page, TraceProbeResult):
+                return page
+            ids, cursor = page
+            observation_ids.update(ids)
+            if not cursor:
+                return TraceProbeResult(
+                    status="available", observation_ids=frozenset(observation_ids)
+                )
+            params["cursor"] = cursor
+        # A partial read would understate what is remote and re-send the rest.
+        return TraceProbeResult(
+            status="unavailable", detail="Langfuse trace exceeds the page bound"
+        )
 
     @staticmethod
-    def _decode(response: httpx.Response) -> TraceProbeResult:
-        if response.status_code == 404:
-            return TraceProbeResult(status="available")
+    def _decode(response: httpx.Response) -> tuple[set[str], str | None] | TraceProbeResult:
+        """One page's ids and next cursor, or the reason the remote state is unknown.
+
+        Any non-200 is UNAVAILABLE, never "absent": an empty trace is a 200 with
+        no rows, so a 404 here is a missing endpoint, and treating it as absence
+        is the bug this probe used to have.
+        """
         if response.status_code != 200:
             return TraceProbeResult(
                 status="unavailable",
@@ -211,18 +322,20 @@ class LangfuseTraceProbe:
             return TraceProbeResult(
                 status="unavailable", detail="Langfuse trace response was not JSON"
             )
-        if not isinstance(body, dict) or not isinstance(body.get("observations"), list):
+        if not isinstance(body, dict) or not isinstance(body.get("data"), list):
             return TraceProbeResult(
                 status="unavailable", detail="Langfuse trace response had an unexpected shape"
             )
-        observation_ids: set[str] = set()
-        for observation in body["observations"]:
+        ids: set[str] = set()
+        for observation in body["data"]:
             if not isinstance(observation, dict) or not isinstance(observation.get("id"), str):
                 return TraceProbeResult(
                     status="unavailable", detail="Langfuse observations had an unexpected shape"
                 )
-            observation_ids.add(observation["id"].lower())
-        return TraceProbeResult(status="available", observation_ids=frozenset(observation_ids))
+            ids.add(observation["id"].lower())
+        meta = body.get("meta")
+        cursor = meta.get("cursor") if isinstance(meta, dict) else None
+        return ids, cursor if isinstance(cursor, str) and cursor else None
 
     def close(self) -> None:
         if self._http is not None:
@@ -398,10 +511,14 @@ class TelemetryBackfillExporter:
 
         emitted = 0
         try:
-            for span in missing:
-                self._sink(span)
-                emitted += 1
-            self._sink.flush()
+            # One flush per chunk, for the reason `TraceInstrumentor.REPLAY_CHUNK`
+            # gives: a remainder over the processor's bounds is otherwise refused
+            # in part on every run and can never complete.
+            for start in range(0, len(missing), TraceInstrumentor.REPLAY_CHUNK):
+                for span in missing[start : start + TraceInstrumentor.REPLAY_CHUNK]:
+                    self._sink(span)
+                    emitted += 1
+                self._sink.flush()
         except Exception:
             return self._degraded(
                 trace_hex,
@@ -596,6 +713,7 @@ def _display_trace_id(manifest: TraceManifest) -> str:
 __all__ = [
     "LangfuseTraceProbe",
     "LedgerCheck",
+    "LiveAcknowledgements",
     "ManifestExportResult",
     "TelemetryBackfillExporter",
     "TelemetryBackfillResult",

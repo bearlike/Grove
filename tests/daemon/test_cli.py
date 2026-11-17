@@ -123,6 +123,29 @@ def test_serve_logs_and_skips_reexec_check_on_prctl_failure(
     assert len(getppid_calls) == 1  # no point re-checking ppid for a signal never armed
 
 
+def test_serve_bounds_the_graceful_shutdown_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SIGTERM must not wait forever on a stream that only the lifespan can end.
+
+    uvicorn's default (``None``) waits for every open connection before it runs
+    the lifespan shutdown, and `/events` and the owner control streams end only
+    in that shutdown. Unbounded, every stop of a daemon with a dashboard open
+    hung until systemd's SIGKILL.
+    """
+    seen: dict[str, object] = {}
+
+    def _config(*args: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(uvicorn, "Config", _config)
+
+    daemon_cli.serve(host="127.0.0.1", port=7421, print_port=False)
+
+    timeout = seen.get("timeout_graceful_shutdown")
+    assert isinstance(timeout, int | float)
+    assert 0 < timeout < 90  # under systemd's default stop timeout
+
+
 @pytest.mark.parametrize("platform", ["darwin", "win32"])
 def test_serve_noop_off_linux(monkeypatch: pytest.MonkeyPatch, platform: str) -> None:
     """No prctl exists off Linux — must degrade to a clean no-op, never raise."""

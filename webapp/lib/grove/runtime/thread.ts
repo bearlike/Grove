@@ -38,6 +38,7 @@ import {
   useWhoami,
   useWorkspaceTodo,
 } from "@/lib/grove/hooks";
+import { groveClient } from "@/lib/grove/hooks/client";
 import { attachmentIds, groveAttachmentAdapter } from "./attachments";
 import { type TurnFeedbackControls, useTurnFeedback } from "./feedback";
 import {
@@ -48,6 +49,7 @@ import {
 import { refusalNotice } from "./notice";
 import { echoLanded, type SendEcho } from "./sending";
 import { sessionThreadList } from "./thread-list";
+import { useSpeechAdapters, type GroveDictationAdapter, type SpeechAdapters } from "./speech";
 
 /**
  * Grove's transcript as an assistant-ui external-store runtime.
@@ -116,6 +118,9 @@ export interface TranscriptRuntimeOptions {
     adapter: FeedbackAdapter | undefined;
     stamp: (messages: ThreadMessageLike[]) => ThreadMessageLike[];
   };
+  /** Each present adapter is what turns on its `thread.capabilities` flag
+   * (`dictation`, `speech`), so omitting one leaves that control unrendered. */
+  speech?: SpeechAdapters["adapters"];
 }
 
 /**
@@ -137,6 +142,7 @@ export function useTranscriptRuntime({
   threadList,
   attachments,
   feedback,
+  speech,
 }: TranscriptRuntimeOptions): { runtime: AssistantRuntime; messageCount: number } {
   const mapped = useMemo(() => messagesFromTurns(turns ?? []), [turns]);
   const stamp = feedback?.stamp;
@@ -147,14 +153,15 @@ export function useTranscriptRuntime({
   // constant: the store compares adapter identity across updates.
   const adapters = useMemo(
     () =>
-      threadList || attachments || feedbackAdapter
+      threadList || attachments || feedbackAdapter || speech
         ? {
             ...(threadList ? { threadList } : {}),
             ...(attachments ? { attachments } : {}),
             ...(feedbackAdapter ? { feedback: feedbackAdapter } : {}),
+            ...(speech ? { dictation: speech.dictation, speech: speech.speech } : {}),
           }
         : undefined,
-    [threadList, attachments, feedbackAdapter],
+    [threadList, attachments, feedbackAdapter, speech],
   );
 
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
@@ -188,6 +195,9 @@ export interface GroveThreadState {
   /** Provide through `TurnFeedbackContext` around the thread; `null` when
    * ratings are off. */
   feedback: TurnFeedbackControls | null;
+  /** The adapter behind the composer's mic, so Cancel can reach the live
+   * recording; `null` when no provider key is configured. */
+  dictation: GroveDictationAdapter | null;
   /** True when there is no transcript AND no live question — the empty state. */
   isEmpty: boolean;
   /**
@@ -400,18 +410,22 @@ export function useGroveThread({
   );
   const feedback = useTurnFeedback(workspaceId, sessionId, reasons, setNotice);
 
+  const speech = useSpeechAdapters(whoami.data?.speech === true, setNotice);
+
   const { runtime, messageCount } = useTranscriptRuntime({
     turns,
     onNew,
     onCancel,
     attachments,
     feedback,
+    ...(speech ? { speech: speech.adapters } : {}),
     ...(threadList ? { threadList } : {}),
   });
 
   return {
     runtime,
     feedback: feedback.controls,
+    dictation: speech?.dictation ?? null,
     isEmpty: messageCount === 0 && pending.length === 0,
     pending,
     todo,

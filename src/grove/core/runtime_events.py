@@ -21,6 +21,7 @@ from loguru import logger
 
 from grove.core.container_runtime import ContainerState
 from grove.core.process import die_with_parent
+from grove.core.tmux import OBSERVER_FLAGS, TmuxServer, has_session
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +57,9 @@ class RuntimeEventTransport(Protocol):
 
     async def docker_events(self, *, docker_bin: str) -> RuntimeEventReader: ...
 
-    async def tmux_control(self, *, session: str) -> RuntimeEventReader: ...
+    async def tmux_control(self, *, session: str) -> RuntimeEventReader | None:
+        """A control stream on ``session``, or ``None`` when its server holds no such session."""
+        ...
 
 
 class _SubprocessEventReader:
@@ -128,14 +131,24 @@ class AsyncioRuntimeEventTransport:
         )
         return _SubprocessEventReader(process)
 
-    async def tmux_control(self, *, session: str) -> RuntimeEventReader:
+    async def tmux_control(self, *, session: str) -> RuntimeEventReader | None:
+        # `session` is a server-qualified handle (`tmux.TmuxServer.handle`), so
+        # a workspace on its own server is observed on THAT server.
+        server, name = TmuxServer.parse_handle(session)
+        # An observer must not be able to create what it observes: on a socket
+        # with no server, `attach-session` forks one, and that server is not
+        # covered by `die_with_parent` (pdeathsig does not cross fork). Asking
+        # first (`list-sessions` never starts a server) answers "cannot tell".
+        if not await asyncio.to_thread(has_session, name, server):
+            return None
         process = await asyncio.create_subprocess_exec(
-            "tmux",
+            *server.command,
+            *OBSERVER_FLAGS,
             "-C",
             "attach-session",
             "-r",
             "-t",
-            session,
+            name,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -327,6 +340,8 @@ class RuntimeEvents:
         exited = False
         try:
             reader = await self._transport.tmux_control(session=session)
+            if reader is None:
+                return
             async for frame in reader.lines():
                 if frame.startswith("%exit"):
                     exited = True

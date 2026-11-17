@@ -21,7 +21,7 @@ from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.agents.hook import ClaudeHook
 from grove.core.config import GroveConfig, _merge_agents
 from grove.core.contracts.requests import CreateWorkspaceRequest
-from grove.core.errors import AgentSessionNotFound, ResumeNotSupported
+from grove.core.errors import AgentSessionNotFound, EffortNotSupported, ResumeNotSupported
 from grove.core.manager import _RESUMABLE_KINDS, WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import WorkspaceState, WorkspaceStatus
@@ -207,6 +207,77 @@ def test_create_shell_ignores_model(manager: WorkspaceManager, fake_tmux: FakeTm
     state = manager.create(CreateWorkspaceRequest(agent_name="shell", title="plain", model="opus"))
 
     assert _last_decoration(fake_tmux, state.tmux_session) == []
+
+
+# ─── effort rides the launch argv (--effort / -c model_reasoning_effort) ────
+
+
+def test_create_claude_appends_effort_after_model_before_prompt(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """Effort is the tool's own flag, after ``--model`` and before the prompt."""
+    state = manager.create(
+        CreateWorkspaceRequest(
+            agent_name="claude", title="task", model="opus", effort="xhigh", initial_prompt="do X"
+        )
+    )
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "--session-id",
+        state.agent_session_id,
+        "--model",
+        "opus",
+        "--effort",
+        "xhigh",
+        "do X",
+    ]
+
+
+def test_create_codex_appends_effort_as_config_override(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """Codex has no ``--effort``; its config override is the launch flag."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="codex", title="task", effort="high"))
+
+    assert _last_decoration(fake_tmux, state.tmux_session) == [
+        "-c",
+        "model_reasoning_effort=high",
+    ]
+
+
+def test_create_without_effort_is_byte_identical(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """No effort → no flag, so the tool's own default stays in force."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="plain"))
+
+    assert "--effort" not in _last_decoration(fake_tmux, state.tmux_session)
+
+
+@pytest.mark.parametrize(
+    ("agent", "effort"),
+    [
+        # A level the kind does not list (Codex has no `max`).
+        ("codex", "max"),
+        # A kind with no effort setting at all refuses any value, rather than
+        # creating a workspace that reads as configured and runs on the default.
+        ("shell", "high"),
+    ],
+)
+def test_create_refuses_an_effort_the_agent_cannot_launch_with(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, agent: str, effort: str
+) -> None:
+    with pytest.raises(EffortNotSupported, match=repr(effort)):
+        manager.create(CreateWorkspaceRequest(agent_name=agent, title="nope", effort=effort))
+
+    assert manager.list() == []
+    assert fake_tmux.launch_decorations == []
+
+
+def test_effort_wire_field_refuses_flag_shaped_values() -> None:
+    """The level becomes argv, so the wire admits lowercase words only."""
+    with pytest.raises(ValueError):
+        CreateWorkspaceRequest(agent_name="claude", title="t", effort="--dangerously")
 
 
 # ─── tools_offline rides the launch argv, per adapter ────────────────────────

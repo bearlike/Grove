@@ -187,9 +187,12 @@ def _owner(
             return ContainerState.UNPROVISIONED
 
     monkeypatch.setattr("grove.daemon._runtime_sources.ContainerLiveness", _Docker)
-    monkeypatch.setattr("grove.daemon._runtime_sources.tmux.has_session", lambda _session: True)
     monkeypatch.setattr(
-        "grove.daemon._runtime_sources.tmux.pane_activity_seconds_ago", lambda _session: None
+        "grove.daemon._runtime_sources.tmux.has_session", lambda _session, _server=None: True
+    )
+    monkeypatch.setattr(
+        "grove.daemon._runtime_sources.tmux.pane_activity_seconds_ago",
+        lambda _session, _server=None: None,
     )
     store = _Store(states)
     runtime = _Runtime()
@@ -359,7 +362,8 @@ async def test_expired_bootstrap_activity_does_not_suppress_the_next_active_edge
     state = _host_state("host")
     owner, _store, runtime, _events, _manager, _probe_threads = _owner(monkeypatch, [state])
     monkeypatch.setattr(
-        "grove.daemon._runtime_sources.tmux.pane_activity_seconds_ago", lambda _session: 31
+        "grove.daemon._runtime_sources.tmux.pane_activity_seconds_ago",
+        lambda _session, _server=None: 31,
     )
     await owner.start()
 
@@ -382,7 +386,8 @@ async def test_bootstrap_activity_expiry_uses_its_original_timestamp(
     state = _host_state("host")
     owner, _store, _runtime, _events, _manager, _probe_threads = _owner(monkeypatch, [state])
     monkeypatch.setattr(
-        "grove.daemon._runtime_sources.tmux.pane_activity_seconds_ago", lambda _session: 29
+        "grove.daemon._runtime_sources.tmux.pane_activity_seconds_ago",
+        lambda _session, _server=None: 29,
     )
     loop = asyncio.get_running_loop()
     scheduled: list[tuple[float, Callable[..., None], tuple[Any, ...]]] = []

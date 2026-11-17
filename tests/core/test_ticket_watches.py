@@ -59,17 +59,22 @@ class Forge:
         self.status = "open"
         self.body = "Parser drops the last token."
         self.comments: list[TicketComment] = []
+        self.reviews: list[TicketComment] = []
         self.reads = 0
         self._ids = itertools.count(1)
 
-    # the read the watcher and the publisher share
+    # the read the watcher and the publisher share; like GitHub, a PR counts its reviews
     def read_state(self, ticket_id: str, kind: str) -> TicketState:
         self.reads += 1
         ref = TicketRef(provider="gitea", id=ticket_id, title=self.title, status=self.status)
-        return TicketState(ref=ref, body=self.body, comment_count=len(self.comments))
+        reviews = len(self.reviews) if kind == "pull_request" else 0
+        return TicketState(ref=ref, body=self.body, comment_count=len(self.comments) + reviews)
 
     def list_comments(self, ticket_id: str) -> list[TicketComment]:
         return list(self.comments)
+
+    def list_reviews(self, ticket_id: str) -> list[TicketComment]:
+        return list(self.reviews)
 
     def viewer_login(self) -> str:
         return BOT
@@ -220,6 +225,35 @@ async def test_a_human_comment_is_reported_even_beside_groves_own(tmp_path):
     assert STICKY_MARKER not in mail.summary
 
 
+async def test_a_review_on_a_pull_request_is_reported_in_order_with_comments(tmp_path):
+    """AI reviewers post reviews, not conversation comments; both must wake the workspace."""
+    forge, clock, courier, scheduler = _rig(tmp_path)
+    scheduler.register(
+        WatchRegistration(
+            recipient=MailboxAddress(workspace_id=WS),
+            predicate=TicketPredicate(
+                workspace_id=WS, provider="gitea", ticket_id="42", ticket_kind="pull_request"
+            ),
+        )
+    )
+    await scheduler.tick()
+    forge.reviews.append(
+        TicketComment(id="r1", body="Found 2 bugs.", author="cursor[bot]", created_at=T0)
+    )
+    forge.comments.append(
+        TicketComment(
+            id="c1", body="Summary posted.", author="devin-ai[bot]", created_at=T0 + timedelta(1)
+        )
+    )
+    await _step(clock, scheduler)
+
+    [mail] = courier.sent
+    assert mail.summary.splitlines()[1:3] == [
+        "- New comment from cursor[bot]: Found 2 bugs.",
+        "- New comment from devin-ai[bot]: Summary posted.",
+    ]
+
+
 async def test_a_ticket_is_read_at_most_once_a_minute_however_many_watch_it(tmp_path):
     forge, clock, _courier, scheduler = _rig(tmp_path)
     for workspace in ("a" * 32, "b" * 32, "d" * 32):
@@ -334,8 +368,8 @@ def test_subscriptions_follow_the_record_attach_detach_pause(tmp_path):
     assert pending() == set()
 
 
-def test_a_paused_workspace_cancels_every_pending_watch_owned_by_its_recipient(tmp_path):
-    """Lifecycle ownership is the callback recipient, not the predicate's subject."""
+def test_a_paused_workspace_keeps_the_agents_own_waits_and_drops_standing_watches(tmp_path):
+    """#976: a pause must not silently drop a timer the agent halted on."""
     _forge, clock, _courier, scheduler = _rig(tmp_path)
     record: dict[str, WorkspaceState | None] = {WS: _state(WorkspaceStatus.PAUSED, [])}
     subscriptions = StandingWatches(scheduler=scheduler, workspaces=record.get)
@@ -350,7 +384,7 @@ def test_a_paused_workspace_cancels_every_pending_watch_owned_by_its_recipient(t
         )
     )
 
-    assert _states(scheduler, watch_ids) == ["cancelled"] * 4
+    assert _states(scheduler, watch_ids) == ["pending", "pending", "pending", "cancelled"]
 
 
 def test_a_killed_workspace_cancels_every_pending_recipient_owned_watch(tmp_path):
@@ -382,8 +416,8 @@ def test_startup_cancels_all_kinds_for_a_missing_workspace(tmp_path):
     assert _states(scheduler, watch_ids) == ["cancelled"] * 4
 
 
-def test_resuming_does_not_rearm_watches_cancelled_while_paused(tmp_path):
-    """A fresh lifecycle cannot revive a wait that belonged to the paused session."""
+def test_a_wait_registered_before_a_pause_is_still_pending_after_resume(tmp_path):
+    """Pause then resume: the agent's timer, ci and command waits survive both edges."""
     _forge, clock, _courier, scheduler = _rig(tmp_path)
     record: dict[str, WorkspaceState | None] = {WS: _state(WorkspaceStatus.PAUSED, [])}
     subscriptions = StandingWatches(scheduler=scheduler, workspaces=record.get)
@@ -393,7 +427,7 @@ def test_resuming_does_not_rearm_watches_cancelled_while_paused(tmp_path):
     record[WS] = _state(WorkspaceStatus.RUNNING, [])
     subscriptions.reconcile(WS)
 
-    assert _states(scheduler, watch_ids) == ["cancelled"] * 4
+    assert _states(scheduler, watch_ids) == ["pending", "pending", "pending", "cancelled"]
 
 
 def test_detaching_a_ticket_leaves_other_running_workspace_watches_pending(tmp_path):
@@ -425,3 +459,19 @@ async def test_the_markers_alone_silence_groves_comment_when_the_login_is_unknow
     forge.grove_sticky_flush()
     await _step(clock, scheduler)
     assert courier.sent == []
+
+
+def test_an_unreadable_log_at_startup_costs_the_orphan_sweep_never_the_daemon(tmp_path):
+    """The 2026-10-15 crash loop ran through THIS call: the lifespan's reconcile_all.
+
+    A log another Grove version wrote is refused rather than read as empty, which
+    is right, and that refusal used to raise straight out of the daemon's startup
+    from the final orphan sweep. The sweep is cleanup; it must log and let the
+    daemon start, and the next start retries it.
+    """
+    _forge, _clock, _courier, scheduler = _rig(tmp_path)
+    log_path = tmp_path / "watches.json"
+    log_path.write_text('{"format":"grove-records","store":"watches","version":99}\n')
+    scheduler._log._file.invalidate()
+
+    StandingWatches(scheduler=scheduler, workspaces=lambda _id: None).reconcile_all([])

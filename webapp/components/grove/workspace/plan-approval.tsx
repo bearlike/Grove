@@ -10,7 +10,7 @@ import type { AgentQuestionView } from "@/lib/grove/api";
 import { NewTabLinks } from "./new-tab-links";
 
 const MarkdownText = lazy(() =>
-  import("@/components/assistant-ui/markdown-text").then((module) => ({ default: module.MarkdownText })),
+  import("./markdown-text").then((module) => ({ default: module.MarkdownText })),
 );
 
 /**

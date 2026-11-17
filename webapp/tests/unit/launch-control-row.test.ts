@@ -74,6 +74,18 @@ describe("what a pill displays", () => {
     expect(project).toContain("value={values.selectedProjectCwd}");
     expect(project).not.toContain("value={values.projectCwd}");
   });
+
+  it("keeps the Project menu a list of projects, with placement on its own pill", () => {
+    // Placement and the init-script choice used to be form fields under the
+    // project list, and on a host with a few projects they covered it.
+    const project = readFileSync(`${CONTROLS_DIR}/project-pill.tsx`, "utf8");
+    const placement = readFileSync(`${CONTROLS_DIR}/branch-pill.tsx`, "utf8");
+    for (const field of ["launch-placement", "launch-root-init", "skipInit", "branchMode"]) {
+      expect(project, field).not.toContain(field);
+    }
+    expect(placement).toContain('id="launch-root-init"');
+    expect(placement).toContain('ariaLabel="Placement"');
+  });
 });
 
 // The row's own layout — which pills sit on which line, and where the toolbar
@@ -154,6 +166,7 @@ describe("launch control row option labels", () => {
     const glyphs = [...source.matchAll(/(?<!readonly )\bglyph:\s*(\w+)/g)].map(
       (match) => match[1]!,
     );
+    // Five placements: the current checkout and the four isolated modes.
     expect(glyphs.length).toBeGreaterThanOrEqual(5);
     for (const glyph of glyphs) expect(glyph).toMatch(/^Git/);
   });

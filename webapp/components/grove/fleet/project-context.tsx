@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckIcon, ChevronsUpDownIcon, FolderGit2Icon } from "lucide-react";
+import { CheckIcon, ChevronsUpDownIcon, FolderGit2Icon, FolderPlusIcon } from "lucide-react";
 
+import { useAddProjectUi } from "@/components/grove/projects/add-project-store";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -179,6 +180,7 @@ export function ProjectContextPicker({
   readonly status?: "ready" | "loading" | "error";
 }): React.ReactNode {
   const [open, setOpen] = useState(false);
+  const openWizard = useAddProjectUi((state) => state.openWizard);
   const listId = useId();
   const trigger = useRef<HTMLButtonElement | null>(null);
   const label = status === "loading" && context.kind === "missing"
@@ -267,6 +269,28 @@ export function ProjectContextPicker({
               </p>
             ) : null}
           </CommandList>
+          {/*
+            Outside the list on purpose: cmdk filters what is inside it, so a
+            search for a project that does not exist yet must still leave the
+            way to add one.
+          */}
+          <div className="border-t p-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-[28px] w-full justify-start gap-1.5 text-sm [@media(pointer:coarse)]:min-h-11"
+              data-testid="project-context-add"
+              onClick={() => {
+                setOpen(false);
+                // The new project becomes the rail's context, so the reader
+                // lands looking at what they just added.
+                openWizard({ onAdded: ({ cwd }) => onSelect(cwd) });
+              }}
+            >
+              <FolderPlusIcon className="size-[1em] shrink-0" aria-hidden />
+              <span>Add project…</span>
+            </Button>
+          </div>
         </Command>
       </PopoverContent>
     </Popover>

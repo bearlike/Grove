@@ -8,8 +8,11 @@ refuse with the pane-shaped 409 when no owner is connected.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,7 +20,9 @@ from fastapi.testclient import TestClient
 from grove.core.contracts.mailboxes import MailboxAddress
 from grove.core.native_owners import NativeOwnerRegistry, OwnerIdentity
 from grove.core.store import JsonWorkspaceStore
+from grove.core.workspace import WorkspaceState
 from grove.daemon import build_app
+from grove.daemon.mailboxes import OwnerSteerClient
 from tests.conftest import FakeTmux
 from tests.daemon.conftest import daemon_test_config
 
@@ -65,14 +70,17 @@ def test_steer_routes_queue_control_frames_for_the_connected_owner(
     assert daemon.post(f"/workspaces/{native_ws}/interrupt").status_code == 204
     resp = daemon.post(f"/workspaces/{native_ws}/controls/model", json={"model": "opus"})
     assert resp.status_code == 204
+    resp = daemon.post(f"/workspaces/{native_ws}/controls/effort", json={"effort": "xhigh"})
+    assert resp.status_code == 204
 
     binding = owners.owner_for(native_ws)
     assert binding is not None
-    frames = [binding.queue.get_nowait()[2] for _ in range(3)]
+    frames = [binding.queue.get_nowait()[2] for _ in range(4)]
     assert [(f.op, f.text) for f in frames if f is not None] == [
         ("interrupt", ""),
         ("steer", "hi"),
         ("set_model", "opus"),
+        ("set_effort", "xhigh"),
     ]
     assert fake_tmux.sent_texts == []
     assert fake_tmux.escapes == []
@@ -92,6 +100,47 @@ def test_a_native_workspace_with_no_owner_refuses_like_a_missing_pane(
     assert "no connected native owner" in resp.json()["detail"]["message"]
 
 
+def test_effort_route_refuses_what_it_cannot_carry_and_queues_nothing(
+    daemon: TestClient, native_ws: str, tmp_repo: Path
+) -> None:
+    """422 `effort_not_supported` for a level the kind does not list (Claude
+    would have acked it), and the same for a terminal workspace with no channel.
+    Both leave the owner's queue empty: a refusal that also delivered would be
+    the silent-apply this route exists to prevent."""
+    owners = _connect_owner(daemon, native_ws)
+    binding = owners.owner_for(native_ws)
+    assert binding is not None
+
+    bad_level = daemon.post(f"/workspaces/{native_ws}/controls/effort", json={"effort": "bogus"})
+    assert bad_level.status_code == 422
+    assert bad_level.json()["detail"]["error"] == "effort_not_supported"
+    assert binding.queue.empty()
+
+    shape = daemon.post(f"/workspaces/{native_ws}/controls/effort", json={"effort": "--high"})
+    assert shape.status_code == 422
+
+    terminal = daemon.post(
+        "/workspaces",
+        json={
+            "agent_name": "claude-terminal",
+            "title": "tui",
+            "repo_root": str(tmp_repo),
+            "branch_plan": {"kind": "auto"},
+        },
+    ).json()
+    refused = daemon.post(f"/workspaces/{terminal['id']}/controls/effort", json={"effort": "high"})
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["error"] == "effort_not_supported"
+
+
+def test_effort_route_with_no_connected_owner_is_a_pane_shaped_409(
+    daemon: TestClient, native_ws: str
+) -> None:
+    resp = daemon.post(f"/workspaces/{native_ws}/controls/effort", json={"effort": "high"})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["error"] == "pane_not_found"
+
+
 def test_the_terminal_twin_still_steers_the_pane(
     daemon: TestClient, tmp_repo: Path, fake_tmux: FakeTmux
 ) -> None:
@@ -107,3 +156,24 @@ def test_the_terminal_twin_still_steers_the_pane(
     assert body["native"] is False
     assert daemon.post(f"/workspaces/{body['id']}/message", json={"text": "hi"}).status_code == 204
     assert [t for _, t in fake_tmux.sent_texts] == ["hi"]
+
+
+def test_the_steer_client_remembers_what_it_submitted_and_not_what_it_refused() -> None:
+    """The record `label_queue` reads: inputs as the provider receives them."""
+    owners = NativeOwnerRegistry()
+    client = OwnerSteerClient(owners)
+    loop = asyncio.new_event_loop()
+    try:
+        client.bind(loop)
+        state = cast(WorkspaceState, SimpleNamespace(id="a" * 32))
+        with pytest.raises(Exception, match="no connected native owner"):
+            client.send_message(state, "refused")
+        owners.register(
+            OwnerIdentity(address=MailboxAddress(workspace_id="a" * 32), generation="1" * 32), "s"
+        )
+        client.send_message(state, "hi")
+        client.invoke_control(state, "review")
+        client.interrupt(state)
+        assert [text for text, _ in client.recent_inputs(state)] == ["hi", "/review"]
+    finally:
+        loop.close()

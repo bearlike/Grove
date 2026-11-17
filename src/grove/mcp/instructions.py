@@ -90,7 +90,9 @@ the repo paths every other tool wants. Then grove_list_workspaces for the fleet,
 grove_get_workspace for one, and grove_peek_workspace for a bounded live
 snapshot. Lifecycle is grove_create_workspace, grove_pause_workspace,
 grove_resume_workspace, grove_respawn_workspace and grove_kill_workspace. Steer
-a running agent with grove_send_workspace_message. Leading several agents
+a running agent with grove_send_workspace_message. To see the
+whole fleet in one bounded, paged read, call grove_get_fleet_digest (pass its
+`cursor` back as `since` to get only changes). Leading several agents
 toward one deliverable? Read the `leading-in-grove` skill first. To wait on slow work — CI on
 a commit, a timer, a command that exits when it is done — call
 grove_register_watch and then END YOUR TURN rather than polling or sleeping:
@@ -99,6 +101,9 @@ watch has a deadline (default 15 minutes; set a longer one if you expect to wait
 longer) and its expiry is delivered too, saying the condition was not met, so a
 watch can never stall a session. Attached tickets need no watch from you: while
 a workspace runs, Grove mails it when a person changes one of its tickets.
+Produced something a person should open — a plan, a report, a .drawio diagram,
+a link to an external doc? Call grove_attach_artifact with the file path or URL
+so it is one click from the dashboard; Grove stores the pointer, not a copy.
 grove_list_watches and grove_cancel_watch are the other two. Destructive tools take their
 inputs explicitly and never guess. For complete on-demand operating help, call
 grove_get_skill with no name to list this server's installed skills, then with a

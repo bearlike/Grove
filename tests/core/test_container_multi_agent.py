@@ -35,7 +35,7 @@ from grove.core.errors import (
 from grove.core.manager import WorkspaceManager
 from grove.core.phase import PhaseFile
 from grove.core.store import JsonWorkspaceStore
-from grove.core.tmux import DEFAULT_TMUX_COMMAND, SessionReport
+from grove.core.tmux import SessionReport
 from grove.core.workspace import Runtime, WorkspaceState
 from tests.conftest import (
     DOCKER_INSPECT_RUNNING,
@@ -556,7 +556,11 @@ def test_a_host_workspaces_own_peek_and_steer_are_byte_identical(
 
     assert snapshot == "host pane"
     assert fake_tmux.sent_texts[-1] == (f"{state.tmux_session}:agent", "carry on")
-    assert fake_tmux.commands[-1] == (f"{state.tmux_session}:agent", DEFAULT_TMUX_COMMAND)
+    # On the workspace's own host tmux server (`-L`), as every host workspace is.
+    assert fake_tmux.commands[-1] == (
+        f"{state.tmux_session}:agent",
+        ("tmux", "-L", state.tmux_socket),
+    )
 
 
 def test_a_container_with_no_reachable_tmux_refuses_and_names_the_remedy(

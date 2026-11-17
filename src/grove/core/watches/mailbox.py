@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from grove.core.contracts.mailboxes import MailboxSendRequest
 from grove.core.contracts.watches import WatchOutcome, WatchView
-from grove.core.instructions import GroveInstruction
 from grove.core.mailboxes import MailboxDelivery
 
 
@@ -43,15 +42,16 @@ class MailboxWatchCourier:
         because the scheduler's durable row must record what Grove actually
         observed and nothing more.
 
-        A phase reminder is Grove's own note rather than a callback anyone
+        A trigger is Grove's own instruction rather than a callback anyone
         registered, so it skips the peer envelope (a JSON document several times
-        the reminder's size) and goes through the stricter ``notify`` road,
-        which reaches only a live session and never revives one.
+        the instruction's size) and goes through the stricter ``notify`` road,
+        which reaches only a live session and never revives one. Its summary
+        arrives ALREADY fenced (``WorkspaceManager.trigger_text`` chooses the
+        kind: a reminder, or the brief's ``workspace`` block), so it is handed
+        over as is; fencing it here again nested one fence inside another.
         """
-        if watch.predicate.kind == "phase_nudge":
-            return self._delivery.notify(
-                watch.recipient, GroveInstruction.reminder(outcome.summary)
-            )
+        if watch.predicate.kind == "trigger":
+            return self._delivery.notify(watch.recipient, outcome.summary)
         receipt = self._delivery.send(
             MailboxSendRequest(
                 sender=watch.recipient,

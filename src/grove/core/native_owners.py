@@ -18,8 +18,10 @@ no owner here at all.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import ClassVar, Literal
+from uuid import uuid4
 
 from grove.core.contracts.mailboxes import MailboxAddress
 from grove.core.errors import GroveError
@@ -35,7 +37,34 @@ class OwnerUnavailable(GroveError):
 
 # Everything a worker can be told to do. `steer` submits text as the next user
 # input; the rest go to the provider's own control channel.
-ControlOp = Literal["steer", "interrupt", "set_model", "answer", "compact", "command", "macro"]
+ControlOp = Literal[
+    "steer",
+    "interrupt",
+    "set_model",
+    "set_effort",
+    "answer",
+    "compact",
+    "command",
+    "macro",
+    "watch",
+    "read",
+]
+
+
+@dataclass(slots=True, frozen=True)
+class WorktreeRead:
+    """What one command run in a worker's worktree answered.
+
+    ``output`` is the combined stdout and stderr, cut by the worker at
+    :attr:`OUTPUT_LIMIT` characters; ``returncode`` is ``-1`` for a command the
+    worker killed at its deadline.
+    """
+
+    #: The most output one read carries back over the channel.
+    OUTPUT_LIMIT: ClassVar[int] = 65_536
+
+    returncode: int
+    output: str
 
 
 @dataclass(slots=True, frozen=True)
@@ -75,6 +104,12 @@ class OwnerBinding:
     input_capacity: int | None = None
     input_ids: set[str] = field(default_factory=set)
     acknowledged_inputs: dict[str, str] = field(default_factory=dict)
+    # The worker declared it understands `watch`; an older one would queue an
+    # unknown op as prompt text, so nothing live is ever sent to it.
+    live: bool = False
+    # The worker declared it serves `read`; the same reason as `live`.
+    reads: bool = False
+    pending_reads: dict[str, asyncio.Future[WorktreeRead]] = field(default_factory=dict)
 
     def enqueue(self, frame: OwnerFrame) -> None:
         # Cancellation has one reserved, coalesced slot; text remains FIFO.
@@ -112,6 +147,8 @@ class NativeOwnerRegistry:
         *,
         input_capacity: int | None = None,
         pending_input_ids: tuple[str, ...] = (),
+        live: bool = False,
+        reads: bool = False,
     ) -> OwnerBinding:
         if not provider_session_id:
             raise OwnerUnavailable("invalid_registration", "a native owner needs its session id")
@@ -130,6 +167,8 @@ class NativeOwnerRegistry:
             input_capacity=input_capacity,
             input_ids=set(pending_input_ids),
             submitted=set(pending_input_ids),
+            live=live,
+            reads=reads,
         )
         self._bindings[identity.address] = binding
         return binding
@@ -138,6 +177,12 @@ class NativeOwnerRegistry:
         if self._bindings.get(binding.identity.address) is not binding:
             return
         binding.closed = True
+        for waiting in binding.pending_reads.values():
+            if not waiting.done():
+                waiting.set_exception(
+                    OwnerUnavailable("not_registered", "native owner went away mid-read")
+                )
+        binding.pending_reads.clear()
         while not binding.queue.empty():
             binding.queue.get_nowait()
         binding.interrupt_pending = False
@@ -180,12 +225,86 @@ class NativeOwnerRegistry:
             op == "steer" and binding.input_full(self.queue_capacity)
         ):
             raise OwnerUnavailable("backpressure", "native owner is not draining its queue")
+        # An input id survives reconnect in the worker's pending receipt set;
+        # this daemon-local sequence does not. A fresh daemon would otherwise
+        # reuse an id and the worker would correctly de-duplicate its new steer.
         message_id = (
-            f"own_{binding.sequence:08x}"
-            if op == "steer" and binding.input_capacity is not None
-            else ""
+            f"own_{uuid4().hex}" if op == "steer" and binding.input_capacity is not None else ""
         )
         binding.enqueue(OwnerFrame(message_id, text, op=op))
+
+    def watch(self, workspace_id: str, *, on: bool) -> bool:
+        """Tell the workspace's owner to start or stop publishing its live step.
+
+        Coalesced and backpressure-free on purpose: a watch toggle is display
+        state, so a full queue drops it rather than refusing a viewer, and the
+        next toggle re-states the whole truth. ``False`` when no live-capable
+        owner is connected — the viewer then simply sees no pulse.
+        """
+        binding = self.owner_for(workspace_id)
+        if binding is None or not binding.live or binding.queue.full():
+            return False
+        binding.enqueue(OwnerFrame("", "on" if on else "off", op="watch"))
+        return True
+
+    async def read(self, workspace_id: str, argv: list[str], *, timeout: float) -> WorktreeRead:
+        """Run ``argv`` in the owner's own worktree and wait for what it answered.
+
+        The worktree lives wherever the worker does, so this is the one road
+        to it for a workspace whose files are not on this host.
+
+        Raises:
+            OwnerUnavailable: No owner that serves reads is connected, its queue
+                is full, it went away, or it did not answer within ``timeout``.
+        """
+        return await self._ask(workspace_id, {"argv": argv}, timeout=timeout)
+
+    async def tail(self, workspace_id: str, lines: int, *, timeout: float) -> WorktreeRead:
+        """The last ``lines`` of the owner's own session transcript.
+
+        The worker finds the file itself, in its own namespace, because only it
+        knows where its provider wrote it. An empty ``output`` with status 0 is
+        a session with no transcript yet.
+
+        Raises:
+            OwnerUnavailable: As for :meth:`read`.
+        """
+        return await self._ask(workspace_id, {"tail": lines}, timeout=timeout)
+
+    async def _ask(
+        self, workspace_id: str, request: dict[str, object], *, timeout: float
+    ) -> WorktreeRead:
+        binding = self.owner_for(workspace_id)
+        if binding is None or not binding.reads:
+            raise OwnerUnavailable("not_registered", "workspace has no owner that serves reads")
+        if binding.queue_full(self.queue_capacity):
+            raise OwnerUnavailable("backpressure", "native owner is not draining its queue")
+        request_id = f"read_{uuid4().hex}"
+        answer: asyncio.Future[WorktreeRead] = asyncio.get_running_loop().create_future()
+        binding.pending_reads[request_id] = answer
+        frame = json.dumps({**request, "timeout": timeout})
+        binding.enqueue(OwnerFrame(request_id, frame, op="read"))
+        try:
+            return await asyncio.wait_for(answer, timeout)
+        except TimeoutError as exc:
+            raise OwnerUnavailable("timeout", "native owner did not answer the read") from exc
+        finally:
+            binding.pending_reads.pop(request_id, None)
+
+    def resolve_read(self, binding: OwnerBinding, request_id: str, result: WorktreeRead) -> None:
+        """Complete one pending read; an answer nobody is waiting for is dropped.
+
+        A late answer after the caller timed out is ordinary, so it is not an
+        error; a request id this owner was never sent is.
+        """
+        self.binding(binding.identity)
+        answer = binding.pending_reads.get(request_id)
+        if answer is None:
+            if not request_id.startswith("read_"):
+                raise OwnerUnavailable("unknown_submission", "not a read this owner was sent")
+            return
+        if not answer.done():
+            answer.set_result(result)
 
     async def next_frame(self, binding: OwnerBinding) -> OwnerFrame:
         while not binding.closed:
@@ -194,7 +313,7 @@ class NativeOwnerRegistry:
                 break
             if frame.op == "interrupt":
                 binding.interrupt_pending = False
-            if frame.message_id:
+            if frame.message_id and frame.op != "read":
                 binding.submitted.add(frame.message_id)
             return frame
         raise OwnerUnavailable("not_registered", "native binding was closed")
@@ -229,4 +348,5 @@ __all__ = [
     "OwnerFrame",
     "OwnerIdentity",
     "OwnerUnavailable",
+    "WorktreeRead",
 ]

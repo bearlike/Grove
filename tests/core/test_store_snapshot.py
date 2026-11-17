@@ -8,6 +8,7 @@ observable read or mutation behavior below.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,9 @@ import pytest
 
 from grove.core import paths
 from grove.core.errors import GroveError, WorkspaceNotFound
+from grove.core.runtimes import RemoteHandle
 from grove.core.store import JsonWorkspaceStore
-from grove.core.workspace import WorkspaceState, WorkspaceStatus
+from grove.core.workspace import Runtime, WorkspaceState, WorkspaceStatus
 
 
 def _state(workspace_id: str, repo_root: str) -> WorkspaceState:
@@ -144,3 +146,12 @@ def test_corrupt_external_replacement_raises_instead_of_serving_cached_state(
 
     with pytest.raises(GroveError, match="corrupt state file"):
         reader.load_all()
+
+
+def test_a_remote_handle_survives_a_fresh_store_read(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    handle = RemoteHandle(runtime="gcp", ref="grove-worker-7")
+    state = replace(_state("r" * 32, str(tmp_path)), runtime=Runtime.REMOTE, remote=handle)
+    JsonWorkspaceStore(path).save(state)
+    found = JsonWorkspaceStore(path).get(state.id)
+    assert (found.runtime, found.remote) == (Runtime.REMOTE, handle)

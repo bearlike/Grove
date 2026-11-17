@@ -182,14 +182,27 @@ class GroveInstruction:
         """
         return cls.wrap("reminder", body)
 
-    @classmethod
-    def is_reminder(cls, text: str) -> bool:
-        """Whether *text* opens with a daemon reminder: the reader half of :meth:`reminder`.
+    #: The greeting a native worker sends a fresh session that has no other
+    #: way to exist before its first task. It carries no fence because it is
+    #: the provider's first user turn.
+    BOOT: Final = (
+        "Initialize this Grove-owned native session. Reply READY only; "
+        "do not run tools. The workspace task will arrive after registration."
+    )
 
-        Lives beside the renderer so the transcript adapters classify the one
-        format this module writes, rather than re-deriving the opening tag.
+    @classmethod
+    def is_authored(cls, text: str) -> bool:
+        """Whether *text* is a whole message Grove sent on its own: it OPENS with the fence.
+
+        The reader half of :meth:`reminder` and :meth:`workspace`, the two
+        bodies the daemon's trigger rules deliver as a message of their own.
+        Opening position is the discriminator: an attachments block or an
+        answer batch is appended AFTER a person's words, so a message that
+        merely contains a fence is still that person's turn. Lives beside the
+        renderers so the transcript adapters classify the one format this
+        module writes rather than re-deriving the tag.
         """
-        return text.lstrip().startswith(f'<{cls.TAG} kind="reminder">')
+        return text.lstrip().startswith(f"<{cls.TAG} kind=")
 
     @classmethod
     def unwrap(cls, text: str) -> str:

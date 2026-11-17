@@ -80,14 +80,13 @@ from __future__ import annotations
 
 import os
 import re
-import secrets
 import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import humanize
 import typer
@@ -103,7 +102,6 @@ from grove.core import (
     NewNamedBranch,
     RepoRegistry,
     RootBranch,
-    Runtime,
     SessionExplorer,
     SessionListing,
     TrackRemoteBranch,
@@ -116,6 +114,7 @@ from grove.core import (
 )
 from grove.core.agents import SessionTurn, TodoList
 from grove.core.contracts.activity import DashboardSnapshotView
+from grove.core.contracts.artifacts import ArtifactRef
 from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.views import WorkspaceDefaultsView, WorkspaceStateView
 from grove.core.issueops import HandoverKey, PickupEngine
@@ -128,24 +127,26 @@ from grove.core.phase import (
 )
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tmux import AttachInstruction
+from grove.core.workspace import WorkspaceTitle
 from grove.tui.cli_complete import Complete
 
 
 @dataclass(frozen=True, slots=True)
 class BranchFlags:
-    """The four mutually-exclusive branch-source flags + the shared ``--base``.
+    """The five mutually-exclusive branch-source flags + the shared ``--base``.
 
     One atomic value object owning the policy "which flag becomes which
     :class:`BranchPlan` variant, and which combinations are illegal". Keeping
     it off the Typer command body lets the mapping be exercised directly in a
     unit test (no ``CliRunner``), and keeps the command a thin shell.
 
-    Mutual exclusion: at most one of ``branch`` / ``checkout`` / ``track`` /
-    ``root`` may be set. ``base`` is a modifier that only makes sense for the
-    two variants that create a *new* branch off a ref (Auto, NewNamed); it is
-    rejected against ``--checkout``/``--track``/``--root`` rather than silently
-    ignored, so a wrong invocation fails loudly instead of doing the wrong
-    thing quietly.
+    Mutual exclusion: at most one of ``worktree`` / ``branch`` / ``checkout`` /
+    ``track`` / ``root`` may be set. With none set (and no ``base``) the request
+    omits its plan and the engine resolves it, the current checkout by default.
+    ``base`` is a modifier that only makes sense for the two variants that
+    create a *new* branch off a ref (Auto, NewNamed); it is rejected against
+    ``--checkout``/``--track``/``--root`` rather than silently ignored, so a
+    wrong invocation fails loudly instead of doing the wrong thing quietly.
     """
 
     branch: str | None = None
@@ -153,6 +154,7 @@ class BranchFlags:
     track: str | None = None
     root: bool = False
     base: str | None = None
+    worktree: bool = False
 
     def to_plan(self) -> BranchPlan:
         """Resolve the flags to a single :class:`BranchPlan`, or raise.
@@ -164,6 +166,7 @@ class BranchFlags:
         chosen = [
             name
             for name, on in (
+                ("--worktree", self.worktree),
                 ("--branch", self.branch is not None),
                 ("--checkout", self.checkout is not None),
                 ("--track", self.track is not None),
@@ -189,20 +192,21 @@ class BranchFlags:
             return TrackRemoteBranch(remote_ref=self.track)
         if self.branch is not None:
             return NewNamedBranch(name=self.branch, base_ref=self.base or "HEAD")
-        # No branch flag → the default: slug the title off the base.
+        # --worktree, or a bare --base: slug the title off the base.
         return AutoBranch(base_ref=self.base or "HEAD")
 
     @property
     def any_set(self) -> bool:
         """Whether the user picked a branch source at all.
 
-        The discriminator for "may a saved ``branch_mode`` default apply here":
-        an explicit flag always wins, so the default is only consulted when
-        every one of them is unset. ``base`` is excluded deliberately — it
-        modifies whichever source is chosen rather than choosing one.
+        The discriminator for "send a plan or let the engine resolve one": an
+        explicit flag always wins, and ``base`` counts, because a base only
+        means anything for a freshly created branch.
         """
         return (
-            self.branch is not None
+            self.worktree
+            or self.base is not None
+            or self.branch is not None
             or self.checkout is not None
             or self.track is not None
             or self.root
@@ -211,20 +215,13 @@ class BranchFlags:
 
 @dataclass(frozen=True, slots=True)
 class QuickCreate:
-    """What a ``grove create`` flag left unset resolves to.
+    """What ``grove create`` decides itself before the engine resolves the rest.
 
-    The precedence is explicit flag > saved default > the engine's own
-    per-field cascade. :class:`WorkspaceDefaultsView` has already folded the
-    last two together for ``model``/``runtime``/``brief``/``base_ref``, so the
-    command can forward those straight through. This class owns the two answers
-    that resolution does *not* cover, plus the generated title:
-
-    * **agent** — ``CreateWorkspaceRequest.agent_name`` is required, so an
-      unset flag with no saved default has to fail here rather than reach the
-      engine as an empty string.
-    * **branch plan** — nothing engine-side consults ``branch_mode``; the TUI
-      applies it while building its request, so every other client must too or
-      it silently discards the user's saved branch default.
+    Every launch field a flag leaves unset is omitted from the request, and the
+    engine's ``LaunchResolver`` answers it (saved project default, then user
+    default, then built-in) exactly as it does for every other client. This
+    class owns only the one thing that resolution does not: the generated
+    title.
 
     Kept off the Typer command body for the same reason as
     :class:`BranchFlags`: the policy is unit-testable without ``CliRunner``.
@@ -232,49 +229,15 @@ class QuickCreate:
 
     defaults: WorkspaceDefaultsView
 
-    #: Width of the generated title's random suffix, in hex characters. Six is
-    #: ~16.7M values — collision-proof enough for one human's workspace list,
-    #: and short enough to stay readable in a `grove ls` row.
-    ID_HEX_CHARS: ClassVar[int] = 6
-
     def title(self, explicit: str | None) -> str:
-        """A human's title, or a generated short id standing in for one.
+        """A human's title, or the engine's generated ``wk-`` name standing in for one.
 
         Neither a title nor a prompt belongs before the workspace exists — a
-        person names a task once they have started it — so the quick path mints
-        an identifier that seeds the worktree path and tmux session name and
-        stays renameable afterwards. This is also why ``WorkspaceDefaults``
-        refuses to store a title: it names one task, never a default.
+        person names a task once they have started it. The generated name is
+        the one rule every client shares (:class:`WorkspaceTitle`), and the
+        agent is asked to replace it once it knows the task.
         """
-        if explicit is not None:
-            return explicit
-        return f"wk-{secrets.token_hex(self.ID_HEX_CHARS // 2)}"
-
-    def agent(self, explicit: str | None) -> str:
-        """The agent to launch, or a loud refusal naming the way to set one."""
-        chosen = explicit or self.defaults.agent
-        if not chosen:
-            raise GroveError(
-                "no agent given and no saved default; pass --agent (see "
-                "`grove config show`) or save one from the TUI create form"
-            )
-        return chosen
-
-    def branch_plan(self, flags: BranchFlags) -> BranchPlan:
-        """Honour an explicit branch flag, else the saved ``branch_mode``.
-
-        Only ``root`` and the two name-less new-branch modes are reachable from
-        a default: ``WorkspaceDefaults`` deliberately stores no concrete branch
-        or remote name, so ``existing``/``remote`` have nothing to check out and
-        fall through to Auto — which is what a create with no name would do
-        anyway. ``new`` collapses onto Auto for the same reason: with no saved
-        name, "create a fresh branch" *is* Auto.
-        """
-        if flags.any_set:
-            return flags.to_plan()
-        if self.defaults.branch_mode == "root":
-            return RootBranch()
-        return AutoBranch(base_ref=flags.base or self.defaults.base_ref or "HEAD")
+        return explicit if explicit is not None else WorkspaceTitle.generate()
 
 
 # Same prompt/role glyphs the TUI transcript surfaces use (cli_sessions mirrors
@@ -290,15 +253,13 @@ _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 # convention, not code.
 _TODO_GLYPH: dict[str, str] = {"pending": "☐", "in_progress": "▸", "completed": "✓"}
 
-# Module-level singleton, not an inline `typer.Option(...)` default: ruff's
-# B008 only exempts typer's own calls for primitive-typed params, and
-# `Runtime | None` isn't one (the mcp/tools.py `_AUTO_BRANCH` precedent).
 _RUNTIME_OPTION = typer.Option(
     None,
     "--runtime",
-    help="Where to run the agent: host or container. Omit to use the "
-    "configured default (container.enabled). Create-time only, never "
-    "editable — see `grove respawn` to promote a fallback workspace.",
+    help="Where to run the agent: host, container, or the name of a configured "
+    "remote runtime (a runtimes.<name> block, e.g. --runtime sandbox). Omit to "
+    "use the configured default. Create-time only, never editable.",
+    autocompletion=Complete.runtimes,
 )
 
 # Three-valued like `--runtime`, and a module-level singleton for the same B008
@@ -901,6 +862,12 @@ def create_workspace(
         "gpt-5.5). Any id accepted; omit for the tool's default.",
         autocompletion=Complete.models,
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort for the agent tool (claude: low…max · codex: minimal…xhigh). "
+        "Must be a level the agent lists; omit for the tool's default.",
+    ),
     branch: str | None = typer.Option(
         None,
         "--branch",
@@ -925,6 +892,14 @@ def create_workspace(
         "(e.g. --track origin/feature/login).",
         autocompletion=Complete.remote_branches,
     ),
+    worktree: bool = typer.Option(
+        False,
+        "--worktree",
+        "-w",
+        help="Work in an isolated worktree on a fresh branch named from the title, "
+        "off --base. Without a branch flag the workspace uses your saved branch mode, "
+        "else the current checkout.",
+    ),
     root: bool = typer.Option(
         False,
         "--root",
@@ -944,7 +919,13 @@ def create_workspace(
     no_init: bool = typer.Option(
         False, "--no-init", help="Skip the init script for this create only."
     ),
-    runtime: Runtime | None = _RUNTIME_OPTION,
+    runtime: str | None = _RUNTIME_OPTION,
+    node: str | None = typer.Option(
+        None,
+        "--node",
+        help="On a federation hub, the connected node to create on, by name. "
+        "Omit to let the hub pick a node that fits.",
+    ),
     brief: bool | None = _BRIEF_OPTION,
     native: bool | None = _NATIVE_OPTION,
     prompt: str | None = typer.Option(
@@ -986,18 +967,17 @@ def create_workspace(
 ) -> None:
     """Create a workspace and launch its agent (in-process, like the TUI).
 
-    With no arguments at all this resolves your saved project defaults, mints a
-    short id for the title, creates the workspace and drops you into it — an
-    explicit flag beats a saved default, a saved default beats the per-field
-    cascade. With no branch flag Grove auto-creates
-    ``{branch_prefix}{slug(title)}-{ts}`` off ``--base`` (default HEAD) unless
-    your saved ``branch_mode`` says otherwise. Pick exactly one branch flag to
-    override the source:
+    With no arguments at all this resolves your saved defaults (a project's
+    beat your own), mints a short id for the title, creates the workspace and
+    drops you into it. An explicit flag beats any saved default. With nothing
+    saved, the agent runs on the host in the current checkout, with no new
+    branch or worktree. Pick exactly one branch flag to choose otherwise:
 
     \b
       grove create                            # saved defaults, created, attached
       grove create --agent codex              # same, agent overridden
       grove create --cwd webapp               # agent starts in ./webapp
+      grove create "fix login" --worktree     # isolated worktree, fresh branch
       grove create "fix login" --agent claude
       grove create "fix login" --agent claude --branch fix/login --base origin/main
       grove create "review pr" --agent claude --checkout existing-wip
@@ -1012,22 +992,35 @@ def create_workspace(
     with clean_exit():
         manager = build()
         quick = QuickCreate(defaults=WorkspaceDefaultsView.from_config(manager.config))
-        flags = BranchFlags(branch=branch, checkout=checkout, track=track, root=root, base=base)
+        flags = BranchFlags(
+            branch=branch,
+            checkout=checkout,
+            track=track,
+            root=root,
+            base=base,
+            worktree=worktree,
+        )
+        explicit: dict[str, object] = {}
+        if flags.any_set:
+            explicit["branch_plan"] = flags.to_plan()
+        if no_init:
+            explicit["skip_init"] = True
+        if prompt is not None:
+            explicit["initial_prompt"] = prompt
         request = CreateWorkspaceRequest(
-            agent_name=quick.agent(agent),
+            agent_name=agent,
             title=quick.title(title),
             description=description,
-            branch_plan=quick.branch_plan(flags),
-            # Four fields left UNSET when the user named none: the engine
-            # resolves an omitted one from the same saved `defaults` this
-            # command used to re-apply itself. Passing the resolved answer back
-            # would pin today's config onto the workspace forever, and the copy
-            # of the resolution here is exactly what drifted from the engine's.
-            skip_init=True if no_init else None,
-            initial_prompt=prompt,
+            # Every launch field left UNSET when the user named none: the
+            # engine resolves an omitted one (agent and branch plan included)
+            # from the saved `defaults`. Passing a resolved answer back would
+            # pin today's config onto the workspace forever.
+            **explicit,
             resume_session_id=resume_session,
             model=model,
-            runtime=runtime,
+            effort=effort,
+            **CreateWorkspaceRequest.runtime_fields(runtime),
+            node=node,
             brief=brief,
             native=native,
             project_cwd=Path(cwd) if cwd is not None else None,
@@ -1062,9 +1055,11 @@ def _exec_attach(instruction: AttachInstruction) -> None:
 
     A native workspace's pane is Grove's worker printing protocol frames, and
     the attach is read-only so a stray Ctrl-C cannot kill the session's owner.
-    Inside an outer tmux the way in is `switch-client`, whose `-r` TOGGLES the
-    client's flag rather than setting it, so that arm stays writable — and the
-    notice is the one place a person is told to keep their hands off the pane.
+    Inside an outer tmux the way in is `switch-client` (or, for a workspace on
+    its own tmux server, a new outer window running the attach), and
+    `switch-client -r` TOGGLES the client's flag rather than setting it, so
+    that arm stays writable — and the notice is the one place a person is told
+    to keep their hands off the pane.
     The binary is resolved off PATH by design (tmux is Grove's one hard runtime
     dep; a missing one surfaces as the OS's exec error).
     """
@@ -1165,6 +1160,24 @@ def respawn_workspace(workspace: str = _WORKSPACE_ARG) -> None:
         manager, state = resolve_workspace(workspace)
         manager.respawn(state.id)
         typer.secho(f"respawned {state.id} ({state.title})", fg=typer.colors.GREEN)
+
+
+def fork_workspace(workspace: str = _WORKSPACE_ARG) -> None:
+    """Fork a workspace's conversation into a new workspace.
+
+    The new workspace gets its own worktree on a branch cut from the source's
+    branch, and its agent starts from a copy of the source conversation. The
+    source keeps running. Claude Code and Codex agents only.
+
+    \b
+      grove fork a1b2
+    """
+    with clean_exit():
+        manager, state = resolve_workspace(workspace)
+        fork = manager.fork(state.id)
+        typer.secho(f"forked {state.id} into {fork.id} ({fork.title})", fg=typer.colors.GREEN)
+        typer.echo(f"  branch:   {fork.branch}")
+        typer.echo(f"  worktree: {fork.worktree_path}")
 
 
 def kill_workspace(
@@ -1671,6 +1684,92 @@ def tickets_detach(
         _emit_ticket_refs(_resolve_refs(manager, updated.ticket_refs))
 
 
+artifacts_app = typer.Typer(
+    name="artifacts",
+    help="Attach, list, and detach files and links a workspace hands back.",
+    no_args_is_help=True,
+)
+
+
+def _emit_artifact_refs(refs: Sequence[ArtifactRef]) -> None:
+    """Every attached artifact as one terminal line: id, kind, title, target."""
+    if not refs:
+        typer.echo("  (no artifacts attached)")
+        return
+    for ref in refs:
+        name = ref.title or Path(ref.target).name or ref.target
+        link = ref.target if ref.kind == "link" else Path(ref.target).as_uri()
+        typer.echo(f"  {ref.id}  ({ref.kind})  {_hyperlink(_truncate(name, cap=60), link)}")
+
+
+def artifacts_attach(
+    target: str = typer.Argument(..., help="An http(s) URL, or a path to an existing file."),
+    *,
+    title: str | None = typer.Option(
+        None, "--title", "-t", help="Label shown in place of the name."
+    ),
+    workspace: str | None = _TICKET_WORKSPACE_OPTION,
+) -> None:
+    """Attach a file or a link to a workspace so it can be opened from the
+    dashboard: a plan, a report, a ``.drawio`` diagram, an external document.
+    Grove stores the pointer only, so the dashboard always shows the file as it
+    is now. A file must sit under the workspace checkout, the project root or
+    an allowed host directory (``/tmp`` unless ``artifacts.roots`` says more).
+    Idempotent: the same target again is a no-op, a new title renames it.
+
+    \b
+      grove artifacts attach docs/plan.md --title "Plan"
+      grove artifacts attach /tmp/report.html
+      grove artifacts attach https://example.com/design-doc
+    """
+    with clean_exit():
+        manager, state = resolve_or_infer_workspace(workspace)
+        # A path is relative to where the CALLER stands, which the engine
+        # cannot see: it would resolve against the workspace checkout instead.
+        if "://" not in target:
+            target = str(Path(target).expanduser().absolute())
+        updated = manager.attach_artifact(state.id, target, title)
+        typer.secho(f"attached to {state.id} ({state.title})", fg=typer.colors.GREEN)
+        _emit_artifact_refs(updated.artifact_refs)
+
+
+def artifacts_list(*, workspace: str | None = _TICKET_WORKSPACE_OPTION) -> None:
+    """List the artifacts attached to a workspace."""
+    with clean_exit():
+        _manager, state = resolve_or_infer_workspace(workspace)
+        typer.secho(f"{state.id}  {state.title}", fg=typer.colors.GREEN, bold=True)
+        _emit_artifact_refs(state.artifact_refs)
+
+
+def artifacts_detach(
+    ref: str = typer.Argument(
+        ..., help="The artifact id, or the URL or path it was attached with."
+    ),
+    *,
+    workspace: str | None = _TICKET_WORKSPACE_OPTION,
+) -> None:
+    """Detach an artifact from a workspace. Idempotent.
+
+    \b
+      grove artifacts detach docs/plan.md
+      grove artifacts detach 3f9a1c0b7d2e
+    """
+    with clean_exit():
+        manager, state = resolve_or_infer_workspace(workspace)
+        # Same caller-relative rule as attach. An id or a URL is not a path on
+        # disk, so only a ref that names an existing file is absolutized.
+        if "://" not in ref and Path(ref).expanduser().exists():
+            ref = str(Path(ref).expanduser().absolute())
+        updated = manager.detach_artifact(state.id, ref)
+        typer.secho(f"detached from {state.id}", fg=typer.colors.GREEN)
+        _emit_artifact_refs(updated.artifact_refs)
+
+
+artifacts_app.command("attach")(artifacts_attach)
+artifacts_app.command("list")(artifacts_list)
+artifacts_app.command("detach")(artifacts_detach)
+
+
 def _handover_key(manager: WorkspaceManager, ref: str) -> HandoverKey:
     """Resolve human-typed text to the durable key both this CLI and the poll use."""
     selector = manager.ticket_providers.resolve_link(ref)
@@ -1764,6 +1863,7 @@ def register(app: typer.Typer) -> None:
     app.command("pause")(pause_workspace)
     app.command("resume")(resume_workspace)
     app.command("respawn")(respawn_workspace)
+    app.command("fork")(fork_workspace)
     app.command("kill")(kill_workspace)
     app.command("attach")(attach_workspace)
     app.command("show")(show_workspace)
@@ -1771,6 +1871,7 @@ def register(app: typer.Typer) -> None:
     app.command("phase")(phase_workspace)
     app.command("fleet")(fleet_status)
     app.add_typer(tickets_app, name="tickets")
+    app.add_typer(artifacts_app, name="artifacts")
 
 
 __all__ = [

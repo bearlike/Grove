@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   activeFilterCount,
@@ -37,6 +37,28 @@ const ids = (rows: readonly { workspace: { state: { id: string } } }[]): string[
 describe("sortedFleetRows", () => {
   it("flattens every project into one list, newest activity first", () => {
     expect(ids(sortedFleetRows(FLEET))).toEqual(["newest", "middle", "oldest"]);
+  });
+
+  it("parses activity only once per row during sorting", () => {
+    const parse = vi.spyOn(Date, "parse");
+    try {
+      for (const project of FLEET.projects) {
+        for (const workspace of project.workspaces) lastActivityAt(workspace);
+      }
+      const expected = parse.mock.calls.length;
+      expect(expected).toBeGreaterThan(0);
+      const fresh = { ...FLEET, projects: FLEET.projects.map((project) => ({
+        ...project, workspaces: project.workspaces.map((workspace) => ({ ...workspace })),
+      })) };
+      parse.mockClear();
+      sortedFleetRows(fresh);
+      expect(parse).toHaveBeenCalledTimes(expected);
+      parse.mockClear();
+      sortedFleetRows(fresh);
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it("is empty, not thrown, for a snapshot that has not arrived", () => {
@@ -181,7 +203,7 @@ describe("lastActivityAt", () => {
     expect(at).toBe(Date.parse("2026-08-09T00:00:00Z"));
   });
 
-  it("falls back to the record's own timestamps when no agent has reported", () => {
+  it("falls back to creation when no agent has reported, never to the record's write time", () => {
     const at = lastActivityAt(
       workspace({
         id: "w",
@@ -190,7 +212,20 @@ describe("lastActivityAt", () => {
         updatedAt: "2026-08-04T00:00:00Z",
       }),
     );
-    expect(at).toBe(Date.parse("2026-08-04T00:00:00Z"));
+    expect(at).toBe(Date.parse("2026-08-03T00:00:00Z"));
+  });
+
+  it("does not let a rename (updated_at) outrank an agent's real reply (#919)", () => {
+    const renamed = workspace({
+      id: "renamed",
+      lastEventAt: "2026-08-01T00:00:00Z",
+      updatedAt: "2026-08-10T00:00:00Z",
+    });
+    const replied = workspace({ id: "replied", lastEventAt: "2026-08-05T00:00:00Z" });
+    const order = sortedFleetRows(snapshot([project("g", "/g", [renamed, replied])])).map(
+      (row) => row.workspace.state.id,
+    );
+    expect(order).toEqual(["replied", "renamed"]);
   });
 
   it("sorts a brand-new session-less workspace to the top, where its creator is looking", () => {

@@ -65,6 +65,8 @@ export interface FooterContext {
   readonly contextUnavailable?: AgentActivityView["context_unavailable_reason"];
   /** Where the agent runs. A fixed property of the workspace, not a state. */
   readonly runtime?: WorkspaceStateView["runtime"] | null;
+  /** For a remote workspace, the `runtimes.<name>` block it actually runs on. */
+  readonly remoteRuntime?: string | null;
   /** This workspace's own uncommitted and branch-delta git facts. */
   readonly git?: GitFacts | null;
 }
@@ -101,6 +103,7 @@ export const EMPTY_CONTEXT: FooterContext = {
   contextWindow: null,
   contextUnavailable: null,
   runtime: null,
+  remoteRuntime: null,
   git: null,
 };
 
@@ -137,6 +140,7 @@ export function workspaceContext(
         contextWindow: primary?.activity.context ?? null,
         contextUnavailable: primary?.activity.context_unavailable_reason ?? null,
         runtime: row.state.runtime ?? null,
+        remoteRuntime: row.state.remote_runtime ?? null,
         git: {
           ahead: row.base_ahead,
           behind: row.base_behind,
@@ -465,8 +469,8 @@ export function accountShortLabel(account: BillingAccountView): string {
   return [provider, plan, tier?.detail].filter(Boolean).join(" ");
 }
 
-/** Each provider's own spelling, so the strip does not print a wire enum. */
-const PROVIDER_LABEL: Partial<Record<BillingAccountView["provider"], string>> = {
+/** Each agent kind's own spelling, so no surface prints a wire enum. */
+export const PROVIDER_LABEL: Partial<Record<BillingAccountView["provider"], string>> = {
   claude_code: "Claude",
   codex: "Codex",
   opencode: "OpenCode",

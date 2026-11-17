@@ -185,6 +185,7 @@ export function offeredPanelTabs(
   );
 }
 
+
 /** The workspace's two panes; `split` shows both at once. */
 export type PaneView = "transcript" | "work" | "split";
 
@@ -772,7 +773,7 @@ export type TicketRollup = {
   fraction: number;
 };
 
-const TASK_PHASES: readonly TaskPhase[] = [
+export const TASK_PHASES: readonly TaskPhase[] = [
   "scope",
   "plan",
   "build",

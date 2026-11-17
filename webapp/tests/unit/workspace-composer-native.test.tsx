@@ -93,18 +93,39 @@ describe("the reply composer is the vendored anatomy", () => {
     expect(text).toContain("s.thread.capabilities.dictation");
   });
 
-  it("puts attach alone on the left and everything else against send", () => {
+  it("puts attach, model and effort on the left and context, mic and send on the right", () => {
     const text = code(SURFACE);
-    const attach = text.indexOf("<ComposerAttachButton");
-    const actions = text.indexOf("<ComposerActions", attach);
-    const send = text.indexOf("<SendOrCancel");
-    expect(attach).toBeGreaterThan(0);
-    expect(actions).toBeGreaterThan(attach);
-    expect(send).toBeGreaterThan(actions);
-    for (const control of ["<WorkspaceContext", "<ComposerModel", "{expandControl}", "<NativeInterrupt"]) {
-      const at = text.indexOf(control, actions);
-      expect(at, control).toBeGreaterThan(actions);
-      expect(at, control).toBeLessThan(send);
+    const left = text.indexOf("<ComposerActions");
+    const right = text.indexOf("<ComposerActions", left + 1);
+    expect(left).toBeGreaterThan(0);
+    expect(right).toBeGreaterThan(left);
+    const order = (controls: readonly string[], from: number, to: number) => {
+      let last = from;
+      for (const control of controls) {
+        const at = text.indexOf(control, last);
+        expect(at, control).toBeGreaterThan(last - 1);
+        expect(at, control).toBeLessThan(to);
+        last = at;
+      }
+    };
+    order(["<ComposerAttachButton", "<ComposerModel", "<ComposerEffort", "{expandControl}"], left, right);
+    const end = text.indexOf("</ComposerToolbar>", right);
+    order(["<WorkspaceContext", "<NativeInterrupt", "<Dictation", "<SendOrCancel"], right, end);
+  });
+
+  it("replaces the editor AND toolbar with the recorder while dictation is live", () => {
+    const text = code(SURFACE);
+    expect(text).toMatch(/dictating \? \(\s*<DictationBar transcribing=/);
+    // The runtime's own state decides it, never a local flag that could drift.
+    expect(text).toContain("state.composer.dictation != null");
+    // The input sits in the other branch, so cancel finds the draft in the runtime.
+    expect(text.indexOf("<DictationBar ")).toBeLessThan(text.indexOf("<ComposerPrimitive.Input"));
+  });
+
+  it("gives every composer control a native tooltip", () => {
+    const text = code(SURFACE);
+    for (const tip of ["Add attachment", "Dictate", "Send message", "Stop generating", "Cancel dictation"]) {
+      expect(text, tip).toContain(`tip="${tip}"`);
     }
   });
 });

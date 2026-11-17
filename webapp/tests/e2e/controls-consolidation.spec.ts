@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { openSharpSurface } from "./sharp-surface-probe";
 
-test("Controls retains six cards and bounded icon-label targets at 300px", async ({ page }) => {
+test("Controls retains seven cards and bounded icon-label targets at 300px", async ({ page }) => {
   await page.route("**/api/grove/share-policy**", route => route.fulfill({ json: { ttl_seconds: 604800, passcode_set: false } }));
   await openSharpSurface(page, "controls", 300, "dark");
   const controls = page.getByTestId("controls-tab");
   await expect(controls.locator('[data-slot="card-title"]')).toHaveText([
-    "Session", "Send keys", "Sharing", "Commands", "Skills", "MCP servers",
+    "Session", "Send keys", "Sharing", "Artifacts", "Commands", "Skills", "MCP servers",
   ]);
   const buttons = controls.locator('button[data-slot="button"]');
   const census = await buttons.evaluateAll(elements => elements.map(element => {

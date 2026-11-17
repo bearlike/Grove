@@ -66,9 +66,12 @@ class CodexNativeOwner:
         emit: Callable[[str], None] | None = None,
         asks: AskRecorder | None = None,
         trace: FrameTrace | None = None,
+        fork_from: str | None = None,
     ) -> None:
         self.command = tuple(command)
         self.cwd = cwd
+        # The thread a forking create copies; `None` starts a fresh one.
+        self.fork_from = fork_from
         self.env = dict(env) if env is not None else None
         self.timeout_seconds = timeout_seconds
         self.emit = emit
@@ -92,6 +95,18 @@ class CodexNativeOwner:
 
         `thread/resume` is intentionally absent: a mailbox may never cold-load or
         attach to a thread an operator did not explicitly register as its owner.
+        A fork is still a NEW thread: `thread/fork` copies `fork_from` into a
+        thread Codex mints, anchored at this owner's cwd (measured 0.167.0), and
+        the source thread is never attached to.
+
+        Args:
+            initial_prompt: The first turn to submit, or empty for none.
+
+        Returns:
+            The owned thread's id.
+
+        Raises:
+            RuntimeError: The app server did not initialize or name a thread.
         """
         if self._thread_id is not None:
             return self._thread_id
@@ -105,7 +120,12 @@ class CodexNativeOwner:
         )
         if initialized is None:
             raise RuntimeError("Codex app server did not initialize")
-        started = await self._request("thread/start", {"cwd": str(self.cwd)})
+        if self.fork_from is None:
+            started = await self._request("thread/start", {"cwd": str(self.cwd)})
+        else:
+            started = await self._request(
+                "thread/fork", {"threadId": self.fork_from, "cwd": str(self.cwd)}
+            )
         thread = started.get("thread") if isinstance(started, dict) else None
         thread_id = thread.get("id") if isinstance(thread, dict) else None
         if not isinstance(thread_id, str) or not thread_id:
@@ -173,6 +193,18 @@ class CodexNativeOwner:
             return False
         return await self._control(
             "thread/settings/update", {"threadId": self._thread_id, "model": model}
+        )
+
+    async def set_effort(self, effort: str) -> bool:
+        """``thread/settings/update {effort}`` for every subsequent turn.
+
+        The same verb and the same ack-before-validation semantics as
+        :meth:`set_model`: ``True`` means the setting was recorded.
+        """
+        if self._thread_id is None:
+            return False
+        return await self._control(
+            "thread/settings/update", {"threadId": self._thread_id, "effort": effort}
         )
 
     async def compact(self) -> bool:

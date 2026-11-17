@@ -158,7 +158,7 @@ unit and any PATH drop-in keep working untouched.
 
 ## 4. Refresh each running surface
 
-The checkout's own `./reinstall.sh` does the reinstall, the webapp rebuild, the
+The checkout's own `./tools/reinstall.sh` does the reinstall, the webapp rebuild, the
 restarts and the verification pass below in one run, recovering ports and unit
 names live (`--no-reinstall` / `--no-webapp` / `--no-daemon` / `--no-mcp` narrow
 it). It builds on the Node inside Grove's venv, never the host's, and it is safe
@@ -263,7 +263,7 @@ Check the layers in order — server-side first, then client:
    grep -rl '<new-marker>' "$(grove web --check | sed -n 's/^dashboard: *//p')/.next/static" | head
    ```
    A unit whose `ExecStart` still reads `npm run start` predates `grove web` and
-   serves `webapp/.next` instead; `./reinstall.sh` migrates it.
+   serves `webapp/.next` instead; `./tools/reinstall.sh` migrates it.
 2. **Build is fresh but the browser still shows old.** New behavior with an old
    *layout* is the classic signature of a **cached HTML document / stylesheet**.
    Next.js content-hashes CSS, but a browser that served the whole page from

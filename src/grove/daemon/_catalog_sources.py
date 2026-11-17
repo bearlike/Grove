@@ -258,6 +258,15 @@ class _CatalogSources:
         """A source-level gap has the same explicit repair as inbox overflow."""
         self._request_recovery()
 
+    def rescan(self) -> None:
+        """Rebuild both indexes once, e.g. after the set of known repos changed.
+
+        A no-op until ``start`` has armed the group: startup's own bootstrap
+        already reads the current repo set.
+        """
+        if self._started:
+            self._request_recovery()
+
     def _request_recovery(self) -> None:
         if self._closed:
             return

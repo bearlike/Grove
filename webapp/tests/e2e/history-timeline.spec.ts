@@ -170,7 +170,8 @@ async function openHistory(
     );
   }
   await page.goto(`/w/${workspaceId}`);
-  await expect(page.getByTestId("work-panel")).toBeVisible();
+  // First wait after a cold `/w/<id>` load: `next dev` compiles the route on demand.
+  await expect(page.getByTestId("work-panel")).toBeVisible({ timeout: 60_000 });
   await page.getByTestId("pane-work").click();
   await page.getByTestId("work-panel-tab-info").click();
   await expect(page.getByTestId("workspace-history-trigger")).toBeVisible();

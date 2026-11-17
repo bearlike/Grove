@@ -56,19 +56,15 @@ describe("the Grove status is a report, not a prompt", () => {
 describe("the same labelled change vocabulary reaches both surfaces", () => {
   const ws = { ...workspace({ id: "changed" }), diff_added: 12345, diff_removed: 25, dirty_files: 3, base_ahead: 7, base_behind: 2, queue: { pending: 4 } };
 
-  it("shows signed deltas and current dirty paths in the rail", () => {
-    const html = renderToStaticMarkup(<SessionMetadata workspace={ws} />);
-    expect(html).toContain("+12.3K");
-    expect(html).toContain("−25");
-    expect(html).toContain("3 uncommitted files in the worktree");
-    expect(html).toContain("12,345 lines added on the branch since its diff base");
-    expect(html).toContain("text-success");
-    expect(html).toContain("text-destructive");
-    // The dirty count is neutral in the rail: nearly every live row has one,
-    // so amber on each was a column of warnings. The card keeps the amber.
-    const dirty = html.slice(html.indexOf('data-testid="rail-dirty"'));
-    expect(dirty.slice(0, dirty.indexOf("</span></span>"))).not.toContain("text-warning");
-    expect(renderToStaticMarkup(<WorkspaceMetrics workspace={ws} />)).toContain("text-warning");
+  it("keeps the change figures on the card and off the two-line rail row", () => {
+    const rail = renderToStaticMarkup(<SessionMetadata workspace={ws} />);
+    for (const gone of ["rail-ledger", "rail-dirty", "rail-added", "rail-removed", "rail-divider", "+12.3K"]) {
+      expect(rail, gone).not.toContain(gone);
+    }
+    expect(rail).toContain('data-testid="rail-times"');
+    const card = renderToStaticMarkup(<WorkspaceMetrics workspace={ws} />);
+    expect(card).toContain("+12.3K");
+    expect(card).toContain("text-warning");
   });
 
   it("labels branch divergence honestly instead of claiming pushes", () => {
@@ -79,30 +75,6 @@ describe("the same labelled change vocabulary reaches both surfaces", () => {
     expect(html).not.toContain(">pushes<");
   });
 
-  it("keeps the zero change triple as quiet zeros, so every card has one anatomy", () => {
-    const html = renderToStaticMarkup(<SessionMetadata workspace={workspace({ id: "quiet" })} />);
-    for (const id of ["rail-dirty", "rail-added", "rail-removed"]) {
-      const at = html.indexOf(`data-testid="${id}"`);
-      expect(at, id).toBeGreaterThan(-1);
-      // A measured zero is quiet, never toned as a change.
-      expect(html.slice(at, at + 400)).toContain("text-content-tertiary");
-      expect(html.slice(at, at + 400)).not.toMatch(/text-success|text-destructive/);
-    }
-    expect(html).toContain("+0");
-    expect(html).toContain("−0");
-    expect(html).toContain('data-testid="rail-ledger"');
-    expect(html).toContain('data-testid="rail-created"');
-  });
-
-  it("keeps zero dirty paths when the branch has a real diff", () => {
-    const changed = { ...workspace({ id: "diff" }), dirty_files: 0, diff_added: 1, diff_removed: 0 };
-    const html = renderToStaticMarkup(<SessionMetadata workspace={changed} />);
-    expect(html).toContain('data-testid="rail-dirty"');
-    expect(html).toContain('data-testid="rail-added"');
-    expect(html).toContain('data-testid="rail-removed"');
-    expect(html).toContain("+1");
-  });
-
   // The daemon types all three counters as required numbers today, so this
   // degrades the payload on purpose. It pins the PRESENTATION rule — unknown is
   // a dash, zero is a zero — against the day one of them becomes nullable,
@@ -110,9 +82,8 @@ describe("the same labelled change vocabulary reaches both surfaces", () => {
   // fabricated clean branch.
   it("says UNKNOWN with a dash and never with a zero", () => {
     const unknown = { ...workspace({ id: "unmeasured" }), dirty_files: null as unknown as number };
-    const html = renderToStaticMarkup(<SessionMetadata workspace={unknown} />);
+    const html = renderToStaticMarkup(<WorkspaceMetrics workspace={unknown} />);
     expect(html).toContain("—");
-    expect(html).toContain("An unknown number of uncommitted files in the worktree");
     expect(html).not.toContain("0 uncommitted files");
   });
 

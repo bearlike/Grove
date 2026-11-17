@@ -165,7 +165,7 @@ describe("roomier vertical spacing preserves compact horizontal controls", () =>
 
   it("keeps body lines closer than neighboring workspace cards", () => {
     const metrics = code("components/grove/fleet/workspace-metrics.tsx");
-    expect(metrics).toMatch(/flex min-w-0 flex-col gap-2" data-testid="rail-metadata"/);
+    expect(metrics).toMatch(/flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" data-testid="rail-metadata"/);
     expect(fleetTree).toContain('className="flex flex-col gap-3"');
   });
 });
@@ -349,9 +349,8 @@ describe("the sidebar keeps its scanned-text and project identity contracts", ()
       expect(source).not.toContain("font-mono");
     }
     expect(fleetTree).not.toContain("BranchLabel");
-    // The branch keeps its ONE glyph even though the geometry forbids the
-    // label's own anatomy — the mark is imported, never re-chosen.
-    expect(fleetTree).toContain("BRANCH_GLYPH");
+    // The rail row is two lines: the branch lives in the overview and on Info.
+    expect(fleetTree).not.toContain("BRANCH_GLYPH");
   });
 
   it("keeps a flat row's project name in the accessible description rather than a third line", () => {

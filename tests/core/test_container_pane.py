@@ -258,7 +258,8 @@ def test_a_host_workspace_reads_and_steers_exactly_as_before(
     manager.send_message(state.id, "hello")
 
     assert manager.pane_target(state.id) == f"{state.tmux_session}:agent"
-    assert {command for _, command in fake_tmux.commands} == {DEFAULT_TMUX_COMMAND}
+    # The workspace's OWN host tmux server, never a container road.
+    assert {command for _, command in fake_tmux.commands} == {("tmux", "-L", state.tmux_socket)}
     assert docker.calls == []
 
 

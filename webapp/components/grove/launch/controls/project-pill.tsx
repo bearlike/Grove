@@ -2,10 +2,13 @@
 
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
+import { FolderPlusIcon } from "lucide-react";
 
 import { LaunchPill, type LaunchPillOption } from "../control-pill";
 import { useLaunchControls, type LaunchValues } from "../launch-state";
 import { useFleetStream } from "@/components/grove/fleet/use-fleet";
+import { useAddProjectUi } from "@/components/grove/projects/add-project-store";
+import { Button } from "@/components/ui/button";
 
 const LAST_PROJECT_STORAGE_KEY = "grove.launch.last-project";
 
@@ -99,6 +102,7 @@ function rememberProject(project: ProjectChoice): void {
 /** The repository and working directory control at the start of the launch row. */
 export function ProjectPill(): ReactNode {
   const { values, seed, set } = useLaunchControls();
+  const openWizard = useAddProjectUi((state) => state.openWizard);
   const stream = useFleetStream();
   const search = useSearchParams();
   const restoredProject = useRef<ProjectChoice | null | undefined>(undefined);
@@ -171,6 +175,8 @@ export function ProjectPill(): ReactNode {
       // nothing said "No models found." in the Project picker, and the search
       // box called itself "Search models...".
       searchNoun="projects"
+      // The project names itself and nothing else: placement is the
+      // Placement pill's, and riding it here made the list a form.
       fallbackLabel="Project"
       disabledReason={disabledReason}
       onSelect={(cwd) => {
@@ -181,6 +187,29 @@ export function ProjectPill(): ReactNode {
         // location here, so the new project's own cwd becomes the fresh seed.
         set(projectSelectionValues(selected));
       }}
-    />
+    >
+      {/*
+        No explicit close: the pill's open key lives in `LaunchPillGroup`, whose
+        setter is not exposed to a child, so the dialog opens over the menu.
+        The prompt draft is untouched; only the project selection changes.
+      */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full justify-start gap-1.5"
+        data-testid="launch-project-add"
+        onClick={() =>
+          openWizard({
+            onAdded: (added) => {
+              rememberProject({ ...added, label: "" });
+              set(projectSelectionValues(added));
+            },
+          })
+        }
+      >
+        <FolderPlusIcon className="size-[1em] shrink-0" aria-hidden />
+        <span>Add project…</span>
+      </Button>
+    </LaunchPill>
   );
 }

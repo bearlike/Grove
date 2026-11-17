@@ -32,6 +32,7 @@ export interface WorkspaceSpec {
 function workspaceState(spec: WorkspaceSpec): WorkspaceState {
   return {
     id: spec.id,
+    project_subpath: "",
     title: spec.title ?? spec.id,
     repo_root: "/repos/grove",
     branch: spec.branch ?? `feat/${spec.id}`,

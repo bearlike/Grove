@@ -19,6 +19,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from importlib import resources
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, ClassVar, Final, Literal
 from urllib.parse import urlparse
@@ -67,6 +68,18 @@ class WorktreeConfig(BaseModel):
     branch_prefix: str = "grove/"
     """Prefix on every auto created branch."""
 
+    push_token_env: str = ""
+    """Name of the environment variable holding a token that can push the workspace
+    branch from a remote workload, never the token itself. Empty hands over none.
+
+    A remote workspace pushes its branch from inside its workload before every
+    freeze, hibernate or stop, and the workload holds no credential of its own,
+    so against a remote that needs a login to push it can do none of them. The
+    token rides the platform's private channel to the worker, which gives it to
+    its own git commands only, never to the agent. The workload keeps it for its
+    whole life, so scope it to this one repository and to pushing code where the
+    forge supports scoped tokens. Grove neither creates nor revokes it."""
+
 
 BranchMode = Literal["auto", "new", "existing", "remote", "root"]
 """Which branch-source variant the create form opens on."""
@@ -104,20 +117,35 @@ def validate_model_id(value: str | None) -> str | None:
     return model
 
 
+# Which AgentAdapter introspects an agent. Module-level alias so the persisted
+# WorkspaceState.agent_kind (workspace.py) shares one source of truth with the
+# config-side AgentSpec.kind — workspace already imports from config, so this
+# direction has no cycle.
+AgentKind = Literal["claude_code", "codex", "opencode", "generic", "mewbo"]
+
+
+#: Where one resolved launch answer came from. ``project`` and ``user`` name the
+#: config layer that saved it, ``config`` any other configured source (a roster
+#: entry, a section default, an environment or command-line override), and
+#: ``builtin`` Grove's own starting answer.
+LaunchSource = Literal["request", "project", "user", "config", "builtin"]
+
+
 class WorkspaceDefaults(BaseModel):
     """Your saved answers for a create that does not name one. Every field is optional and
     an unset one falls through to its normal source.
 
-    Every field is optional, and ``None`` means "no saved default" — the field
-    falls through to whatever the existing per-field cascade already resolved
-    (``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's
-    own default for model). Grove applies these in the engine, so every surface
-    that creates a workspace — the CLI, the TUI, the web composer, MCP and
-    issue-ops — honours them identically, and a create form showing you a
-    pre-filled answer is showing you what will actually happen.
+    Every field is optional, and ``None`` means "no saved default". With nothing
+    saved a create runs the first configured agent on the host, in the current
+    checkout, with no new branch or worktree. A project's saved answer beats your
+    own, and an explicit choice on the create beats both. Grove applies these in
+    the engine, so every surface that creates a workspace — the CLI, the TUI, the
+    web composer, MCP and issue-ops — honours them identically, and a create form
+    showing you a pre-filled answer is showing you what will actually happen.
 
     Title is deliberately absent: it names one task, never a default. So are
-    concrete branch and remote names, for the same reason.
+    concrete branch and remote names, for the same reason, which is why a saved
+    `new`, `existing` or `remote` branch mode asks for the branch on each create.
     """
 
     # Why the engine resolves this rather than each client: it did not, once,
@@ -129,25 +157,41 @@ class WorkspaceDefaults(BaseModel):
     # that one resolution; `create` and the view both read them.
     model_config = _FROZEN
 
+    #: Fields a create form never edits. A save that does not send one keeps the
+    #: layer's existing value, so saving the form cannot erase a hand-written map.
+    HAND_EDITED: ClassVar[frozenset[str]] = frozenset({"profiles"})
+
     agent: str | None = None
-    """Agent selected when a create form opens."""
+    """Agent a create launches when it names none. Unset uses the first configured agent."""
     # Runtime would cycle via workspace.py; keep its values literal here.
     runtime: Literal["host", "container"] | None = None
-    """`host` or `container` for a new workspace. Unset falls through to
-    `container.enabled`.
+    """`host` or `container` for a new workspace. Unset runs on the host; enabling
+    containers makes them available without choosing them.
     """
     brief: bool | None = None
     """Whether a new agent receives Grove's first turn brief. Unset falls through to
     `brief.enabled`.
     """
     model: str | None = None
-    """Model id sent to the selected agent. Unset uses the agent's own default."""
+    """Model id sent to the saved `agent`. Another agent, or an unset model, uses the
+    agent's own default. With no saved `agent` it applies to every agent.
+    """
     branch_mode: BranchMode | None = None
-    """How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`."""
+    """How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`. Unset
+    is `root`: the current checkout, with no new branch or worktree.
+    """
     base_ref: str | None = None
     """The branch or ref a new branch starts from."""
     skip_init: bool | None = None
     """Whether to skip the configured init script."""
+    profiles: dict[str, dict[AgentKind, str]] | None = None
+    """Which profile each tool uses on each runtime. A row is `*` (any runtime), a runtime
+    kind (`host`, `container`, `remote`) or a configured resident `runtimes.<name>` block;
+    a column is an agent kind; a cell names an `agents[]` entry of that kind. An omitted
+    profile uses the named remote row, runtime kind, then `*` or a same-kind saved `agent`
+    from the higher layer, then the first roster entry of that kind. Cells merge one by
+    one across config layers and are checked after the final roster is known.
+    """
 
     @field_validator("model")
     @classmethod
@@ -243,13 +287,6 @@ class DefaultsScope(StrEnum):
         return paths.project_local_config_path(repo_root)
 
 
-# Which AgentAdapter introspects an agent. Module-level alias so the persisted
-# WorkspaceState.agent_kind (workspace.py) shares one source of truth with the
-# config-side AgentSpec.kind — workspace already imports from config, so this
-# direction has no cycle.
-AgentKind = Literal["claude_code", "codex", "opencode", "generic", "mewbo"]
-
-
 class AgentSpec(BaseModel):
     """One selectable agent in the create picker. Anything terminal based works."""
 
@@ -269,7 +306,31 @@ class AgentSpec(BaseModel):
     """
 
     env: dict[str, str] = Field(default_factory=dict)
-    """Extra environment variables exported into the agent's window before launch."""
+    """Extra environment variables exported into the agent's window before launch. A
+    `${VAR}` value is resolved from the environment when this agent launches, not when
+    the config loads, so a variable only this agent needs never blocks another command.
+    """
+
+    def launch_env(self, environ: Mapping[str, str]) -> dict[str, str]:
+        """``env`` with its ``${VAR}`` references resolved against *environ*, for a launch.
+
+        Deferred to here because a reference in an agent's env is usually a
+        credential only that agent's own launch can supply (a gateway key an
+        `ssm`-style wrapper injects), and resolving it at config load made every
+        Grove process — the CLI, the webapp, a timer unit — fail on a variable
+        none of them would ever read. The loud contract is unchanged, only its
+        moment: an unset or empty variable still raises ``ConfigError`` naming
+        the variable and the agent, before the launch has a side effect.
+        """
+        return EnvReferences.resolve(self.env, environ, path=f"agents[{self.name}].env")
+
+    def deferred_env(self) -> frozenset[str]:
+        """The ``env`` keys whose value is a ``${VAR}`` reference rather than a literal.
+
+        A remote workspace publishes its spec's literal half, so a value the
+        operator deferred to the environment must ride the private channel.
+        """
+        return frozenset(key for key, value in self.env.items() if EnvReferences.refers(value))
 
     models: tuple[str, ...] = ()
     """Model ids offered in the create form picker. A convenience list, never a validated
@@ -315,7 +376,28 @@ class AgentSpec(BaseModel):
     A native session cannot pause or resume; stop or recreate it instead.
     """
 
+    native_timeout_seconds: float = Field(default=180, gt=0)
+    """How long a native session may take to answer one protocol exchange: the boot
+    handshake, a submitted prompt's acceptance, a control request such as an interrupt
+    or a model switch. A gateway that queues requests, a slow session-start hook, or a
+    fleet booting at once all land inside this window; past it the exchange is reported
+    as unknown and a boot ends the session. Per agent, because a gateway-backed profile
+    and a local binary have nothing in common here.
+    """
+
     NATIVE_KINDS: ClassVar[frozenset[str]] = frozenset({"claude_code", "codex", "opencode"})
+
+    @property
+    def launch_modes(self) -> tuple[Literal["native", "terminal"], ...]:
+        """The launch modes a create may pick for this entry, by ``native_for``'s own gate.
+
+        A native-only kind has no terminal launch; a kind with no native
+        protocol has no native one. Published so a create form offers what the
+        engine accepts rather than repeating the kind sets.
+        """
+        if self.kind in self.NATIVE_KINDS:
+            return ("native", "terminal")
+        return ("terminal",)
 
     @property
     def owns_native_session(self) -> bool:
@@ -581,19 +663,19 @@ class BriefConfig(BaseModel):
     files, which the agent is already standing in.
     """
 
-    self_naming: bool = True
-    """Ask an agent whose workspace has no description to write one, and to replace a
-    generated title with a real one.
+    @model_validator(mode="before")
+    @classmethod
+    def _retired_self_naming(cls, data: Any) -> Any:
+        """``self_naming`` moved to the ``unnamed`` trigger rule; drop it, warning once.
 
-    A workspace created without a title is named after a short generated id, on
-    the promise that it stays renameable — but nothing was renaming it, so a
-    fleet ended up named after hashes that say nothing about what each agent is
-    doing. The agent is the one participant that learns the answer, usually
-    within its first few turns.
-
-    The nudge is added only for a workspace whose description is empty, so one
-    a person already described is never asked to re-describe itself.
-    """
+        Silently forbidding it would fail every config that set it yesterday, and a
+        value of ``false`` is honoured by :func:`_retired_trigger_keys`, which runs
+        on the raw layers where the rule it maps to is still reachable.
+        """
+        if isinstance(data, dict) and "self_naming" in data:
+            data = {key: value for key, value in data.items() if key != "self_naming"}
+            logger.warning("brief.self_naming is retired; set triggers.rules[unnamed].enabled")
+        return data
 
 
 AgentShare = Literal["full", "projects", "isolated"]
@@ -1053,13 +1135,12 @@ class EnvSourceConfig(BaseModel):
 class ContainerConfig(EnvSourceConfig):
     """Run the agent inside a container built from the repo's own devcontainer.
 
-    **Default-ON, deliberately reversing Grove's earlier "containers are
-    strictly opt-in" default.** The container is what lets an agent run fully
-    autonomously (relaxed permissions) with its blast radius bounded to the
-    workspace, so it is the default new workspaces get; ``--runtime host`` is
-    the per-create escape hatch and the persisted ``WorkspaceState.runtime``
-    means an existing workspace never moves. Turning it back off is a policy
-    choice about isolation, not a bug fix.
+    The container is what lets an agent run fully autonomously (relaxed
+    permissions) with its blast radius bounded to the workspace. A create uses
+    it when it asks for ``--runtime container`` or when ``defaults.runtime`` is
+    ``container``; configuring this section makes the runtime available but
+    never selects it. The persisted ``WorkspaceState.runtime`` means an existing
+    workspace never moves.
 
     Every value cascades like the rest of the config; a future Podman driver
     reads the SAME submodel behind the same protocol — ``docker_bin`` names the
@@ -1078,8 +1159,9 @@ class ContainerConfig(EnvSourceConfig):
     SECTION: ClassVar[str] = "container"
 
     enabled: bool = True
-    """The default runtime for a new workspace. `true` is container, `false` is host. Read
-    only at create, so flipping it never moves an existing workspace.
+    """Whether Grove keeps this repo's container image warm so a container create starts
+    faster. It does not choose the runtime: a create runs on the host unless it, or a saved
+    `defaults.runtime`, asks for a container.
     """
 
     up_timeout_seconds: float = 900.0
@@ -1208,6 +1290,24 @@ class TLSConfig(BaseModel):
     """
 
 
+class OidcConfig(BaseModel):
+    """Sign people in with an OpenID Connect provider.
+
+    Any provider that publishes a discovery document works. Sign-in is for
+    people reaching the dashboard and the CLI; daemons federate with their own
+    key and never use this. Empty ``issuer`` keeps OIDC off.
+    """
+
+    model_config = _FROZEN
+
+    issuer: str = ""
+    """The issuer URL; its ``/.well-known/openid-configuration`` names everything else."""
+    client_id: str = ""
+    """This Grove's client id at the issuer, used by the CLI device flow."""
+    audience: str = ""
+    """The ID token audience the daemon accepts. Empty means ``client_id``."""
+
+
 class AuthConfig(BaseModel):
     """Daemon authentication and pairing limits.
 
@@ -1236,6 +1336,162 @@ class AuthConfig(BaseModel):
     """Per source rate limit on polling a pairing. The browser polls every two seconds
     while it waits for approval.
     """
+
+    oidc: OidcConfig = Field(default_factory=OidcConfig)
+    """People sign in through this OpenID Connect issuer, when one is configured."""
+
+
+class DaemonConfig(BaseModel):
+    """Where the daemon listens, and where a workspace runtime reaches it.
+
+    Loopback is the default and stays the safe choice: the daemon authenticates
+    every route, but TLS is left to whatever ingress fronts it. A container or a
+    remote runtime cannot reach the host's loopback, so it is given
+    ``mailbox_url`` instead, together with a credential minted for that one
+    workspace.
+    """
+
+    model_config = _FROZEN
+
+    host: str = "127.0.0.1"
+    """Interface `grove daemon serve` binds when no `--host` is given."""
+
+    mailbox_url: str = ""
+    """The address a workspace runtime that is not on this host's loopback, such as a
+    container, uses to reach this daemon. Empty means only the private mailbox
+    socket (`GROVE_MAILBOX_SOCKET`) can serve one, and a container workspace
+    without either runs its agent in the terminal instead of a native session.
+    """
+
+
+class FederationNodeConfig(BaseModel):
+    """This daemon's place in a hub-and-spoke federation."""
+
+    model_config = _FROZEN
+
+    role: Literal["hub", "node"] | None = None
+    """`hub` keeps the node catalog and forwards workspace verbs to their owners;
+    `node` registers with `hub_url` and keeps full authority over its own
+    workspaces. Required once federation is enabled."""
+
+    name: str = ""
+    """How this node is listed on the hub. Empty uses the host name."""
+
+    hub_url: str = ""
+    """The hub's base URL. Required for a node."""
+
+    advertise_url: str = ""
+    """The URL the hub dials to forward a verb to this node. Required for a node,
+    since nothing else tells the hub where this daemon listens."""
+
+    join_token_env: str = ""
+    """Name of the environment variable holding a one-time join token minted by
+    `grove node token` on the hub. Only read until the node holds its key."""
+
+    join_token_ttl_seconds: int = Field(default=3600, ge=60)
+    """How long a join token minted on a hub stays usable."""
+
+    heartbeat_seconds: float = Field(default=15.0, gt=0)
+    """How often a node tells the hub it is alive."""
+
+    unreachable_after_seconds: float = Field(default=60.0, gt=0)
+    """How long the hub waits without a heartbeat before listing a node as
+    unreachable. Unreachable is a state; nothing is killed."""
+
+    reconnect_ceiling_seconds: float = Field(default=30.0, gt=0)
+    """Longest wait between a node's reconnect attempts; the backoff starts at one
+    second and doubles up to this."""
+
+    request_timeout_seconds: float = Field(default=30.0, gt=0)
+    """Per request timeout on every daemon-to-daemon call."""
+
+    labels: dict[str, str] = Field(default_factory=dict)
+    """What this node offers, as ``key: value`` (``residency: eu``, ``gpu: a100``).
+    A create whose selector names labels lands only on a node carrying all of
+    them."""
+
+    capacity: int | None = Field(default=None, ge=0)
+    """The most workspaces the hub will place on this node. Unset means no limit;
+    the hub never overcommits a node that declares one."""
+
+    max_clock_skew_seconds: float = Field(default=300.0, gt=0)
+    """How far apart two daemons' clocks may be before one refuses the other's
+    signed bearer. A replay window, not a timeout: nothing waits on it."""
+
+    def problem(self) -> str | None:
+        """The first reason this block cannot run a federation, as ``path: why``."""
+        if self.role is None:
+            return "node.role: must be 'hub' or 'node' when federation is enabled"
+        if self.role == "node":
+            for name in ("hub_url", "advertise_url"):
+                if not getattr(self, name):
+                    return f"node.{name}: required for a node"
+        return None
+
+
+class SchedulingConfig(BaseModel):
+    """Where a federation hub places this project's new workspaces."""
+
+    model_config = _FROZEN
+
+    require: dict[str, str] = Field(default_factory=dict)
+    """Node labels a new workspace for this project requires, used when the create
+    names no ``selector`` of its own. A committed project config may set it, so a
+    repository can say "EU residency only" without every caller repeating it."""
+
+
+class FederationConfig(BaseModel):
+    """Federate several Grove daemons behind one hub.
+
+    Off unless a non-committed layer turns it on. A block that fails to
+    validate does not stop the daemon: it is disabled, one warning names the
+    failing path, and `grove debug` and `/whoami` report why. `grove federation
+    check` dry-runs the same validation.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = False
+    """Turn federation on. A committed project config can never set this."""
+
+    node: FederationNodeConfig = Field(default_factory=FederationNodeConfig)
+    """This daemon's role and its peer addresses."""
+
+    _disabled_reason: str | None = PrivateAttr(default=None)
+
+    @property
+    def disabled_reason(self) -> str | None:
+        """Why an enabled block was switched off, or ``None``."""
+        return self._disabled_reason
+
+    @property
+    def status(self) -> str:
+        """One line for every surface: the role it runs as, or why it does not."""
+        if self.enabled and self.node.role is not None:
+            return self.node.role
+        if self._disabled_reason:
+            return f"disabled ({self._disabled_reason})"
+        return "disabled"
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _disable_on_failure(cls, data: Any, handler: Any) -> FederationConfig:
+        """Any failure in the block disables it rather than stopping the daemon."""
+        try:
+            result: FederationConfig = handler(data)
+        except ValidationError as exc:
+            error = exc.errors()[0]
+            reason = ".".join(str(part) for part in error["loc"]) + f": {error['msg']}"
+        else:
+            problem = result.node.problem() if result.enabled else None
+            if problem is None:
+                return result
+            reason = problem
+        reason = f"federation.{reason}"
+        logger.warning("federation disabled: {}", reason)
+        disabled = cls.model_construct(enabled=False, node=FederationNodeConfig())
+        disabled._disabled_reason = reason
+        return disabled
 
 
 class MewboConfig(BaseModel):
@@ -1514,6 +1770,188 @@ class IssueOpsConfig(BaseModel):
     """
 
 
+_DEFAULT_SLACK_PROMPT = """\
+You were started from a Slack conversation in #{channel}.
+
+{author} asked:
+{command_text}
+
+The conversation so far, oldest first:
+{thread}
+
+Slack link: {permalink}
+
+How this session works:
+
+- Every reply you finish is posted back into that Slack thread, so write each
+  final reply for the people reading it there: lead with the answer, keep it
+  short, and say what you changed and where.
+- People may reply in the thread while you work; their messages arrive here as
+  follow-up instructions.
+- Where the request is underspecified, ask in your reply and say what you will
+  assume if nobody answers. Do not stall silently.
+- Stop and ask rather than take a risky or irreversible action: destroying
+  data, force-pushing a shared branch, or touching anything in production.
+"""
+
+
+class SlackWorkspaceConfig(BaseModel):
+    """Launch options for the workspace a Slack mention creates.
+
+    Every field is optional. A set field is sent on the create and beats the
+    project's saved `defaults`. An unset one resolves exactly as on any other
+    create: the project's `defaults`, then yours, then Grove's built in. Field
+    names match `defaults` and the create request, so one name means one thing.
+
+    `branch_mode` is the exception. Unset it is `auto`, never the saved default,
+    so a Slack session gets its own branch and worktree unless you choose `root`.
+    """
+
+    model_config = _FROZEN
+
+    agent: str | None = None
+    """Agent the workspace runs. Must name an entry in `agents`. A mention can
+    override it with `!agent <name>`."""
+
+    model: str | None = None
+    """Model id sent to the agent."""
+
+    effort: str | None = Field(default=None, pattern=r"^[a-z]+$", max_length=16)
+    """Reasoning effort sent to the agent. Must be a level the agent lists."""
+
+    runtime: Literal["host", "container", "remote"] | None = None
+    """Where the agent runs."""
+
+    remote_runtime: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.-]+$", max_length=64)
+    """Which `runtimes.<name>` block runs a `remote` workspace."""
+
+    branch_mode: Literal["auto", "root"] = "auto"
+    """`auto` gives each session a new branch and worktree. `root` runs it in the
+    project's current checkout, which sessions then share."""
+
+    base_ref: str | None = None
+    """The branch or ref an `auto` branch starts from. Unset starts from `HEAD`."""
+
+    skip_init: bool | None = None
+    """Whether to skip the configured init script."""
+
+    brief: bool | None = None
+    """Whether the agent receives Grove's first turn brief."""
+
+    native: bool | None = None
+    """Whether the agent runs as a Grove owned native session instead of its
+    interactive terminal."""
+
+    @field_validator("model")
+    @classmethod
+    def _valid_model(cls, value: str | None) -> str | None:
+        return validate_model_id(value)
+
+
+class SlackConfig(EnvSourceConfig):
+    """Start and steer workspaces from Slack by mentioning the Grove app.
+
+    Mention the app in a channel or a thread and Grove starts a workspace with the
+    conversation as its first prompt, then posts each finished reply back into that
+    thread. Later replies in the thread steer the same workspace. Grove connects OUT
+    to Slack over Socket Mode, so the daemon needs no public address.
+
+    The two tokens are read from the variables `bot_token_env` and `app_token_env`
+    name, first from this section's `env_file` or `env_command`, then from the
+    daemon's own environment. Config never holds a token.
+
+    Who may use it, where, and on which project is read from the daemon's own
+    config only: `allowed_users`, `allowed_channels`, `default_project` and
+    `channel_projects`. All four are closed until set. `workspace` and
+    `prompt_template` are read from the chosen project's config, so a project's
+    `.grove/config.json` can override yours.
+    """
+
+    model_config = _FROZEN
+
+    SECTION: ClassVar[str] = "slack"
+    #: The allow list entry that admits everyone. Access is never open without it.
+    ANY: ClassVar[str] = "*"
+
+    enabled: bool = False
+    """Connect to Slack when the daemon starts."""
+
+    bot_token_env: str = "GROVE_SLACK_BOT_TOKEN"
+    """Name of the variable holding the app's bot token (`xoxb-…`), never the token."""
+
+    app_token_env: str = "GROVE_SLACK_APP_TOKEN"
+    """Name of the variable holding the app level token (`xapp-…`) with the
+    `connections:write` scope, never the token."""
+
+    allowed_users: list[str] = Field(default_factory=list)
+    """Slack member IDs (`U…`) allowed to start and steer workspaces. Empty allows
+    nobody: a mention gets a reply naming the sender's ID so you can add it. `"*"`
+    allows every member who can post in an allowed channel.
+
+    A workspace runs an agent with your credentials on this machine, so the default
+    is closed. Everyone else in the channel can still read the thread.
+    """
+
+    allowed_channels: list[str] = Field(default_factory=list)
+    """Slack conversation IDs Grove works in: channels (`C…`), private channels
+    (`G…`) and direct messages (`D…`). Empty allows none: a mention from an allowed
+    user gets a reply naming the conversation's ID so you can add it. `"*"` allows
+    every conversation the app is in.
+    """
+
+    default_project: str = ""
+    """Path of the project a mention works in when its channel has no entry in
+    `channel_projects`. `~` expands. Empty refuses such mentions with a reply."""
+
+    channel_projects: dict[str, str] = Field(default_factory=dict)
+    """Slack channel ID to the path of the project its mentions work in. `~`
+    expands. A mention can pick another project named here or in `default_project`
+    with `!project <name>`, and no other."""
+
+    workspace: SlackWorkspaceConfig = Field(default_factory=SlackWorkspaceConfig)
+    """Launch options for the workspace a mention creates. Unset fields use the
+    project's `defaults`."""
+
+    context_messages: int = Field(default=20, ge=0, le=200)
+    """How many earlier channel messages a top level mention reads as context. A
+    mention inside a thread always reads the whole thread instead."""
+
+    prompt_template: str = _DEFAULT_SLACK_PROMPT
+    """The first prompt a Slack started workspace boots on, with `{command_text}`,
+    `{author}`, `{channel}`, `{thread}` and `{permalink}` filled from Slack."""
+
+    working_reaction: str = Field(default="hourglass_flowing_sand", min_length=1)
+    """Emoji name Grove keeps on the message it is working on, removed when the agent's
+    reply is posted. Name a custom animated emoji (such as `loading`) for a spinner."""
+
+    deep_link_base_url: str = ""
+    """Your dashboard's base URL. Set, Grove's first thread reply links to
+    `{base}/w/{id}`. Empty omits that reply."""
+
+    max_attachment_bytes: int = Field(default=10_000_000, ge=0)
+    """Largest Slack file copied into the workspace. Larger files are named in the
+    prompt with their Slack link instead. `0` copies none."""
+
+    def allows_user(self, user_id: str) -> bool:
+        """Whether this Slack member may start and steer workspaces."""
+        return self._admits(self.allowed_users, user_id)
+
+    def allows_channel(self, channel_id: str) -> bool:
+        """Whether Grove works in this Slack conversation."""
+        return self._admits(self.allowed_channels, channel_id)
+
+    @property
+    def projects(self) -> list[Path]:
+        """Every project Slack may target: the default, then each channel's."""
+        raw = [self.default_project, *self.channel_projects.values()]
+        return list(dict.fromkeys(Path(p).expanduser() for p in raw if p))
+
+    @classmethod
+    def _admits(cls, allow_list: list[str], value: str) -> bool:
+        """One rule for both allow lists: listed, or the list holds `ANY`."""
+        return cls.ANY in allow_list or value in allow_list
+
+
 # Which agent-state edges may fire a push. String values mirror
 # ``AgentActivityState`` (waiting/blocked/error/idle) — kept a Literal here, not
 # the imported enum, so ``config.py`` never imports ``grove.core.agents`` (which
@@ -1639,32 +2077,531 @@ class WebhookChannelConfig(BaseModel):
     """Seconds to wait on one POST before skipping it."""
 
 
-class PhaseNudgeConfig(BaseModel):
-    """Remind a working agent to report its task phase when it has gone quiet about it.
+TriggerWhen = Literal["session_start", "compaction", "phase_stale", "unnamed", "manual"]
+"""The condition a trigger rule fires on. A closed set: each member is a check the
+daemon knows how to evaluate, so a new condition is code, while a new rule over an
+existing condition is only config."""
 
-    The reminder is one short line, sent only to an agent that is running, working, has
-    reported a phase before, and has not changed it for a whole interval while it kept
-    making progress. A session that is paused, idle, waiting, blocked, errored, handed
-    off, or stuck inside one long tool call is never reminded, and each phase report is
-    reminded about at most once.
+_TRIGGER_NAME = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+_TRIGGER_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+class TriggerRule(BaseModel):
+    """One instruction the Grove daemon puts into a session when its condition holds.
+
+    The daemon delivers a rule only to a session that is running and actively working
+    right now. A paused, stopped, killed, errored, idle, waiting or blocked session is
+    never contacted, and a session that has stopped is never restarted to receive one.
+    The text arrives fenced as Grove's own voice, so neither the agent nor a person
+    reading the transcript mistakes it for something the user typed.
+    """
+
+    model_config = _FROZEN
+
+    name: str
+    """Stable identifier. Layers merge rules by this name, so a project can change one
+    field of a built-in rule without restating the rest."""
+    when: TriggerWhen
+    """What fires the rule. ``session_start``: the agent's first working moment.
+    ``compaction``: the agent's context was just compacted. ``phase_stale``: the agent
+    reported a phase and has not changed it for ``after_minutes`` while it kept working.
+    ``unnamed``: the workspace still carries a generated title or has no description.
+    ``manual``: never on its own; only ``grove trigger fire`` sends it."""
+    enabled: bool = True
+    """Deliver the rule at all."""
+    text: str = Field(min_length=1, max_length=4000)
+    """The instruction itself. ``{title}``, ``{phase}``, ``{age}`` and ``{missing}`` are
+    filled in where the condition knows them; any other brace is left as written."""
+    after_minutes: float = Field(default=10.0, ge=1.0, le=1440.0)
+    """For ``phase_stale``: how long a reported phase may stand unchanged while the agent
+    keeps working. Ignored by every other condition."""
+    max_sends: int | None = Field(default=None, ge=1, le=100)
+    """The most times this rule reaches one session. Unset means no cap. A cap is what
+    keeps a rule an agent ignores from filling its context window."""
+    include_instructions: bool = False
+    """Append ``brief.instructions`` and this workspace's own record (id, title, branch,
+    placement, phase file) to the text. The built-in ``start`` rule sets it."""
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_a_slug(cls, value: str) -> str:
+        # A name is typed after `grove trigger fire`, so it must survive being a word.
+        if not _TRIGGER_NAME.fullmatch(value):
+            raise ValueError(f"trigger name {value!r} must be a lowercase slug")
+        return value
+
+    def render(self, values: Mapping[str, str]) -> str:
+        """The text with every known placeholder filled. Unknown braces stay verbatim.
+
+        Deliberately not ``str.format``: an operator's text may quote JSON or a shell
+        brace expansion, and one stray ``{`` must not fail a delivery.
+        """
+        return _TRIGGER_PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), self.text)
+
+
+class FleetDigestConfig(BaseModel):
+    """How the fleet digest flags a workspace."""
+
+    model_config = _FROZEN
+
+    quiet_minutes: float = Field(default=30.0, ge=1.0, le=1440.0)
+    """A working agent with no reported phase change for this long is flagged quiet.
+    Age alone is never called a failure."""
+
+
+class SpeechConfig(BaseModel):
+    """Dictation into the composer and read-aloud of an answer, on every workspace.
+
+    Both go to an OpenAI-compatible ``/audio/transcriptions`` and ``/audio/speech``
+    at ``base_url``. The key is read from the environment variable ``api_key_env``
+    names. Without a key the web shows no microphone or speaker.
+    """
+
+    model_config = _FROZEN
+
+    base_url: str = "https://api.openai.com/v1"
+    """OpenAI-compatible API base, for example a gateway's ``/v1``."""
+    api_key_env: str = "OPENAI_API_KEY"
+    """Name of the environment variable holding the API key, never the key itself."""
+    stt_model: str = "whisper-1"
+    """Transcription model, passed verbatim."""
+    tts_model: str = "tts-1"
+    """Speech model, passed verbatim."""
+    voice: str = "alloy"
+    """Voice name for read-aloud, passed verbatim."""
+
+
+class ArtifactsConfig(BaseModel):
+    """Where a workspace's file artifacts may live, beyond its own checkout.
+
+    The workspace checkout and the project root are always allowed. This adds
+    host directories on top. It is host configuration: a committed project
+    config cannot set it, so a cloned repository cannot widen what the
+    dashboard may read.
+    """
+
+    model_config = _FROZEN
+
+    roots: tuple[str, ...] = ("/tmp",)
+    """Extra directories a file artifact may sit under. ``~`` expands."""
+
+
+class ReaperConfig(BaseModel):
+    """The daemon's reconciliation of leaked host resources against workspace records.
+
+    A tmux server or Grove process that no workspace record accounts for is a
+    leak a crash, a SIGKILL or a test run left behind. The reaper marks each one
+    the first time it sees it and removes it only when it is still there on a
+    later pass, so a workspace being created right now is never touched.
     """
 
     model_config = _FROZEN
 
     enabled: bool = True
-    """Send the reminder at all."""
-    every_minutes: float = Field(default=10.0, ge=1.0, le=1440.0)
-    """How long a phase may stand unchanged while the agent works before it is reminded.
-    Also how often Grove checks."""
+    """Run the reaper in the daemon at all."""
+    interval_seconds: int = Field(default=600, ge=60, le=86400)
+    """How often the daemon reconciles. Each pass is one socket listing and one ``/proc``
+    scan."""
+    dry_run: bool = True
+    """Report what would be removed and remove nothing. ``grove vacuum --apply`` removes
+    regardless."""
 
 
-class NudgesConfig(BaseModel):
-    """Short reminders the Grove daemon puts into a working agent's session."""
+class CloudRunJobRuntime(BaseModel):
+    """A remote workspace as one execution of a Cloud Run job.
+
+    The job itself is yours: Grove emits its definition for ``gcloud run jobs
+    replace`` and then only executes, reads, cancels and deletes executions of it.
+    Credentials are never values here, only the names of where they live.
+    """
 
     model_config = _FROZEN
 
-    phase: PhaseNudgeConfig = Field(default_factory=PhaseNudgeConfig)
-    """Remind an agent that stopped reporting its task phase."""
+    LABEL: ClassVar[str] = "Google Cloud Run job"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["cloud_run_job"] = "cloud_run_job"
+    """Selects the Cloud Run job driver."""
+    project: str = Field(min_length=1)
+    """Google Cloud project id."""
+    region: str = Field(min_length=1)
+    """Cloud Run region, for example ``us-central1``."""
+    job: str = Field(min_length=1)
+    """Name of the job whose executions are workspaces."""
+    image: str = Field(min_length=1)
+    """Runtime image the emitted job definition runs."""
+    cpu: str = "2"
+    """CPU limit per execution."""
+    memory: str = "4Gi"
+    """Memory limit per execution."""
+    timeout_seconds: int = Field(default=604800, gt=0)
+    """Task timeout in the emitted job definition. Cloud Run allows up to 168 hours."""
+    credentials_env: str = "GOOGLE_APPLICATION_CREDENTIALS"
+    """Name of the environment variable naming the driver's own credential file."""
+    daemon_token_secret: str = "grove-daemon-token"
+    """Secret Manager secret the container reads the daemon token from."""
+    gcloud_bin: str = "gcloud"
+    """The ``gcloud`` executable."""
+    cli_timeout_seconds: float = Field(default=120.0, gt=0)
+    """How long one ``gcloud`` call may run before it counts as no answer."""
+
+
+class AcaJobRuntime(BaseModel):
+    """A remote workspace as one execution of an Azure Container Apps job.
+
+    The job is yours: Grove emits a manual-trigger job template for ``az containerapp
+    job create --yaml`` and then only starts, reads and stops executions of it.
+    """
+
+    model_config = _FROZEN
+
+    LABEL: ClassVar[str] = "Azure Container Apps job"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["aca_job"] = "aca_job"
+    """Selects the Azure Container Apps job driver."""
+    subscription: str = Field(min_length=1)
+    """Azure subscription id."""
+    resource_group: str = Field(min_length=1)
+    """Resource group holding the job."""
+    environment: str = Field(min_length=1)
+    """Container Apps environment the emitted job runs in."""
+    job: str = Field(min_length=1)
+    """Name of the job whose executions are workspaces."""
+    image: str = Field(min_length=1)
+    """Runtime image the emitted template runs."""
+    cpu: float = Field(default=2, gt=0)
+    """vCPUs per execution."""
+    memory: str = "4Gi"
+    """Memory per execution."""
+    replica_timeout_seconds: int = Field(default=86400, gt=0)
+    """Longest one execution may run before the platform ends it."""
+    client_secret_env: str = "AZURE_CLIENT_SECRET"
+    """Name of the environment variable holding the driver's service principal secret."""
+    daemon_token_secret: str = "grove-daemon-token"
+    """Container Apps secret the container reads the daemon token from."""
+    storage_name: str = ""
+    """Azure Files storage mounted into the execution, or empty for none."""
+    az_bin: str = "az"
+    """The ``az`` executable."""
+    cli_timeout_seconds: float = Field(default=120.0, gt=0)
+    """How long one ``az`` call may run before it counts as no answer."""
+
+
+class OpenFaasRuntime(BaseModel):
+    """A remote workspace as one OpenFaaS function, on a self-hosted gateway.
+
+    One function per workspace (``grove-<id>``), pinned to one replica. Freezing
+    scales it to zero, which OpenFaaS licenses only in its Pro edition. The
+    gateway's ``upstream_timeout`` must be at least ``exec_timeout``.
+    """
+
+    model_config = _FROZEN
+
+    LABEL: ClassVar[str] = "OpenFaaS"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["openfaas"] = "openfaas"
+    """Selects the OpenFaaS driver."""
+    gateway_url: str = Field(min_length=1)
+    """Gateway root, for example ``https://faas.example.com``."""
+    namespace: str = "openfaas-fn"
+    """Namespace the functions are deployed into."""
+    image: str = Field(min_length=1)
+    """Runtime image each function runs."""
+    exec_timeout: str = "168h"
+    """Watchdog exec, read and write timeout for each function."""
+    username: str = "admin"
+    """Gateway basic-auth user."""
+    password_env: str = "OPENFAAS_PASSWORD"
+    """Name of the environment variable holding the gateway password."""
+    daemon_token_secret: str = "grove-daemon-token"
+    """OpenFaaS secret the function reads the daemon token from."""
+    http_timeout_seconds: float = Field(default=30.0, gt=0)
+    """How long one gateway request may take before it counts as no answer."""
+
+
+class LambdaMicrovmRuntime(BaseModel):
+    """A remote workspace as one AWS Lambda MicroVM, with native suspend and resume.
+
+    A MicroVM lives at most eight hours, running and suspended time together, and
+    runs only on arm64. Grove launches it with inbound connectivity off and the
+    platform's traffic-based idle suspend disabled, since the worker dials out and
+    Grove's own idle policy decides when to freeze.
+    """
+
+    model_config = _FROZEN
+
+    LABEL: ClassVar[str] = "AWS Lambda MicroVM"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["lambda_microvm"] = "lambda_microvm"
+    """Selects the Lambda MicroVM driver."""
+    region: str = Field(min_length=1)
+    """AWS region."""
+    image: str = Field(min_length=1)
+    """ARN of the MicroVM image built from the runtime image."""
+    image_version: str = ""
+    """Image version to run, or empty for the latest active one."""
+    memory_gb: int = Field(default=2, gt=0)
+    """Memory in the emitted image definition."""
+    max_duration_seconds: int = Field(default=28800, ge=1, le=28800)
+    """Total lifetime of one MicroVM, running plus suspended."""
+    execution_role_arn: str = ""
+    """IAM role the MicroVM runs as, or empty for none."""
+    access_key_env: str = "AWS_ACCESS_KEY_ID"
+    """Name of the environment variable holding the driver's access key id."""
+    secret_key_env: str = "AWS_SECRET_ACCESS_KEY"
+    """Name of the environment variable holding the driver's secret access key."""
+    daemon_token_secret_arn_env: str = "GROVE_DAEMON_TOKEN_ARN"
+    """Name of the environment variable holding the Secrets Manager ARN of the daemon token."""
+    aws_bin: str = "aws"
+    """The ``aws`` executable."""
+    cli_timeout_seconds: float = Field(default=120.0, gt=0)
+    """How long one ``aws`` call may run before it counts as no answer."""
+
+
+class OpenSandboxRuntime(BaseModel):
+    """A remote workspace as one sandbox on a self-hosted OpenSandbox server.
+
+    One sandbox per workspace, created from the Grove runtime image over the
+    server's lifecycle API. Freezing and stopping both pause it; deleting it is
+    the only way to end it. Outbound traffic is denied except to the daemon,
+    the repository's git host and ``allow_hosts``.
+    """
+
+    model_config = _FROZEN
+
+    LABEL: ClassVar[str] = "OpenSandbox"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["opensandbox"] = "opensandbox"
+    """Selects the OpenSandbox driver."""
+    image: str = Field(min_length=1)
+    """Runtime image each sandbox runs."""
+    url_env: str = "OPEN_SANDBOX_URL"
+    """Name of the environment variable holding the server's root URL; the driver adds ``/v1``."""
+    api_key_env: str = "OPEN_SANDBOX_API_KEY"
+    """Name of the environment variable holding the server's API key."""
+    image_auth_user_env: str = ""
+    """Name of the environment variable holding the registry user for a private image, or empty."""
+    image_auth_password_env: str = ""
+    """Name of the environment variable holding that registry password, or empty."""
+    timeout_seconds: int | None = Field(default=None, gt=0)
+    """Seconds before the server expires a sandbox, or none for no expiry. The server may cap it."""
+    resources: dict[str, str] = Field(min_length=1)
+    """Resource limits by name, for example ``{"cpu": "2", "memory": "4Gi"}``. Required:
+    the server refuses a sandbox with no limits unless it names a pool."""
+    allow_hosts: list[str] = Field(default_factory=list)
+    """Further hosts, addresses or CIDRs the sandbox may reach, such as the model API."""
+    http_timeout_seconds: float = Field(default=30.0, gt=0)
+    """How long one server request may take before it counts as no answer."""
+    snapshot_registry: str = ""
+    """Optional image repository for hibernated snapshots. Empty uses this runtime image's
+    repository with a ``snap-`` tag, so its registry can reuse the runtime's base layers."""
+    registry_user_env: str = ""
+    """Name of the environment variable holding that registry's user."""
+    registry_password_env: str = ""
+    """Name of the environment variable holding that registry's password or token."""
+    docker_bin: str = "docker"
+    """The ``docker`` executable reaching the same engine as the OpenSandbox server."""
+    snapshot_timeout_seconds: float = Field(default=1800.0, gt=0)
+    """How long one snapshot, push or pull may take before it counts as no answer."""
+    snapshot_poll_seconds: float = Field(default=2.0, gt=0)
+    """How often a snapshot still being written is asked whether it is ready."""
+
+
+class CloudRunEpisodicRuntime(BaseModel):
+    """A remote workspace run one turn per request on a Cloud Run service.
+
+    Nothing runs between turns: each request restores the worktree from the
+    workspace branch, runs exactly one turn, pushes and exits, so a turn must
+    finish inside one request. The service is yours, applied from the emitted
+    definition with ``gcloud run services replace``; Grove only calls it.
+    """
+
+    model_config = _FROZEN
+
+    LABEL: ClassVar[str] = "Google Cloud Run service, one turn per request"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["cloud_run_episodic"] = "cloud_run_episodic"
+    """Selects the Cloud Run episodic driver."""
+    project: str = Field(min_length=1)
+    """Google Cloud project id."""
+    region: str = Field(min_length=1)
+    """Cloud Run region, for example ``us-central1``."""
+    service: str = Field(min_length=1)
+    """Name of the service each turn is a request to."""
+    url: str = Field(min_length=1)
+    """The service URL turns are sent to."""
+    image: str = Field(min_length=1)
+    """Runtime image the emitted service runs."""
+    request_timeout_seconds: int = Field(default=3600, gt=0, le=3600)
+    """Longest one turn may run. Cloud Run allows at most 60 minutes per request."""
+    credentials_env: str = "GOOGLE_APPLICATION_CREDENTIALS"
+    """Name of the environment variable naming the credential that may invoke the service."""
+    gcloud_bin: str = "gcloud"
+    """The ``gcloud`` executable, used to mint the invoker's identity token."""
+    cli_timeout_seconds: float = Field(default=60.0, gt=0)
+    """How long minting a token may take before it counts as no answer."""
+
+
+class LambdaEpisodicRuntime(BaseModel):
+    """A remote workspace run one turn per invocation of a classic Lambda function.
+
+    A function runs at most 15 minutes, so a turn must fit inside one invocation,
+    and the worker must push before its own deadline: Lambda gives no SIGTERM.
+    The function is yours, applied from the emitted template.
+    """
+
+    model_config = _FROZEN
+
+    LABEL: ClassVar[str] = "AWS Lambda, one turn per invocation"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["lambda_episodic"] = "lambda_episodic"
+    """Selects the classic Lambda episodic driver."""
+    region: str = Field(min_length=1)
+    """AWS region."""
+    function: str = Field(min_length=1)
+    """Name or ARN of the function each turn invokes."""
+    image: str = Field(min_length=1)
+    """Runtime image URI the emitted function runs."""
+    memory_mb: int = Field(default=4096, ge=128, le=10240)
+    """Function memory."""
+    ephemeral_mb: int = Field(default=10240, ge=512, le=10240)
+    """``/tmp`` size, which must hold the restored worktree."""
+    access_key_env: str = "AWS_ACCESS_KEY_ID"
+    """Name of the environment variable holding the driver's access key id."""
+    secret_key_env: str = "AWS_SECRET_ACCESS_KEY"
+    """Name of the environment variable holding the driver's secret access key."""
+    aws_bin: str = "aws"
+    """The ``aws`` executable."""
+    cli_timeout_seconds: float = Field(default=960.0, gt=0)
+    """How long one invoke may take; a little over the 900 second function limit."""
+
+
+class AcaFunctionsEpisodicRuntime(BaseModel):
+    """A remote workspace run one turn per HTTP request to Azure Functions on Container Apps.
+
+    An ingress-scaled app with no documented long-running guarantee, so one
+    request carries exactly one turn. The app is yours, applied from the
+    emitted template; Grove calls it with an Entra ID token minted by ``az``.
+    """
+
+    model_config = _FROZEN
+
+    LABEL: ClassVar[str] = "Azure Functions, one turn per request"
+    """The driver's name as a person reads it, shown wherever a runtime is offered."""
+
+    kind: Literal["aca_functions_episodic"] = "aca_functions_episodic"
+    """Selects the Azure Functions on Container Apps episodic driver."""
+    subscription: str = Field(min_length=1)
+    """Azure subscription id."""
+    resource_group: str = Field(min_length=1)
+    """Resource group holding the app."""
+    environment: str = Field(min_length=1)
+    """Container Apps environment the emitted app runs in."""
+    app: str = Field(min_length=1)
+    """Name of the function app."""
+    url: str = Field(min_length=1)
+    """The function's HTTPS endpoint each turn is sent to."""
+    image: str = Field(min_length=1)
+    """Runtime image the emitted app runs."""
+    token_resource: str = Field(min_length=1)
+    """The Entra ID application the function's auth accepts tokens for."""
+    request_timeout_seconds: float = Field(default=3600.0, gt=0)
+    """Longest one turn may run before Grove stops waiting."""
+    client_secret_env: str = "AZURE_CLIENT_SECRET"
+    """Name of the environment variable holding the driver's service principal secret."""
+    az_bin: str = "az"
+    """The ``az`` executable, used to mint the invoker's token."""
+    cli_timeout_seconds: float = Field(default=60.0, gt=0)
+    """How long minting a token may take before it counts as no answer."""
+
+
+#: A ``runtimes.<name>`` block whose workload stays up between turns.
+ResidentRuntimeConfig = (
+    CloudRunJobRuntime | AcaJobRuntime | OpenFaasRuntime | LambdaMicrovmRuntime | OpenSandboxRuntime
+)
+#: A ``runtimes.<name>`` block that runs one turn per invocation.
+EpisodicRuntimeConfig = (
+    CloudRunEpisodicRuntime | LambdaEpisodicRuntime | AcaFunctionsEpisodicRuntime
+)
+#: One ``runtimes.<name>`` block, selected by its ``kind``.
+RemoteRuntimeConfig = Annotated[
+    ResidentRuntimeConfig | EpisodicRuntimeConfig,
+    Field(discriminator="kind"),
+]
+
+
+class IdleConfig(BaseModel):
+    """Suspend a workspace whose agent has been idle for a while; the next message wakes it.
+
+    Idle means the agent finished its turn with no question pending and nothing
+    queued, and its transcript has not moved for the cooldown. A container is
+    paused in place (memory kept, no CPU); a host workspace is left as it is.
+    """
+
+    model_config = _FROZEN
+
+    cooldown_seconds: int = Field(default=900, ge=60)
+    """How long an agent must be at rest before its workspace is suspended."""
+    hibernate_after_seconds: int = Field(default=900, ge=0)
+    """How long a suspended workspace stays suspended before a runtime that can snapshot it
+    releases it entirely; 0 never does."""
+
+
+class TriggersConfig(BaseModel):
+    """Instructions the Grove daemon puts into a working agent's session on its own.
+
+    Grove ships four rules: the first-turn brief (``start``), a reminder after the
+    agent's context is compacted (``compaction``), a reminder when its reported phase
+    goes stale (``phase``), and a request to name a workspace that still has a generated
+    title or no description (``unnamed``, sent at most twice). Every layer can add
+    rules, switch one off with ``"enabled": false``, or change one field of a built-in
+    by naming it, the way ``agents`` entries merge. Any rule, including one whose
+    ``when`` is ``manual``, can also be sent on demand with ``grove trigger fire``.
+    """
+
+    model_config = _FROZEN
+
+    enabled: bool = True
+    """Run triggers at all. Off stops every rule, the first-turn brief included."""
+    check_seconds: int = Field(default=60, ge=15, le=3600)
+    """How often the daemon checks each running workspace. Idle waiting costs nothing;
+    each check reads one workspace's activity row."""
+    rules: list[TriggerRule] = Field(default_factory=list)
+    """The rules, merged by ``name`` across layers. Grove's own four are layer 0."""
+
+    @model_validator(mode="after")
+    def _names_are_unique(self) -> TriggersConfig:
+        names = [rule.name for rule in self.rules]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"trigger names must be unique: {', '.join(duplicates)}")
+        return self
+
+    def rule(self, name: str) -> TriggerRule | None:
+        """The rule called *name*, or ``None``."""
+        return next((rule for rule in self.rules if rule.name == name), None)
+
+    def active(self) -> tuple[TriggerRule, ...]:
+        """Every enabled rule whose condition the daemon evaluates on its own."""
+        if not self.enabled:
+            return ()
+        return tuple(rule for rule in self.rules if rule.enabled and rule.when != "manual")
+
+    @staticmethod
+    def seed_layer() -> dict[str, Any]:
+        """Grove's own rules as cascade layer 0, read from the packaged catalog.
+
+        A JSON file rather than Python constants so the shipped rules are the same
+        shape a user writes, and so a fork can replace them without touching code.
+        """
+        source = resources.files("grove.core").joinpath("data", "triggers.json")
+        return {"triggers": json.loads(source.read_text(encoding="utf-8"))}
 
 
 class NotificationsConfig(BaseModel):
@@ -2429,6 +3366,9 @@ class ModelsConfig(BaseModel):
     rule would silently name a model the operator never saw. An id with no entry keeps
     its own spelling rather than being guessed at.
     """
+    catalog_ttl_seconds: float = Field(default=300.0, ge=0)
+    """How long a discovered model list is reused before the agent's own CLI is asked
+    again; 0 asks every time."""
 
     @field_validator("display_names")
     @classmethod
@@ -2972,7 +3912,7 @@ class AgentRoster:
         return {"agents": [spec.model_dump(mode="json") for spec in cls.BUILTINS]}
 
     @staticmethod
-    def entry_name(entry: Any) -> str:
+    def entry_name(entry: Any, *, section: str = "agents") -> str:
         """The ``name`` of one raw ``agents`` entry, or ``ConfigError``.
 
         The single definition of "is this a usable agent entry", read by both
@@ -2992,7 +3932,7 @@ class AgentRoster:
         """
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             raise ConfigError(
-                f"invalid 'agents' entry {entry!r}: each entry must be an object with a "
+                f"invalid {section!r} entry {entry!r}: each entry must be an object with a "
                 "string 'name' (the key every layer's overrides merge by)"
             )
         return str(entry["name"])
@@ -3054,6 +3994,7 @@ class ExclusiveGroups:
         ContainerConfig.SECTION: ContainerConfig.EXCLUSIVE_FIELDS,
         TicketsConfig.SECTION: TicketsConfig.EXCLUSIVE_FIELDS,
         TelemetryConfig.SECTION: TelemetryConfig.EXCLUSIVE_FIELDS,
+        SlackConfig.SECTION: SlackConfig.EXCLUSIVE_FIELDS,
     }
 
     @classmethod
@@ -3239,6 +4180,7 @@ class CommittedEnvSource:
         ContainerConfig.SECTION,
         TicketsConfig.SECTION,
         TelemetryConfig.SECTION,
+        SlackConfig.SECTION,
     )
     COMMAND_FIELD: ClassVar[str] = "env_command"
     FILE_FIELD: ClassVar[str] = "env_file"
@@ -3302,55 +4244,140 @@ class CommittedEnvSource:
         )
 
 
-class DefaultsUserFirst:
-    """Resolve the one section where user policy outranks repository policy.
+class CommittedHostSections:
+    """Host configuration a committed layer may not author.
 
-    The ordinary cascade lets a project shape its own workspaces, which is right
-    for almost every setting. Create-form defaults are different: the values are
-    personal starting answers, so a project suggesting an agent or runtime must
-    not replace the operator's own habitual choice. Precedence alone cannot say
-    that for one section while preserving it everywhere else, so this is a
-    pre-merge pass like :class:`ExclusiveGroups` and the committed-layer guards.
+    ``daemon`` says where this host listens and where a workspace's credential is
+    sent; a repository that could set ``mailbox_url`` would have every container
+    worker hand its freshly minted bearer to an address the repository chose. The
+    daemon reads these from the global cascade only, but a project's manager
+    reads its own, so the strip is what keeps the two answers identical.
 
-    The rule stays field-level. A user who only saved an agent still receives a
-    project's default branch mode; stripping the whole project ``defaults``
-    object would turn one personal preference into a refusal of every useful
-    team convention.
+    ``artifacts`` names host directories the dashboard may read files from; a
+    repository that could set it would choose what its own agent may publish.
+
+    ``federation.enabled`` is the same rule one level down: a cloned repository
+    must never join this host to somebody's hub. The rest of that block may ride
+    in a committed layer, since it does nothing until a trusted layer enables it.
+    """
+
+    SECTIONS: ClassVar[tuple[str, ...]] = ("daemon", "artifacts")
+    FIELDS: ClassVar[tuple[tuple[str, str], ...]] = (("federation", "enabled"),)
+
+    @classmethod
+    def resolve(
+        cls, layers: Sequence[Mapping[str, Any]], *, committed: frozenset[int]
+    ) -> list[dict[str, Any]]:
+        resolved = [dict(layer) for layer in layers]
+        for index in committed:
+            for section in cls.SECTIONS:
+                if resolved[index].pop(section, None) is not None:
+                    logger.warning(
+                        "config cascade: committed '{}' ignored — it is host configuration "
+                        "(set it in your user config or .grove/config.local.json instead)",
+                        section,
+                    )
+            for section, name in cls.FIELDS:
+                block = resolved[index].get(section)
+                if isinstance(block, Mapping) and name in block:
+                    resolved[index][section] = {k: v for k, v in block.items() if k != name}
+                    logger.warning(
+                        "config cascade: committed '{}.{}' ignored — only your own "
+                        "config may turn it on",
+                        section,
+                        name,
+                    )
+        return resolved
+
+
+class DefaultsProvenance:
+    """Which saved layer supplied each ``defaults`` field, recorded while the layers are apart.
+
+    ``defaults`` merges with the ordinary cascade precedence: a project's saved
+    launch answer beats the user's, and an environment or command-line override
+    beats both. The merge discards provenance, and a create form needs it to say
+    "Host, project default" rather than an ambiguous "Default", so this pass
+    records the highest layer mentioning each key before the merge runs.
     """
 
     SECTION: ClassVar[str] = "defaults"
 
     @classmethod
-    def resolve(
+    def record(
         cls,
         layers: list[dict[str, Any]],
         *,
         user: int | None,
         project: frozenset[int],
-    ) -> list[dict[str, Any]]:
-        """Strip project keys that the user layer already sets.
+    ) -> tuple[
+        dict[str, LaunchSource],
+        str | None,
+        dict[tuple[str, str], LaunchSource],
+        dict[str, int],
+        dict[tuple[str, str], int],
+    ]:
+        """Map saved defaults and profile cells to the layer that last set each one.
 
-        A missing user layer has no preference to protect. A malformed section
-        stays untouched so Pydantic owns the useful validation message rather
-        than this pre-validation mechanism silently repairing it.
+        Also returns the agent saved IN THE SAME LAYER as the winning model:
+        a model id belongs to the agent it was saved with, and once a higher
+        layer replaces the agent the merged section can no longer say so.
         """
-        resolved = [dict(layer) for layer in layers]
-        if user is None:
-            return resolved
-        user_defaults = resolved[user].get(cls.SECTION)
-        if not isinstance(user_defaults, dict):
-            return resolved
-        user_keys = set(user_defaults)
-        if not user_keys:
-            return resolved
-        for index in project:
-            project_defaults = resolved[index].get(cls.SECTION)
-            if not isinstance(project_defaults, dict):
+        sources: dict[str, LaunchSource] = {}
+        model_agent: str | None = None
+        profile_sources: dict[tuple[str, str], LaunchSource] = {}
+        default_layers: dict[str, int] = {}
+        profile_layers: dict[tuple[str, str], int] = {}
+        for index, layer in enumerate(layers):
+            section = layer.get(cls.SECTION)
+            if not isinstance(section, dict):
                 continue
-            resolved[index][cls.SECTION] = {
-                key: value for key, value in project_defaults.items() if key not in user_keys
-            }
-        return resolved
+            source: LaunchSource = (
+                "project" if index in project else "user" if index == user else "config"
+            )
+            for key, value in section.items():
+                if value is None:
+                    sources.pop(key, None)
+                    default_layers.pop(key, None)
+                else:
+                    sources[key] = source
+                    default_layers[key] = index
+            cls._record_profiles(
+                section.get("profiles"),
+                source=source,
+                index=index,
+                sources=profile_sources,
+                layers=profile_layers,
+            )
+            if section.get("model") is not None:
+                agent = section.get("agent")
+                model_agent = agent if isinstance(agent, str) else None
+        return sources, model_agent, profile_sources, default_layers, profile_layers
+
+    @staticmethod
+    def _record_profiles(
+        profiles: object,
+        *,
+        source: LaunchSource,
+        index: int,
+        sources: dict[tuple[str, str], LaunchSource],
+        layers: dict[tuple[str, str], int],
+    ) -> None:
+        """Record one raw layer's profile cells without validating their content."""
+        if not isinstance(profiles, dict):
+            return
+        for row, cells in profiles.items():
+            if not isinstance(row, str) or not isinstance(cells, dict):
+                continue
+            for kind, profile in cells.items():
+                if not isinstance(kind, str):
+                    continue
+                key = (row, kind)
+                if profile is None:
+                    sources.pop(key, None)
+                    layers.pop(key, None)
+                else:
+                    sources[key] = source
+                    layers[key] = index
 
 
 class EnvReferences:
@@ -3366,6 +4393,9 @@ class EnvReferences:
     Resolution runs over the MERGED dict, immediately before
     ``GroveConfig.model_validate``, so every field validator sees the resolved
     string and a bad resolved value is rejected exactly like a bad literal.
+    **An agent's ``env`` map is the one exception (``DEFERRED``):** it stays a
+    template until that agent launches (``AgentSpec.launch_env``), because it is
+    where per-agent credentials live and every other process loads this config.
 
     **An unset or EMPTY variable is a loud error naming both the variable and the
     dotted config path.** Emptiness reads as absence in the implicit ``GROVE_*``
@@ -3389,19 +4419,36 @@ class EnvReferences:
 
     PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)\}")
     RESERVED: ClassVar[frozenset[str]] = frozenset({"repo", "repo_name"})
+    # The one subtree whose references are left for its consumer: an agent's
+    # `env` is resolved by `AgentSpec.launch_env` when that agent launches.
+    DEFERRED: ClassVar[re.Pattern[str]] = re.compile(r"agents\[\d+\]\.env")
 
     @classmethod
-    def resolve(cls, merged: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, Any]:
+    def refers(cls, text: str) -> bool:
+        """Whether *text* carries a reference this class would resolve (not an escape)."""
+        return any(
+            not m.group(1) and m.group(2) not in cls.RESERVED for m in cls.PATTERN.finditer(text)
+        )
+
+    @classmethod
+    def resolve(
+        cls, merged: Mapping[str, Any], env: Mapping[str, str], *, path: str = ""
+    ) -> dict[str, Any]:
         """Return ``merged`` with every reference in a string VALUE resolved.
 
         Keys are never rewritten — a section named after a variable is a section,
-        not a reference.
+        not a reference. *path* prefixes the dotted location an error names.
         """
-        return {key: cls._value(value, env, key) for key, value in merged.items()}
+        return {
+            key: cls._value(value, env, f"{path}.{key}" if path else key)
+            for key, value in merged.items()
+        }
 
     @classmethod
     def _value(cls, value: Any, env: Mapping[str, str], path: str) -> Any:
         """Walk one node; only strings are candidates, lists included by index."""
+        if cls.DEFERRED.fullmatch(path):
+            return value
         if isinstance(value, str):
             return cls._text(value, env, path)
         if isinstance(value, dict):
@@ -3589,6 +4636,11 @@ class GroveConfig(BaseModel):
     """Repo roots kept visible in every picker even with zero workspaces. `~` expands,
     and a path that is not a git repo is ignored.
     """
+    projects_root: str = "~/Projects"
+    """The directory new projects are created or cloned into, and scanned for
+    existing repositories not yet in `projects`. `~` expands. The web wizard
+    shows it and lets one add change it.
+    """
     panels: list[PanelConfig] = Field(default_factory=list)
     """Embeddable compose-service views this project permits in each workspace.
 
@@ -3626,6 +4678,9 @@ class GroveConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     tls: TLSConfig = Field(default_factory=TLSConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    daemon: DaemonConfig = Field(default_factory=DaemonConfig)
+    federation: FederationConfig = Field(default_factory=FederationConfig)
+    scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
     hooks: HooksConfig = Field(default_factory=HooksConfig)
     lifecycle_max_pending: int = Field(default=64, gt=0)
     """Maximum accepted lifecycle operations, including lock waiters and running work."""
@@ -3639,8 +4694,17 @@ class GroveConfig(BaseModel):
     mewbo: MewboConfig = Field(default_factory=MewboConfig)
     tickets: TicketsConfig = Field(default_factory=TicketsConfig)
     issueops: IssueOpsConfig = Field(default_factory=IssueOpsConfig)
+    slack: SlackConfig = Field(default_factory=SlackConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
-    nudges: NudgesConfig = Field(default_factory=NudgesConfig)
+    triggers: TriggersConfig = Field(default_factory=TriggersConfig)
+    reaper: ReaperConfig = Field(default_factory=ReaperConfig)
+    artifacts: ArtifactsConfig = Field(default_factory=ArtifactsConfig)
+    runtimes: dict[str, RemoteRuntimeConfig] = Field(default_factory=dict)
+    """Remote runtimes by name. A workspace created on one runs as a long-lived
+    container on that platform and dials this daemon; nothing dials in."""
+    idle: IdleConfig = Field(default_factory=IdleConfig)
+    fleet_digest: FleetDigestConfig = Field(default_factory=FleetDigestConfig)
+    speech: SpeechConfig = Field(default_factory=SpeechConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
@@ -3674,6 +4738,81 @@ class GroveConfig(BaseModel):
                 return spec
         return None
 
+    def validate_launch_defaults(
+        self,
+        *,
+        layers: Sequence[Mapping[str, Any]] = (),
+        user: int | None = None,
+        project: frozenset[int] = frozenset(),
+    ) -> None:
+        """Refuse defaults that cannot name one of this config's launch choices.
+
+        This runs after the optional built-in roster filter: validating earlier
+        would accept a profile that disappears before a workspace can launch it.
+        """
+        if self.defaults.agent is not None and self.find_agent(self.defaults.agent) is None:
+            raise ConfigError(
+                f"defaults.agent names unknown agent {self.defaults.agent!r}; "
+                "choose an entry in agents"
+            )
+        profiles = self.defaults.profiles or {}
+        for row, cells in profiles.items():
+            row_path = f"defaults.profiles.{row}"
+            is_named_runtime = row in self.runtimes
+            if row not in {"*", "host", "container", "remote"} and not is_named_runtime:
+                raise ConfigError(
+                    f"{row_path} is not '*', a runtime kind, or a configured runtimes.<name> block"
+                )
+            if is_named_runtime and isinstance(self.runtimes[row], EpisodicRuntimeConfig):
+                raise ConfigError(f"{row_path} names a task-only episodic runtime")
+            remote = row == "remote" or is_named_runtime
+            for kind, name in cells.items():
+                path = f"{row_path}.{kind}"
+                agent = self.find_agent(name)
+                if agent is None:
+                    raise ConfigError(
+                        f"{path} names unknown agent {name!r}; choose an entry in agents"
+                    )
+                if agent.kind != kind:
+                    raise ConfigError(
+                        f"{path} names {name!r}, which is a {agent.kind} profile, not {kind}"
+                    )
+                if remote and "native" not in agent.launch_modes:
+                    raise ConfigError(
+                        f"{path} names {name!r}, which cannot launch natively on a remote runtime"
+                    )
+        for index, layer in enumerate(layers):
+            section = layer.get(DefaultsProvenance.SECTION)
+            if not isinstance(section, Mapping):
+                continue
+            agent_name = section.get("agent")
+            profiles_raw = section.get("profiles")
+            wildcard = profiles_raw.get("*") if isinstance(profiles_raw, Mapping) else None
+            agent = self.find_agent(agent_name) if isinstance(agent_name, str) else None
+            if not isinstance(wildcard, Mapping) or agent is None:
+                continue
+            selected = wildcard.get(agent.kind)
+            if isinstance(selected, str) and selected != agent_name:
+                source = "project" if index in project else "user" if index == user else "config"
+                raise ConfigError(
+                    f"defaults.profiles.*.{agent.kind} contradicts defaults.agent "
+                    f"in the {source} configuration; choose one profile"
+                )
+
+    def profile_source(self, row: str, kind: AgentKind) -> LaunchSource:
+        """The layer that supplied one profile matrix cell."""
+        return self._profile_sources.get((row, kind), "config")
+
+    def wildcard_profile_precedes_default_agent(self, kind: AgentKind) -> bool:
+        """Whether the wildcard cell wins the same-kind default-agent tie."""
+        profile_layer = self._profile_layers.get(("*", kind))
+        agent_layer = self._default_layers.get("agent")
+        if profile_layer is None:
+            return False
+        if agent_layer is None:
+            return True
+        return profile_layer >= agent_layer
+
     # ─── resolved create defaults ────────────────────────────────────────────
     #
     # What a create that says nothing about a field actually gets. Three
@@ -3691,17 +4830,53 @@ class GroveConfig(BaseModel):
     # `defaults.model` and `defaults.skip_init` from every client that trusted
     # the engine. Resolving HERE means the CLI, TUI, daemon, MCP and issue-ops
     # inherit the user's saved answer for free, which is the argument
-    # `agent_cwds.default_path()` already makes one section over.
-    #
-    # `branch_mode` is deliberately NOT here: `CreateWorkspaceRequest.branch_plan`
-    # defaults to `AutoBranch()`, so an omitted plan is indistinguishable from an
-    # explicit auto one and there is no "unspecified" for this to answer. That
-    # asymmetry is why every client still applies it itself.
+    # `agent_cwds.default_path()` already makes one section over. The whole
+    # request (agent and branch plan included) is resolved by
+    # `core.launch_resolution.LaunchResolver`, which reads these.
+
+    #: Which layer saved each ``defaults`` key; set by `load_config`. A config
+    #: built in-process has no layers, so its saved answers read as ``config``.
+    _default_sources: dict[str, LaunchSource] = PrivateAttr(default_factory=dict)
+    #: Which layer saved each ``defaults.profiles`` cell; the nested map needs
+    #: its own provenance because the ordinary defaults merge is cell-by-cell.
+    _profile_sources: dict[tuple[str, str], LaunchSource] = PrivateAttr(default_factory=dict)
+    #: Raw-layer positions preserve precedence when a wildcard cell competes
+    #: with ``defaults.agent`` of the same kind.
+    _default_layers: dict[str, int] = PrivateAttr(default_factory=dict)
+    _profile_layers: dict[tuple[str, str], int] = PrivateAttr(default_factory=dict)
+    #: The agent saved beside the winning ``defaults.model``, as a one-tuple once
+    #: `load_config` knows it (the inner ``None`` meaning "saved for every
+    #: agent"); ``None`` for a config built in-process, which has no layers.
+    _model_agent: tuple[str | None] | None = PrivateAttr(default=None)
+
+    def default_source(self, key: str) -> LaunchSource:
+        """The layer that saved ``defaults.<key>``, for a field that is set."""
+        return self._default_sources.get(key, "config")
 
     @property
     def default_runtime(self) -> Literal["host", "container"]:
-        """Where an unopinionated create runs — the saved answer, else the cascade."""
-        return self.defaults.runtime or ("container" if self.container.enabled else "host")
+        """Where an unopinionated create runs: the saved answer, else the host.
+
+        ``container.enabled`` is deliberately not consulted. Configuring a
+        runtime makes it available; it was once also the default, so a user
+        who had never chosen anything got a container.
+        """
+        return self.defaults.runtime or "host"
+
+    @property
+    def resident_runtimes(self) -> tuple[str, ...]:
+        """The ``runtimes.<name>`` blocks a remote workspace can be created on, sorted.
+
+        Episodic blocks hold no workload between turns, so nothing resident is
+        ever created on one.
+        """
+        return tuple(
+            sorted(
+                name
+                for name, block in self.runtimes.items()
+                if not isinstance(block, EpisodicRuntimeConfig)
+            )
+        )
 
     @property
     def default_brief(self) -> bool:
@@ -3712,6 +4887,26 @@ class GroveConfig(BaseModel):
     def default_skip_init(self) -> bool:
         """Whether an unopinionated create skips the init script."""
         return self.defaults.skip_init or False
+
+    def default_model_for(self, agent_name: str) -> str | None:
+        """The saved model an unopinionated create of ``agent_name`` inherits.
+
+        A saved model was chosen for the agent saved beside it (in the same
+        config layer), so another roster entry does not inherit it: model ids
+        are a per-entry vocabulary (two gateway profiles of one kind can
+        differ), and an id the agent refuses fails the launch. With no saved
+        agent the saved model stays global, as before.
+
+        Args:
+            agent_name: The roster name the create launches.
+
+        Returns:
+            The saved model id, or ``None`` when nothing is inherited.
+        """
+        saved_agent = self.defaults.agent if self._model_agent is None else self._model_agent[0]
+        if saved_agent is not None and saved_agent != agent_name:
+            return None
+        return self.defaults.model
 
 
 # ─── public helpers ─────────────────────────────────────────────────────────
@@ -3796,7 +4991,10 @@ def load_config(
     # Mutually exclusive fields are resolved BEFORE the merge: a field-by-field
     # merge cannot express "my `inline` replaces your `path`", so the two layers
     # would both survive into a combination no layer asked for (`ExclusiveGroups`).
-    layers = ExclusiveGroups.resolve([AgentRoster.seed_layer(), *overlays])
+    overlays = [_retired_trigger_keys(_retired_master_key(layer)) for layer in overlays]
+    layers = ExclusiveGroups.resolve(
+        [{**AgentRoster.seed_layer(), **TriggersConfig.seed_layer()}, *overlays]
+    )
     # +1: the seed layer shifts every overlay index by one.
     committed_indexes = frozenset(i + 1 for i in committed)
     layers = CommittedShareFloor.resolve(layers, committed=committed_indexes)
@@ -3809,8 +5007,15 @@ def load_config(
     # layer's `env_file`. That is the fail-safe outcome: a repo's attempt to
     # claim the slot must not quietly promote the operator's own setting into it.
     layers = CommittedEnvSource.resolve(layers, committed=committed_indexes)
+    layers = CommittedHostSections.resolve(layers, committed=committed_indexes)
     # +1 again: both user and project overlay indexes are shifted by the seed.
-    layers = DefaultsUserFirst.resolve(
+    (
+        default_sources,
+        model_agent,
+        profile_sources,
+        default_layers,
+        profile_layers,
+    ) = DefaultsProvenance.record(
         layers,
         user=user_index + 1 if user_index is not None else None,
         project=frozenset(index + 1 for index in project_indexes),
@@ -3825,6 +5030,8 @@ def load_config(
         cfg = GroveConfig.model_validate(merged)
     except ValidationError as exc:
         raise ConfigError(f"Invalid configuration: {exc}") from exc
+    cfg._default_sources = default_sources
+    cfg._model_agent = (model_agent,)
 
     # `builtin_agents: false` is filtered AFTER the merge, never by dropping the
     # seed layer — dropping it would re-break this twice over: with no layer
@@ -3838,34 +5045,47 @@ def load_config(
     # so this assignment doesn't re-run validators.
     if not cfg.builtin_agents:
         cfg.agents = AgentRoster.allowed(cfg.agents, declared=AgentRoster.names_in(overlays))
+    cfg._profile_sources = profile_sources
+    cfg._default_layers = default_layers
+    cfg._profile_layers = profile_layers
+    cfg.validate_launch_defaults(
+        layers=layers,
+        user=user_index + 1 if user_index is not None else None,
+        project=frozenset(index + 1 for index in project_indexes),
+    )
 
     logger.debug("config loaded: {} layers merged", len(layers))
     return cfg
 
 
-def user_defaults_keys() -> frozenset[str]:
-    """Return the raw user-layer defaults fields that outrank project values.
+def shadowing_defaults_keys(scope: DefaultsScope, repo_root: Path | None) -> frozenset[str]:
+    """The saved ``defaults`` fields a higher layer sets, so a save to ``scope`` cannot win.
 
     Provenance disappears when the config layers merge, but the scope picker
-    needs this exact fact to explain why a project save cannot affect a field.
-    A broken user config belongs to ``load_config``'s loud validation path; the
-    advisory UI remains quiet rather than turning a warning into a second error.
+    needs this exact fact to explain why a save cannot affect a field: a user
+    save under a project that saved the same field, or a committed project save
+    under a project-local one. A broken file belongs to ``load_config``'s loud
+    validation path; the advisory UI remains quiet rather than turning a warning
+    into a second error.
     """
-    path = paths.user_config_path()
-    if not path.exists():
+    if repo_root is None or scope is DefaultsScope.PROJECT_LOCAL:
         return frozenset()
-    try:
-        raw = _read_json(path)
-    except ConfigError:
-        return frozenset()
-    defaults = raw.get(DefaultsUserFirst.SECTION)
-    if not isinstance(defaults, dict):
-        return frozenset()
-    try:
-        WorkspaceDefaults.model_validate(defaults)
-    except ValidationError:
-        return frozenset()
-    return frozenset(defaults)
+    higher = [DefaultsScope.PROJECT_LOCAL]
+    if scope is DefaultsScope.USER:
+        higher.append(DefaultsScope.PROJECT)
+    keys: set[str] = set()
+    for layer in higher:
+        path = layer.path(repo_root)
+        if not path.exists():
+            continue
+        try:
+            defaults = _read_json(path).get(DefaultsProvenance.SECTION)
+            if isinstance(defaults, dict):
+                WorkspaceDefaults.model_validate(defaults)
+                keys.update(key for key, value in defaults.items() if value is not None)
+        except (ConfigError, ValidationError):
+            continue
+    return frozenset(keys)
 
 
 def save_workspace_defaults(
@@ -3879,14 +5099,20 @@ def save_workspace_defaults(
     Reads and rewrites the raw layer rather than a merged :class:`GroveConfig`:
     serializing the latter would bake unrelated cascade values into the target.
     The whole object is replaced so a cleared form field clears its saved value
-    instead of leaving an old answer behind. The lock covers the read-modify-write
+    instead of leaving an old answer behind, except a ``HAND_EDITED`` field the
+    caller did not send, which keeps its saved value. The lock covers the read-modify-write
     because atomic publication alone prevents torn files, not a concurrent save
     from losing an earlier form's update.
     """
     target = scope.path(repo_root)
     with paths.exclusive_lock(target):
         raw = _read_json(target) if target.exists() else {}
-        raw[DefaultsUserFirst.SECTION] = defaults.model_dump(exclude_none=True)
+        previous = raw.get(DefaultsProvenance.SECTION)
+        section = defaults.model_dump(exclude_none=True)
+        for name in WorkspaceDefaults.HAND_EDITED - defaults.model_fields_set:
+            if isinstance(previous, dict) and name in previous:
+                section[name] = previous[name]
+        raw[DefaultsProvenance.SECTION] = section
         try:
             GroveConfig.model_validate(raw)
         except ValidationError as exc:
@@ -3980,14 +5206,73 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data
 
 
+def _retired_master_key(layer: dict[str, Any]) -> dict[str, Any]:
+    """Move one raw layer's retired ``master`` section onto ``fleet_digest``.
+
+    ``master.quiet_minutes`` configured the fleet digest's ``quiet`` flag before the
+    master role was removed. Rewriting at the RAW layer keeps the value at its file's
+    precedence, and a layer that already names ``fleet_digest`` wins.
+    """
+    if "master" not in layer:
+        return layer
+    rewritten = {key: value for key, value in layer.items() if key != "master"}
+    master = layer["master"]
+    if isinstance(master, dict) and "quiet_minutes" in master:
+        digest = dict(rewritten.get("fleet_digest") or {})
+        digest.setdefault("quiet_minutes", master["quiet_minutes"])
+        rewritten["fleet_digest"] = digest
+    logger.warning("`master` is retired; use `fleet_digest.quiet_minutes`")
+    return rewritten
+
+
+def _retired_trigger_keys(layer: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite one raw layer's retired reminder keys onto the trigger rules they became.
+
+    ``nudges.phase`` (shipped in 0.0.12) and ``brief.self_naming`` now configure the
+    ``phase`` and ``unnamed`` rules. Rewriting at the RAW layer, before the merge, keeps
+    each value at the precedence its own file gave it; a post-merge mapping could not
+    tell a user's ``false`` from a project's default.
+    """
+    nudges = layer.get("nudges")
+    brief = layer.get("brief")
+    self_naming = brief.get("self_naming") if isinstance(brief, dict) else None
+    if nudges is None and self_naming is None:
+        return layer
+    rules: list[dict[str, Any]] = []
+    phase = nudges.get("phase") if isinstance(nudges, dict) else None
+    if isinstance(phase, dict):
+        rule: dict[str, Any] = {"name": "phase"}
+        if "enabled" in phase:
+            rule["enabled"] = phase["enabled"]
+        if "every_minutes" in phase:
+            rule["after_minutes"] = phase["every_minutes"]
+        rules.append(rule)
+    if self_naming is False:
+        rules.append({"name": "unnamed", "enabled": False})
+    logger.warning("`nudges` and `brief.self_naming` are retired; use `triggers.rules`")
+    rewritten = {key: value for key, value in layer.items() if key != "nudges"}
+    triggers = dict(rewritten.get("triggers") or {})
+    triggers["rules"] = _merge_named(rules, list(triggers.get("rules") or []), "triggers")
+    rewritten["triggers"] = triggers
+    return rewritten
+
+
 def _deep_merge(*layers: dict[str, Any]) -> dict[str, Any]:
-    """Recursive dict merge, last-wins. The `agents` list merges by `name`."""
+    """Recursive dict merge, last-wins. `agents` and `triggers.rules` merge by `name`."""
     result: dict[str, Any] = {}
     for layer in layers:
         for key, value in layer.items():
             existing = result.get(key)
             if key == "agents" and isinstance(value, list) and isinstance(existing, list):
                 result[key] = _merge_agents(existing, value)
+            elif key == "triggers" and isinstance(value, dict) and isinstance(existing, dict):
+                merged = _deep_merge(existing, {k: v for k, v in value.items() if k != "rules"})
+                rules = value.get("rules")
+                if isinstance(rules, list):
+                    merged["rules"] = _merge_named(
+                        list(existing.get("rules") or []), rules, "triggers"
+                    )
+                result[key] = merged
             elif isinstance(value, dict) and isinstance(existing, dict):
                 result[key] = _deep_merge(existing, value)
             else:
@@ -4010,15 +5295,19 @@ def _merge_agents(base: list[Any], overlay: list[Any]) -> list[dict[str, Any]]:
     pass is the last place a bad entry can be reported, because dropping it here
     would keep it away from `model_validate` entirely.
     """
+    return _merge_named(base, overlay, "agents")
+
+
+def _merge_named(base: list[Any], overlay: list[Any], section: str) -> list[dict[str, Any]]:
+    """Merge two lists of named entries field by field; new names append in order.
+
+    The one rule every list-of-named-things in the cascade follows (`agents`,
+    `triggers.rules`), so a refinement reads the same wherever it is written.
+    """
     by_name: dict[str, dict[str, Any]] = {}
     order: list[str] = []
-    for item in base:
-        name = AgentRoster.entry_name(item)
-        if name not in by_name:
-            order.append(name)
-        by_name[name] = item
-    for item in overlay:
-        name = AgentRoster.entry_name(item)
+    for item in [*base, *overlay]:
+        name = AgentRoster.entry_name(item, section=section)
         if name not in by_name:
             order.append(name)
             by_name[name] = item

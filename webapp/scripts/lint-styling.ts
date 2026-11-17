@@ -54,6 +54,13 @@ const PORTED_FILES: Record<string, string> = {
   // hard-coded), sized in literal pixels and lit as an overlay; the port takes
   // `tone`, the rem ramp and the raised rung, and morphs in place on send.
   "components/grove/workspace/feedback-dialog.tsx": "components/elements/feedback-dialog.tsx",
+  // The vendored renderer passes no `componentsByLanguage`, the only seam a
+  // Mermaid fence can render through; the port passes it and adds the block's diagram/code toggle.
+  "components/grove/workspace/markdown-text.tsx": "components/assistant-ui/markdown-text.tsx",
+  // Same anatomy, different engine: mermaid's own dagre layout in place of
+  // beautiful-mermaid's, whose subgraph and edge-label placement is wrong on the
+  // diagrams agents write. Colours are the theme's tokens resolved at render time.
+  "components/grove/workspace/mermaid-diagram.tsx": "components/elements/mermaid-diagram.tsx",
 };
 
 /** Utilities whose value is a colour. */

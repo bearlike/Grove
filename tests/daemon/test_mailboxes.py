@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -133,6 +134,56 @@ def test_a_paused_workspace_is_listed_but_not_writable(
     assert all(row["live"] is False for row in rows)
     assert receipt["stage"] == "rejected"
     assert receipt["reason"] == "not_live"
+
+
+def test_owner_registration_returns_without_waiting_for_snapshot_cleanup(
+    mailbox_app: tuple[FastAPI, SessionStore, JsonWorkspaceStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _app, _auth_store, store = mailbox_app
+    app = build_app(cfg=_config(auth=False), store=store)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def confirm(_workspace_id: str) -> None:
+        entered.set()
+        release.wait()
+
+    with TestClient(app):
+        manager = app.state.registry.get(Path(app.state.registry.known_roots()[0]))
+        monkeypatch.setattr(manager, "confirm_wake", confirm)
+        route = next(
+            route
+            for route in app.state.mailbox_router.router().routes
+            if getattr(route, "path", "") == "/mailboxes/connection"
+        )
+
+        async def register() -> object:
+            response = await asyncio.wait_for(
+                route.endpoint(
+                    workspace_id=_WORKSPACE,
+                    provider_session_id="session-1",
+                    input_capacity=None,
+                    pending_input_ids=None,
+                    live=False,
+                    reads=False,
+                    _=None,
+                ),
+                timeout=0.1,
+            )
+            scheduled = await asyncio.to_thread(entered.wait, 1)
+            assert scheduled, "cleanup was not scheduled"
+            release.set()
+            return response
+
+        timer = threading.Timer(0.2, release.set)
+        timer.start()
+        try:
+            response = asyncio.run(register())
+        finally:
+            release.set()
+            timer.cancel()
+
+    assert response.status_code == 200
 
 
 def test_owner_registration_refuses_a_terminal_workspace(

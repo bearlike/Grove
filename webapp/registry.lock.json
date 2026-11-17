@@ -229,6 +229,11 @@
     "item": "elements-loading-state",
     "source": "assistant-ui"
   },
+  "components/elements/mermaid-diagram.tsx": {
+    "sha256": "7a18707e81eea0f9ed33ca8b4acc5e81dec480d5fb0e0d6366f163fa894aa4a5",
+    "item": "elements-mermaid-diagram",
+    "source": "assistant-ui"
+  },
   "components/elements/message-actions.tsx": {
     "sha256": "000c9da991dd888234576521192579169a0b6c4913ad2b025ee387b29c6d5277",
     "item": "elements-message-actions",
@@ -378,6 +383,11 @@
     "sha256": "8c4612a7c41319ac5049daa3b34b080f9784b6245c17780eb87c127e58e473db",
     "item": "input",
     "source": "shadcn"
+  },
+  "components/ui/kanban.tsx": {
+    "sha256": "bc964eb157ae52340bc592fca49cdb962ed6916426c2c744f00a46bf3e13d34e",
+    "item": "https://shadcn-kanban-board.com/r/kanban.json",
+    "source": "url"
   },
   "components/ui/kbd.tsx": {
     "sha256": "c0c0ae6a7d1adb7749b9b34cab8f4d2f5caf333e819b64c2051e77f918d3661f",

@@ -288,7 +288,6 @@ def _publisher(
     todo: TodoList | None = None,
     phase: PhaseReport | None = None,
     phase_resolver: Callable[[str, str], PhaseReport | None] | None = None,
-    task_resolver: Callable[[str, str], str | None] | None = None,
     transcript_probe: Callable[[str, str, str], bool] | None = None,
     ticket_held: bool | None = None,
     window: float = 5.0,
@@ -307,7 +306,6 @@ def _publisher(
         provider_resolver=lambda root, name: table.get(name),
         todo_resolver=lambda root, ws_id: todo,
         phase_resolver=phase_resolver or (lambda root, ws_id: phase),
-        task_resolver=task_resolver,
         transcript_probe=transcript_probe,
         holder_resolver=(None if ticket_held is None else (lambda root, refs: ticket_held)),
         clock=clock or (lambda: T0),
@@ -327,7 +325,6 @@ def _snapshot(**kw: object) -> PublishSnapshot:
         "agent_name": "claude",
         "agent_kind": "claude_code",
         "state": AgentActivityState.WORKING,
-        "current_task": None,
         "todo": None,
         "phase": None,
         "latest_commit": None,
@@ -386,13 +383,13 @@ def test_the_checklist_collapses_under_a_fixed_title_and_a_table_row() -> None:
 
 
 def test_the_activity_block_strips_the_agents_own_harness_markup() -> None:
-    """``current_task`` is a transcript excerpt, so it carries whatever markup
+    """A phase note is agent-written, so it carries whatever markup
     the agent's harness speaks. Both forges' sanitizers drop an unknown tag
     anyway — leaving it in only makes the stored body disagree with what a
     reader sees, and an unbalanced ``<`` swallows the text after it."""
     task = '<teammate-message teammate_id="lead">rebase onto main</teammate-message>'
-    body = TicketStatusPublisher.render(_snapshot(current_task=task))
-    assert "teammate-message" not in body
+    body = TicketStatusPublisher.render(_snapshot(phase=_report(note=task)))
+    assert "teammate-message" not in _activity(body)
     # The title no longer previews the text: it was the worst of both, giving a
     # reader who wanted the gist a fragment and a reader who wanted the text a
     # fold to expand anyway. The whole text lives in the body.
@@ -420,7 +417,6 @@ def test_the_section_titles_are_fixed_and_reproducible() -> None:
     body = TicketStatusPublisher.render(
         _snapshot(
             todo=todo,
-            current_task="rebasing onto main",
             phase=PhaseReport(phase="verify", note="running make lint", updated_at=T0),
             tickets=(TicketRef(provider="gitea", id="42", url="https://g/i/42", status="open"),),
         )
@@ -445,8 +441,7 @@ def test_bounded_sections_stay_open_and_unbounded_ones_collapse() -> None:
     body = TicketStatusPublisher.render(
         _snapshot(
             todo=todo,
-            current_task="rebasing onto main",
-            phase=PhaseReport(phase="verify", note=None, updated_at=T0),
+            phase=PhaseReport(phase="verify", note="rebasing onto main", updated_at=T0),
             tickets=(TicketRef(provider="gitea", id="42"),),
         )
     )
@@ -464,9 +459,9 @@ def test_the_activity_body_is_a_timestamped_hard_wrapped_fenced_block() -> None:
     gives the excerpt back the timestamp it loses by sitting behind a fold.
 
     Wrapping bounds the LINES, never the text — nothing is cut."""
-    text = "wire the parser " * 40  # far past any single line
-    body = TicketStatusPublisher.render(_snapshot(current_task=text))
-    block = body.partition("```\n")[2].partition("\n```")[0]
+    text = "wire the parser " * 12  # past any single line, within the 200-char note cap
+    body = TicketStatusPublisher.render(_snapshot(phase=_report(note=text)))
+    block = _activity(body).partition("```\n")[2].partition("\n```")[0]
     lines = block.splitlines()
     assert lines[0] == "[updated 2026-07-09 21:38 UTC]"
     assert lines[1] == ""
@@ -481,7 +476,7 @@ def test_a_fenced_block_in_the_task_text_cannot_break_out_of_the_activity_block(
     everything after it escaping into the comment as live markup. The fence
     lengthens past the longest backtick run in the text instead."""
     text = "here is the fix:\n```python\nprint('hi')\n```\ndone"
-    body = TicketStatusPublisher.render(_snapshot(current_task=text))
+    body = TicketStatusPublisher.render(_snapshot(phase=_report(note=text)))
     section = body.partition("<summary>💬 Latest activity</summary>")[2]
     block, _, after = section.partition("\n</details>")
     fence = next(line for line in block.splitlines() if line.startswith("`"))
@@ -492,14 +487,14 @@ def test_a_fenced_block_in_the_task_text_cannot_break_out_of_the_activity_block(
 
 
 def test_no_activity_block_without_task_text() -> None:
-    body = TicketStatusPublisher.render(_snapshot(current_task=None))
+    body = TicketStatusPublisher.render(_snapshot(phase=_report(note=None)))
     assert "Latest activity" not in body
 
 
 def test_render_includes_branch_commit_task_and_deep_link() -> None:
     commit = CommitSummary(sha="abc1234", subject="init parser", committed_at=T0)
     body = TicketStatusPublisher.render(
-        _snapshot(current_task="parsing the branch", latest_commit=commit)
+        _snapshot(phase=_report(note="parsing the branch"), latest_commit=commit)
     )
     assert body.startswith("## 🔨 Grove — Working\n")
     assert "| 🌿 **Branch** | `grove/42-fix-auth` (acme/proj) |" in body
@@ -1068,6 +1063,17 @@ def test_the_status_badge_points_at_the_path_the_reader_is_already_on() -> None:
     assert "/issues/43#issuecomment-" not in body
 
 
+def test_a_github_pr_anchor_uses_the_singular_pull_path() -> None:
+    """GitHub serves a PR at `/pull/<n>`; its `/pulls/<n>` is a different page."""
+    provider = _FakeProvider(name="github")
+    provider.bodies["43"] = "the PR description"
+    pub = _publisher(provider, window=5.0)
+    ref = TicketRef(provider="github", id="43", kind="pull_request")
+    pub.observe(_delta(_row(task="working", refs=(ref,))))
+    pub.flush_pending(now=T0 + timedelta(seconds=5))
+    assert "/pull/43#issuecomment-" in provider.bodies["43"]
+
+
 def test_an_issue_target_keeps_the_issues_path() -> None:
     provider = _FakeProvider()
     provider.bodies["42"] = "the issue description"
@@ -1271,49 +1277,17 @@ def _activity(body: str) -> str:
     return section.partition("\n</details>")[0]
 
 
-def test_the_resolved_task_text_wins_over_the_deltas_capped_field() -> None:
-    """The wire field is capped at 500 characters by every adapter because it
-    rides the ~1 Hz activity delta for EVERY workspace on the host — correct
-    there, a pure loss here, where the comment renders it once per flush behind
-    a fold. So the capped field stays capped and this per-request seam answers
-    whole: the same split the todo axis already makes (counts on the tick, the
-    full list behind a per-request read)."""
+def test_the_users_prompt_never_reaches_the_comment() -> None:
+    """``current_task`` is a transcript excerpt — often the user's own last
+    prompt — and a forge comment publishes it to everyone who can read the
+    ticket. Latest activity is the agent's phase note, and only that."""
     provider = _FakeProvider()
-    whole = "the whole story, uncut, as the agent actually wrote it"
-    pub = _publisher(provider, window=5.0, task_resolver=lambda root, ws_id: whole)
-    pub.observe(_delta(_row(task="the truncat…")))
+    pub = _publisher(provider, window=5.0, phase=_report(note="wiring the parser"))
+    pub.observe(_delta(_row(task="my private prompt")))
     pub.flush_pending(now=T0 + timedelta(seconds=5))
-    activity = _activity(provider.posts[0][1])
-    assert whole in activity
-    assert "the truncat…" not in activity
-
-
-def test_no_resolver_falls_back_to_the_deltas_own_task_text() -> None:
-    """``None`` is a real answer, not a miss — a workspace whose session cannot
-    be resolved still has the delta's field, and a comment that renders the
-    capped excerpt is strictly better than one that renders nothing."""
-    provider = _FakeProvider()
-    pub = _publisher(provider, window=5.0, task_resolver=lambda root, ws_id: None)
-    pub.observe(_delta(_row(task="the capped excerpt")))
-    pub.flush_pending(now=T0 + timedelta(seconds=5))
-    assert "the capped excerpt" in _activity(provider.posts[0][1])
-
-
-def test_a_raising_task_resolver_falls_back_and_never_breaks_the_publish() -> None:
-    """Best-effort, exactly like the todo and phase reads beside it: this is one
-    more dispatch-path read of a workspace that may have been killed under us,
-    and a read that costs a nicer excerpt must never cost the update itself —
-    let alone re-raise into the activity poll behind it."""
-
-    def boom(root: str, ws_id: str) -> str | None:
-        raise RuntimeError("session gone")
-
-    provider = _FakeProvider()
-    pub = _publisher(provider, window=5.0, task_resolver=boom)
-    pub.observe(_delta(_row(task="the capped excerpt")))
-    pub.flush_pending(now=T0 + timedelta(seconds=5))  # must not raise
-    assert len(provider.posts) == 1
-    assert "the capped excerpt" in _activity(provider.posts[0][1])
+    body = provider.posts[0][1]
+    assert "my private prompt" not in body
+    assert "wiring the parser" in _activity(body)
 
 
 # ─── enrichment at dispatch (a bare ref becomes a link and a live status) ─────
@@ -1578,7 +1552,6 @@ def test_coalesces_a_burst_into_one_flush_after_the_window() -> None:
     assert provider.posts == []  # nothing until the window elapses
     pub.flush_pending(now=T0 + timedelta(seconds=5))
     assert len(provider.posts) == 1
-    assert "step-c" in provider.posts[0][1]  # folded to the latest
 
 
 def test_flush_before_the_window_elapses_is_a_noop() -> None:
@@ -1793,7 +1766,6 @@ def test_flush_now_dispatches_the_latest_row_bypassing_the_window() -> None:
     assert provider.posts == []  # coalescing: nothing until the window elapses
     pub.flush_now("ws1")
     assert len(provider.posts) == 1
-    assert "mid-flight" in provider.posts[0][1]
 
 
 def test_flush_now_is_a_noop_for_an_unobserved_workspace() -> None:
@@ -1837,7 +1809,6 @@ def test_create_then_edit_lifecycle_reuses_one_comment() -> None:
     pub.flush_pending(now=T0 + timedelta(seconds=30))
     assert len(provider.posts) == 1
     assert provider.edits == [("c1", provider.edits[0][1])]
-    assert "second" in provider.edits[0][1]
 
 
 def test_marker_recovery_adopts_the_sticky_comment_not_an_old_reply() -> None:

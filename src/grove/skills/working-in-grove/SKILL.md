@@ -245,6 +245,23 @@ edit the existing key, never compose one.
 - **Attach a ticket the moment you learn it belongs to you.** Nothing is seeded,
   and nothing published, for a ref that is not attached yet.
 
+## Attach what you produce
+
+When you write something a person will want to open, such as a plan, a report,
+a `.drawio` diagram or a link to an external document, attach it so it is one
+click from the dashboard instead of a path in your reply:
+
+```bash
+grove artifacts attach docs/plan.md --title "Plan"
+grove artifacts attach https://example.com/design-doc
+```
+
+Or call `grove_attach_artifact` with the workspace id and target. Grove stores
+only the pointer, so keep editing the file and the dashboard shows it as it is
+now. A file must sit under your worktree, the project root or `/tmp`.
+`grove artifacts detach <path-or-url>` removes one. Inside a container, ask the
+orchestrator to attach the host path.
+
 ## The six phases
 
 Pick the one that matches the moment you are in. They are ordered and they
@@ -284,10 +301,21 @@ Write the file when what you are doing changes: `scope` before reading,
 Going backwards is correct: if verification overturns the design, report
 `plan` again and say why.
 
-If you keep working for a while without moving your phase, the Grove daemon
-may send you one line fenced as `<grove-instruction kind="reminder">`. It comes
-from Grove, not from the user. If your phase has moved, report it; if it has
-not, carry on. You get one reminder per report.
+The Grove daemon also sends you short instructions on its own, fenced as
+`<grove-instruction>`: when your phase has stood for ten minutes while you kept
+working, right after your context is compacted, and while the workspace still
+has a generated `wk-…` title or no description. They come from Grove, not from
+the user, and they are not optional: do what each one asks before your next
+step. If your phase genuinely has not moved, report it again with a fresh note.
+
+## Triggering your own session's controls
+
+`grove control` sends your own session one of its controls, the same ones the
+dashboard's Controls tab offers: `grove control run compact`, `grove control
+model <id>`, or `grove control run grove:<name>` for a Grove command the
+project configured. `grove control ls` lists what is available. With no `-w`
+it addresses your own session through `GROVE_PHASE_FILE`. It returns once the
+session has the command; the compaction itself happens after your turn ends.
 
 ## If the write fails, keep working
 

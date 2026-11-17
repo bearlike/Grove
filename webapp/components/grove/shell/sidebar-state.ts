@@ -33,6 +33,31 @@ export const useSidebarUi = create<SidebarUi>((set) => ({
   setMobileOpen: (mobileOpen) => set({ mobileOpen }),
 }));
 
+/** Routes whose page IS the fleet, so the rail's copy of it is redundant width. */
+const AUTO_COLLAPSE_ROUTES: readonly string[] = ["/fleet"];
+
+/**
+ * Collapse the rail on routes that render the whole fleet in the page, and put
+ * it back on leaving. Call ONCE, from the shell.
+ *
+ * This bypasses `setCollapsed` on purpose: the route is making a temporary
+ * claim on the space, not changing what the person prefers, so the stored
+ * preference is read on leave rather than overwritten on arrival. A ⌘B while
+ * on the route still writes the preference, which is what a deliberate toggle
+ * means.
+ */
+export function useRouteCollapse(pathname: string): void {
+  const auto = AUTO_COLLAPSE_ROUTES.includes(pathname);
+  useEffect(() => {
+    if (!auto) return;
+    useSidebarUi.setState({ collapsed: true });
+    return () => {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      useSidebarUi.setState({ collapsed: stored === "true" });
+    };
+  }, [auto]);
+}
+
 function remember(collapsed: boolean): boolean {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(STORAGE_KEY, String(collapsed));

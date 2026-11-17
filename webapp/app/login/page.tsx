@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { signInError } from "@/lib/auth/oidc-messages";
 
 type PairingState =
   | { kind: "idle"; error?: string }
@@ -34,7 +36,8 @@ function LoginForm(): React.ReactNode {
     return candidate?.startsWith("/") && !candidate.startsWith("//") ? candidate : "/";
   }, [search]);
   const [label, setLabel] = useState("Browser");
-  const [state, setState] = useState<PairingState>({ kind: "idle" });
+  const [state, setState] = useState<PairingState>({ kind: "idle", error: signInError(search.get("error")) });
+  const identityProvider = useIdentityProvider();
 
   useEffect(() => {
     if (state.kind !== "pending") return;
@@ -112,6 +115,9 @@ function LoginForm(): React.ReactNode {
           <CardDescription>Approve this browser from the Grove host.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {identityProvider && state.kind !== "pending" && state.kind !== "approved" ? (
+            <SignInWithProvider issuer={identityProvider} next={next} />
+          ) : null}
           {state.kind === "pending" ? (
             <div className="flex flex-col items-center gap-3">
               <p className="text-sm text-content-secondary">Enter this code on the Grove host.</p>
@@ -143,6 +149,59 @@ function LoginForm(): React.ReactNode {
       <LoginFooter />
     </main>
   );
+}
+
+/**
+ * Sign in with the organisation's identity provider, ahead of pairing.
+ *
+ * A real link, not a fetch: the flow is a chain of top-level redirects (this
+ * server → the IdP → this server's callback), so the browser has to navigate.
+ * Pairing stays below it, because the two are alternatives on one host — a
+ * person at the host can still approve a browser without an IdP account.
+ */
+function SignInWithProvider({ issuer, next }: { issuer: string; next: string }): React.ReactNode {
+  return (
+    <div className="flex flex-col gap-4" data-testid="login-oidc">
+      <Button asChild>
+        <a href={`/api/auth/oidc/start?next=${encodeURIComponent(next)}`}>Sign in with {issuer}</a>
+      </Button>
+      <div className="flex items-center gap-3 text-xs text-content-tertiary">
+        <Separator className="flex-1" />
+        or pair this device
+        <Separator className="flex-1" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The identity provider's host when sign-in is configured, else `null`.
+ *
+ * Same shape as `useDaemonVersion`: one request, never refetched, silent on
+ * failure — an absent button is the honest degraded state, and pairing below it
+ * still works.
+ */
+function useIdentityProvider(): string | null {
+  const [issuer, setIssuer] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/oidc", { cache: "no-store" });
+        if (!response.ok) return;
+        const body = (await response.json()) as { enabled?: unknown; issuer?: unknown };
+        if (!cancelled && body.enabled === true && typeof body.issuer === "string") setIssuer(body.issuer);
+      } catch {
+        // Silent: no button, pairing still offered.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return issuer;
 }
 
 /**

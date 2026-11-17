@@ -61,12 +61,16 @@ def test_get_controls_returns_composed_shape(daemon: TestClient, created_ws: str
         "models",
         "current_model",
         "permission_mode",
+        "efforts",
     }
     # The model catalog is the manager's contribution via resolve_models — the
     # claude aliases, present even with an empty fs scan.
     assert "sonnet" in body["models"]
     assert body["current_model"] is None  # no transcript minted yet
     assert body["permission_mode"] is None  # permission answering off by default
+    # This fixture is a terminal session: no control channel can carry a live
+    # effort change, so no level is offered even though the kind lists launch ones.
+    assert body["efforts"] == []
 
 
 def test_get_controls_unknown_workspace_is_404(daemon: TestClient) -> None:

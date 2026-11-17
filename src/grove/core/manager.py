@@ -37,6 +37,7 @@ from grove.core.agents import (
     AgentAdapter,
     AgentQuestion,
     AnswerSelection,
+    FinalResult,
     QueuedMessage,
     SessionControl,
     SessionControls,
@@ -45,17 +46,26 @@ from grove.core.agents import (
     get_adapter,
     resolve_models,
 )
-from grove.core.agents.brief import AgentBrief
 from grove.core.agents.hook import DEFAULT_DAEMON_LOOPBACK_URL, ClaudeHook, PendingQuestion
+from grove.core.agents.model import label_queue
 from grove.core.agents.registry import CONTEXT_VARIANT_SUFFIX
 from grove.core.agents.transcript_scope import config_dir_scope
+from grove.core.artifacts import ArtifactContent, ArtifactFiles
 from grove.core.attachments import Attachment, AttachmentStore
-from grove.core.config import MACRO_PREFIX, AgentKind, AgentSpec, GroveConfig, load_config
+from grove.core.auth import LOCAL_SUBJECT
+from grove.core.config import (
+    MACRO_PREFIX,
+    AgentKind,
+    AgentSpec,
+    GroveConfig,
+    TriggerRule,
+    load_config,
+)
 from grove.core.container_agent import ContainerAgent, ContainerAgentEntry
 from grove.core.container_decor import DecorPayload, DecorPlan
 from grove.core.container_policy import AgentSharePlan
-from grove.core.container_runtime import ContainerLifecycle, ContainerLiveness, ContainerState
 from grove.core.container_tmux import ContainerPaneLiveness, ContainerTmux, PaneReading
+from grove.core.contracts.artifacts import ArtifactRef
 from grove.core.contracts.attachments import AttachmentView
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import AutoBranch, BranchMode, ResolvedBranch
@@ -76,15 +86,20 @@ from grove.core.diagrams import DiagramFiles, DiagramPreview, DiagramPreviewFile
 from grove.core.env_source import EnvSource
 from grove.core.errors import (
     AgentSessionNotFound,
+    ArtifactUnavailable,
     BranchAlreadyCheckedOut,
     BranchConflict,
     BranchNotFound,
     CapabilityUnavailable,
+    ConfigError,
     ContainerError,
     DiagramConflict,
     DiagramUnavailable,
+    EffortNotSupported,
     EnvSourceError,
+    GitError,
     GroveError,
+    InvalidLaunch,
     MacroNotFound,
     MewboError,
     PaneNotFound,
@@ -105,15 +120,24 @@ from grove.core.launch import (
     LaunchSpec,
     TmuxLaunchBackend,
 )
+from grove.core.launch_resolution import (
+    LaunchAdjustment,
+    LaunchProblem,
+    LaunchResolution,
+    LaunchResolver,
+)
+from grove.core.lifecycle_stages import Stages
 from grove.core.mewbo import MewboClient
+from grove.core.native_owners import WorktreeRead
 from grove.core.otel_resource import compose_resource_attributes
 from grove.core.phase import PhaseFile, PhaseReport, TaskPhase
 from grove.core.preflight import HostPreflight
 from grove.core.process import reap_cwd_holders
 from grove.core.runtime import ContainerProvisioner, RuntimeDecision, RuntimeResolver
+from grove.core.runtimes import PUSH_TOKEN_ENV, RuntimeState, WorkspaceSpec
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tickets import TicketProviderRegistry
-from grove.core.tmux import AttachInstruction, ContainerAttach
+from grove.core.tmux import AttachInstruction
 from grove.core.workspace import (
     LIVE_STATUSES,
     CommitSummary,
@@ -136,6 +160,11 @@ from grove.core.workspace import (
     ensure_can_resume,
     ensure_can_steer,
     ensure_can_update,
+)
+from grove.core.workspace_runtime import (
+    ContainerLivenessReader,
+    WorkspaceRuntime,
+    WorkspaceRuntimes,
 )
 
 if TYPE_CHECKING:
@@ -167,6 +196,13 @@ EventKindStr = Literal[
     # enough that its beginning is news: `created`/`resumed`/`respawned` all
     # arrive minutes later, on the far side of it.
     "provisioning",
+    # Idle suspension (#970): the runtime's processes were suspended in place
+    # after the cooldown, and resumed by the next message or by hand.
+    "frozen",
+    "thawed",
+    # Hibernation (#1042): a frozen remote workload was released to a stored
+    # snapshot; the next message wakes it and emits `thawed`.
+    "hibernated",
 ]
 
 # Agent kinds steered over their own API rather than tmux injection. The
@@ -377,9 +413,13 @@ class WorkspaceManager:
         ticket_registry: TicketProviderRegistry | None = None,
         devcontainer_cli: DevcontainerCli | None = None,
         preflight: HostPreflight | None = None,
+        config_loader: Callable[[Path], GroveConfig] | None = None,
     ) -> None:
         self._repo_root = repo_root
         self._cfg = cfg
+        # How this repo's cascade is re-read for `launch_config`; `None` (an
+        # in-memory config, every test) means the saved defaults never move.
+        self._config_loader = config_loader
         self._store = store
         # Auto-revive is best-effort, so a failure is silent and the NEXT
         # message tries again — which turns one unrevivable workspace into a
@@ -409,10 +449,17 @@ class WorkspaceManager:
         self._runtime_resolver: RuntimeResolver | None = None
         self._container_provisioner: ContainerProvisioner | None = None
         self._container_backend: LaunchBackend | None = None
-        self._container_liveness: ContainerLiveness | None = None
-        # The daemon owns maintained runtime sources. A standalone manager keeps
-        # its one-shot read path until that owner explicitly binds its cache.
-        self._runtime_container_liveness: Callable[[str], ContainerState | None] | None = None
+        # Post-launch runtime answers (liveness, teardown, attach). The daemon
+        # owns maintained runtime sources; a standalone manager keeps the
+        # one-shot container read until that owner binds its cache.
+        self._runtimes = WorkspaceRuntimes(
+            cfg,
+            cli=self._devcontainer,
+            # Only the daemon's in-process client can reach a remote worker.
+            remote_runner=getattr(native_steer, "run_in_worktree", None),
+            remote_reachable=getattr(native_steer, "owner_connected", None),
+            remote_tailer=getattr(native_steer, "transcript_tail", None),
+        )
         self._runtime_host_tmux_liveness: Callable[[str], bool | None] | None = None
         self._runtime_host_tmux_activity: Callable[[str], datetime | None] | None = None
         # The agent-pane half of container liveness: "is the agent
@@ -437,7 +484,7 @@ class WorkspaceManager:
     def bind_runtime_liveness(
         self,
         *,
-        container: Callable[[str], ContainerState | None],
+        container: ContainerLivenessReader,
         host_tmux: Callable[[str], bool | None],
         host_tmux_activity: Callable[[str], datetime | None],
     ) -> None:
@@ -447,7 +494,7 @@ class WorkspaceManager:
         ``None`` result remains an unreadable boundary, never an absence claim.
         Standalone managers deliberately retain the existing direct probes.
         """
-        self._runtime_container_liveness = container
+        self._runtimes.container.bind_liveness(container)
         self._runtime_host_tmux_liveness = host_tmux
         self._runtime_host_tmux_activity = host_tmux_activity
 
@@ -458,6 +505,34 @@ class WorkspaceManager:
     @property
     def config(self) -> GroveConfig:
         return self._cfg
+
+    def launch_config(self) -> GroveConfig:
+        """The config every launch surface resolves against: this one, with saved defaults fresh.
+
+        The manager's config is fixed at construction because the runtimes, the
+        ticket registry and the provisioner are built from it. The ``defaults``
+        section is different: ``PUT /defaults`` writes it while the daemon runs,
+        and the defaults view, the launch preview and ``create`` must all see
+        that write at once or they disagree about what an untouched create
+        does. So only that section (and which layer saved each field) is re-read.
+        The roster and runtimes stay the cached ones, so a saved default naming
+        an agent added after this manager was built resolves as unknown in every
+        reader alike, rather than resolving in a view and failing at launch.
+
+        Blocking (one cascade read, ~3 ms measured): callers on an event loop
+        run it in a thread.
+        """
+        if self._config_loader is None:
+            return self._cfg
+        fresh = self._config_loader(self._repo_root)
+        cfg = self._cfg.model_copy(update={"defaults": fresh.defaults})
+        cfg._default_sources = fresh._default_sources
+        cfg._profile_sources = fresh._profile_sources
+        cfg._default_layers = fresh._default_layers
+        cfg._profile_layers = fresh._profile_layers
+        cfg._model_agent = fresh._model_agent
+        cfg.validate_launch_defaults()
+        return cfg
 
     @property
     def store(self) -> JsonWorkspaceStore:
@@ -811,7 +886,7 @@ class WorkspaceManager:
 
         ``None`` → ``""`` (agent starts at the worktree root, the historical
         shape). Otherwise the path must be the repo root or a descendant of it;
-        anything else is a loud ``GroveError`` raised before any side effect.
+        anything else is an ``InvalidLaunch`` on ``project_cwd``, raised before any side effect.
         Both sides are ``resolve()``d (the registry keys ``repo_root`` that way),
         so a symlinked ``project_cwd`` still maps correctly.
 
@@ -825,11 +900,10 @@ class WorkspaceManager:
 
         **An omitted cwd resolves the repo's own configured default
         (``agent_cwds.default``) HERE, in the engine, and not in any client.**
-        The precedent is `defaults.branch_mode`, which nothing engine-side
-        reads: the TUI applies it while building its request, so every other
-        client silently discards the user's saved answer. Resolving it at this
-        one seam means the CLI, the TUI, the daemon, MCP and issue-ops all
-        inherit it. A repo that declares no default still gets ``""`` — the
+        A default applied client-side is one every other client silently
+        discards (``defaults.branch_mode`` was, until ``LaunchResolver``).
+        Resolving it at this one seam means the CLI, the TUI, the daemon, MCP
+        and issue-ops all inherit it. A repo that declares no default still gets ``""`` — the
         historical worktree root — so nothing changes for anyone who has not
         opted in.
         """
@@ -843,8 +917,10 @@ class WorkspaceManager:
         try:
             rel = resolved.relative_to(self._repo_root)
         except ValueError:
-            raise GroveError(
-                f"project cwd {resolved} is not within repo root {self._repo_root}"
+            raise InvalidLaunch(
+                f"project cwd {resolved} is not within repo root {self._repo_root}",
+                field="project_cwd",
+                error="project_cwd_outside_repo",
             ) from None
         posix = rel.as_posix()
         return "" if posix == "." else posix
@@ -901,6 +977,10 @@ class WorkspaceManager:
         the same outcome `enabled: false` has always produced.
         """
         cfg = self._cfg.init_script
+        if state.runtime is Runtime.REMOTE:
+            # The agent's worktree is the workload's own clone; a script run on
+            # this host's copy would prepare a tree nobody works in.
+            return False
         is_container = state.runtime is Runtime.CONTAINER
         return cfg.enabled and not skip and cfg.applies(is_container=is_container)
 
@@ -1009,54 +1089,57 @@ class WorkspaceManager:
         self._record_provision_started(state, in_flight)
         self._emit("provisioning", state.id, {"phase": phase, "log_path": str(log_path)})
         self._ensure_control_files()
-        try:
-            container = self._provisioner().provision(
-                workspace_id=state.id,
-                worktree=Path(state.worktree_path),
-                decision=decision,
-                log_path=log_path,
-                kind=self.effective_kind(state),
-                # The repo's own remotes are an egress destination the allowlist
-                # cannot derive from config: an agent must be able to fetch and
-                # push its own repository, and a self-hosted forge is nobody's
-                # to hard-code. Read from the REPO root, not the worktree — a
-                # freshly-added worktree shares the repo's remotes either way,
-                # and the root is readable even before the worktree exists.
-                remote_urls=self._git.remote_urls(),
-                base=state.container,
-                # Resolved here rather than inside the provisioner so the one
-                # site that can fail loudly for a missing file or a failing
-                # command is the same transaction that rolls the workspace back.
-                container_env=self._container_env(state),
-                mailbox_socket=(
-                    Path(os.environ["GROVE_MAILBOX_SOCKET"])
-                    if state.native and os.environ.get("GROVE_MAILBOX_SOCKET")
-                    else None
-                ),
-            )
-        except ContainerError as exc:
-            self._record_provision_failure(state, exc, started=started, log_path=log_path)
-            container_id = getattr(exc, "container_id", None)
-            docker_bin = self._cfg.container.docker_bin
-            kept = (
-                f" container {container_id} was KEPT for diagnosis;"
-                f" remove it with `{docker_bin} rm -f {container_id}` when done"
-                if container_id
-                else ""
-            )
-            self._emit(
-                "error",
-                state.id,
-                {
-                    "phase": phase,
-                    "error": str(exc),
-                    "container_id": container_id or "",
-                    "log_path": str(log_path),
-                },
-            )
-            raise GroveError(
-                _log_failure_detail(f"container provisioning failed: {exc};{kept}", log_path)
-            ) from exc
+        # Held for the whole provision so a start-up pass in another process can
+        # tell this build from one a SIGKILL interrupted (`paths.lock_is_held`).
+        with paths.exclusive_lock(log_path):
+            try:
+                container = self._provisioner().provision(
+                    workspace_id=state.id,
+                    worktree=Path(state.worktree_path),
+                    decision=decision,
+                    log_path=log_path,
+                    kind=self.effective_kind(state),
+                    # The repo's own remotes are an egress destination the allowlist
+                    # cannot derive from config: an agent must be able to fetch and
+                    # push its own repository, and a self-hosted forge is nobody's
+                    # to hard-code. Read from the REPO root, not the worktree — a
+                    # freshly-added worktree shares the repo's remotes either way,
+                    # and the root is readable even before the worktree exists.
+                    remote_urls=self._git.remote_urls(),
+                    base=state.container,
+                    # Resolved here rather than inside the provisioner so the one
+                    # site that can fail loudly for a missing file or a failing
+                    # command is the same transaction that rolls the workspace back.
+                    container_env=self._container_env(state),
+                    mailbox_socket=(
+                        Path(os.environ["GROVE_MAILBOX_SOCKET"])
+                        if state.native and os.environ.get("GROVE_MAILBOX_SOCKET")
+                        else None
+                    ),
+                )
+            except ContainerError as exc:
+                self._record_provision_failure(state, exc, started=started, log_path=log_path)
+                container_id = getattr(exc, "container_id", None)
+                docker_bin = self._cfg.container.docker_bin
+                kept = (
+                    f" container {container_id} was KEPT for diagnosis;"
+                    f" remove it with `{docker_bin} rm -f {container_id}` when done"
+                    if container_id
+                    else ""
+                )
+                self._emit(
+                    "error",
+                    state.id,
+                    {
+                        "phase": phase,
+                        "error": str(exc),
+                        "container_id": container_id or "",
+                        "log_path": str(log_path),
+                    },
+                )
+                raise GroveError(
+                    _log_failure_detail(f"container provisioning failed: {exc};{kept}", log_path)
+                ) from exc
         return _replace(
             state,
             container=container,
@@ -1200,7 +1283,12 @@ class WorkspaceManager:
         if not state.runtime_fallback_reason:
             return False
         try:
-            return self._resolver().resolve(requested=None, repo_root=self._repo_root).is_container
+            # A fallback record wanted a container by definition, so promotion
+            # re-asks for one as an INHERITED choice: unavailable degrades, never raises.
+            decision = self._resolver().resolve(
+                requested=Runtime.CONTAINER, repo_root=self._repo_root, explicit=False
+            )
+            return decision.is_container
         except GroveError:
             return False
 
@@ -1222,7 +1310,9 @@ class WorkspaceManager:
         decision, not a defeat.
         """
         if promote and state.runtime_fallback_reason:
-            decision = self._resolver().resolve(requested=None, repo_root=self._repo_root)
+            decision = self._resolver().resolve(
+                requested=Runtime.CONTAINER, repo_root=self._repo_root, explicit=False
+            )
             if not decision.is_container:
                 # Still unavailable: refresh the reason (it may have changed
                 # from "CLI missing" to "engine down") and stay on the host.
@@ -1259,7 +1349,172 @@ class WorkspaceManager:
             state, self._resolver().container_decision(self._repo_root), phase="provision"
         )
 
-    def create(self, request: CreateWorkspaceRequest) -> WorkspaceState:  # noqa: PLR0912, PLR0915
+    def container_unavailable_reason(self) -> str | None:
+        """Why a container create would not run here right now, or ``None``; probes live.
+
+        The same container-scoped preflight ``create`` decides with, exposed so
+        a caller that previews many drafts can take one reading and reuse it.
+        Blocking (several subprocesses).
+        """
+        return self._resolver().unavailable_reason()
+
+    def host_refusal(self) -> str | None:
+        """Why this project's committed config forbids a host create, or ``None``; probes live."""
+        return self._resolver().host_refusal(self._repo_root)
+
+    def host_unavailable_reason(self) -> str | None:
+        """Why a host launch could not run here right now, or ``None``; probes git and tmux."""
+        preflight = self._preflight or HostPreflight(self._cfg)
+        return HostPreflight.first_failure(preflight.host_launch_checks(), "host")
+
+    @staticmethod
+    def _with_runtime_profile(
+        launch: LaunchResolution,
+        cfg: GroveConfig,
+        request: CreateWorkspaceRequest,
+        runtime: Runtime,
+        remote_runtime: str | None = None,
+    ) -> LaunchResolution:
+        """Replace an inherited profile after runtime admission changes its row."""
+        profile = LaunchResolver.profile_for(cfg, request, runtime, remote_runtime)
+        sources = {**launch.sources, "agent_name": profile.source}
+        model = launch.model
+        if request.model is None:
+            model = cfg.default_model_for(profile.agent.name) if profile.agent is not None else None
+            sources["model"] = cfg.default_source("model") if model is not None else "builtin"
+        adjustments = tuple(item for item in launch.adjustments if item.field != "agent_name")
+        if profile.adjustment is not None:
+            adjustments = (*adjustments, profile.adjustment)
+        return _dc_replace(
+            launch,
+            agent=profile.agent,
+            model=model,
+            sources=sources,
+            adjustments=adjustments,
+        )
+
+    @staticmethod
+    def _remote_candidate(cfg: GroveConfig, request: CreateWorkspaceRequest) -> str | None:
+        """The named block inferred by a profile row, else an unambiguous resident block."""
+        # A requested block passes through as named, even an unknown one: the
+        # admission refuses it, where substituting the only configured block
+        # would launch somewhere the caller never chose.
+        if request.remote_runtime is not None:
+            return request.remote_runtime
+        reverse = LaunchResolver.profile_runtime_row(cfg, request)
+        if reverse is not None and reverse[1] is not None:
+            return reverse[1]
+        resident = cfg.resident_runtimes
+        return resident[0] if len(resident) == 1 else None
+
+    @staticmethod
+    def _with_runtime_adjustment(
+        launch: LaunchResolution, fallback_reason: str | None
+    ) -> LaunchResolution:
+        """Add the visible host-fallback answer when runtime admission changed it."""
+        if fallback_reason is None:
+            return launch
+        return _dc_replace(
+            launch,
+            adjustments=(
+                *launch.adjustments,
+                LaunchAdjustment(
+                    field="runtime",
+                    value="host",
+                    reason=f"{fallback_reason}, so this runs on the host.",
+                ),
+            ),
+        )
+
+    def preview(
+        self,
+        request: CreateWorkspaceRequest,
+        *,
+        container_unavailable: str | None,
+        host_refused: str | None = None,
+    ) -> LaunchPreview:
+        """What ``create(request)`` would launch, and every refusal it would raise first.
+
+        The same resolution and the same pre-side-effect checks ``create``
+        runs, in the same order, collected as problems instead of raised, so a
+        preview and the create it previews cannot disagree about any field.
+        Nothing here touches git, tmux, Docker or the network:
+        ``container_unavailable`` and ``host_refused`` are readings the caller
+        holds (the daemon caches both briefly), and the resolver raises the same
+        refusal from them that a create raises from a live probe. So an empty
+        ``problems`` means "validation passed", never "provisioning will
+        succeed"; the create revalidates live.
+        """
+        cfg = self.launch_config()
+        launch = LaunchResolver.resolve(cfg, request)
+        problems = list(launch.problems)
+        agent = launch.agent
+        runtime = launch.runtime
+        fallback_reason: str | None = None
+        native = False
+        remote_runtime: str | None = None
+        if agent is not None:
+            decision_problem: LaunchProblem | None = None
+            try:
+                decision = self._resolver().resolve(
+                    requested=runtime,
+                    repo_root=self._repo_root,
+                    explicit=launch.sources.get("runtime") == "request",
+                    unavailable=container_unavailable,
+                    host_refused=host_refused,
+                )
+                runtime = decision.runtime
+                fallback_reason = decision.fallback_reason
+            except GroveError as exc:
+                decision_problem = _refusal(exc, field="runtime")
+            if decision_problem is not None:
+                problems.append(decision_problem)
+            else:
+                launch = self._with_runtime_adjustment(launch, fallback_reason)
+                remote_runtime = (
+                    self._remote_candidate(cfg, request) if runtime is Runtime.REMOTE else None
+                )
+                launch = self._with_runtime_profile(launch, cfg, request, runtime, remote_runtime)
+                agent = launch.agent
+                if agent is not None:
+                    checked = request.model_copy(
+                        update={"agent_name": agent.name, "remote_runtime": remote_runtime}
+                    )
+                    problem = _launch_problem(
+                        lambda: self._admit_effort(agent, checked.effort), field="effort"
+                    )
+                    if problem is not None:
+                        problems.append(problem)
+                    if runtime is Runtime.REMOTE:
+                        try:
+                            remote_runtime = self._admit_remote_offline(agent, checked)
+                        except GroveError as exc:
+                            problems.append(_refusal(exc, field="remote_runtime"))
+                    native = remote_runtime is not None or self._native_for(
+                        agent, runtime, request.native
+                    )
+        subpath = ""
+        cwd_problem = _launch_problem(
+            lambda: self._project_subpath(request.project_cwd), field="project_cwd"
+        )
+        if cwd_problem is not None:
+            problems.append(cwd_problem)
+        else:
+            subpath = self._project_subpath(request.project_cwd)
+        return LaunchPreview(
+            launch=launch,
+            runtime=runtime,
+            remote_runtime=remote_runtime,
+            runtime_fallback_reason=fallback_reason,
+            native=native,
+            project_subpath=subpath,
+            problems=tuple(problems),
+            adjustments=launch.adjustments,
+        )
+
+    def create(  # noqa: PLR0912, PLR0915
+        self, request: CreateWorkspaceRequest, *, created_by: str = LOCAL_SUBJECT
+    ) -> WorkspaceState:
         """Spin up a fresh workspace from a validated client request.
 
         Validation order (no side effects until all pass):
@@ -1278,9 +1533,17 @@ class WorkspaceManager:
         derived from the resolved plan and persisted on the state, so
         ``kill()`` later knows whether the branch is safe to delete.
         """
-        agent = self._cfg.find_agent(request.agent_name)
-        if agent is None:
-            raise GroveError(f"unknown agent: {request.agent_name}")
+        # Every omitted launch field is answered here, once, by the same pure
+        # resolver the launch preview and `GET /defaults` read, so what a form
+        # showed is what this create does. A conflict refuses before any side
+        # effect; the resolved choices are written back onto the request so the
+        # rest of this method reads one source.
+        launch_cfg = self.launch_config()
+        launch = LaunchResolver.resolve(launch_cfg, request)
+        launch.raise_first()
+        agent = launch.agent
+        assert agent is not None and launch.branch_plan is not None  # raise_first guarantees
+        request = request.model_copy(update={"branch_plan": launch.branch_plan})
         # Resume-into-workspace is gated + validated HERE, before any side
         # effect, so a bad request fails clean with no rollback work (mint runs
         # post-worktree, too late). Three checks, in order:
@@ -1294,14 +1557,17 @@ class WorkspaceManager:
         resume_session_id = request.resume_session_id
         if resume_session_id is not None:
             if agent.kind not in _RESUMABLE_KINDS:
+                resumable = ", ".join(sorted(_RESUMABLE_KINDS))
                 raise ResumeNotSupported(
                     f"agent kind {agent.kind or 'generic'!r} cannot resume a session by id; "
-                    "resume is supported only for claude_code and codex agents"
+                    f"resume is supported for {resumable} agents"
                 )
-            if agent.native_for(request.native):
+            # A fork starts a NEW session, which an owned worker can do.
+            if not request.fork_session and agent.native_for(request.native):
                 # Refused here, first, so the ref is never resolved for a launch
-                # that could not honour it: the owned worker starts its own
-                # session; the terminal launch (`native: false`) continues one.
+                # that could not honour it: these owned workers start their own
+                # session, and the terminal launch (`native: false`) continues
+                # one.
                 raise ResumeNotSupported(
                     f"agent {agent.name!r} would own a fresh native session; resume the "
                     "transcript with the terminal launch instead"
@@ -1318,14 +1584,55 @@ class WorkspaceManager:
                     f"{resume_listing.summary.adapter_kind} transcript"
                 )
             resume_session_id = resume_listing.summary.session_id
+            # An empty fork decoration is the adapter saying its tool cannot fork.
+            if request.fork_session and not get_adapter(agent.kind).fork_decoration(
+                resume_session_id
+            ):
+                raise ResumeNotSupported(
+                    f"forking a conversation is not implemented for {agent.kind!r} agents"
+                )
+        # A fork launches a NEW session from a copy, so from here on only a plain
+        # resume continues `resume_session_id`; a fork mints its own id instead.
+        fork_from = resume_session_id if request.fork_session else None
+        if fork_from is not None:
+            resume_session_id = None
 
         # The runtime decision runs BEFORE any side effect (D5): arm 2 refuses
         # here with no rollback work, and arm 4's fallback is decided while the
         # worktree still doesn't exist. It is resolved from config exactly ONCE
         # in a workspace's life — from here on the persisted value is the answer.
-        decision = self._resolver().resolve(requested=request.runtime, repo_root=self._repo_root)
+        decision = self._resolver().resolve(
+            requested=launch.runtime,
+            repo_root=self._repo_root,
+            explicit=launch.sources.get("runtime") == "request",
+        )
         if decision.notice:
             logger.info("{}", decision.notice)
+        remote_candidate = (
+            self._remote_candidate(launch_cfg, request)
+            if decision.runtime is Runtime.REMOTE
+            else None
+        )
+        launch = self._with_runtime_profile(
+            launch,
+            launch_cfg,
+            request,
+            decision.runtime,
+            remote_candidate,
+        )
+        agent = launch.agent
+        assert agent is not None
+        request = request.model_copy(
+            update={"agent_name": agent.name, "remote_runtime": remote_candidate}
+        )
+        # Profile selection follows the runtime decision, so admission must read
+        # the final profile rather than one selected for a runtime that fell back.
+        self._admit_effort(agent, request.effort)
+        agent.launch_env(os.environ)
+        launch = self._with_runtime_adjustment(launch, decision.fallback_reason)
+        remote_runtime = (
+            self._admit_remote(agent, request) if decision.runtime is Runtime.REMOTE else None
+        )
 
         # The rest of the saved `defaults` section, resolved once, here, beside
         # the runtime decision that already worked this way — an omitted field
@@ -1336,11 +1643,12 @@ class WorkspaceManager:
         # fields the user touched) from silently discarding the user's answer.
         model = request.model
         if model is None:
-            model = self._promote_default_model(self._cfg.defaults.model, agent)
-        skip_init = self._cfg.default_skip_init if request.skip_init is None else request.skip_init
+            model = self._promote_default_model(launch.model, agent)
+        skip_init = launch.skip_init
+        assert launch.branch_plan is not None
 
         ts = WorkspaceIdentity.timestamp()
-        resolved = request.branch_plan.resolve(self._cfg, request.title, ts)
+        resolved = launch.branch_plan.resolve(self._cfg, request.title, ts)
         resolved = self._apply_ticket_branch(resolved, request)
         self._validate_branch_plan(resolved)
 
@@ -1389,8 +1697,9 @@ class WorkspaceManager:
         # through every enabled provider. >1 match → each ref ambiguous. Pure, no
         # network — enrichment is the daemon's on-demand job.
         ticket_refs = self.ticket_providers.parse_workspace_refs(branch)
+        workspace_id = WorkspaceIdentity.new_id()
         state = WorkspaceState(
-            id=WorkspaceIdentity.new_id(),
+            id=workspace_id,
             title=request.title,
             repo_root=str(self._repo_root),
             branch=branch,
@@ -1398,7 +1707,7 @@ class WorkspaceManager:
             base_commit=base_commit,
             worktree_path=str(worktree),
             tmux_session=session,
-            agent_name=request.agent_name,
+            agent_name=agent.name,
             status=WorkspaceStatus.RUNNING,
             created_at=now,
             updated_at=now,
@@ -1414,11 +1723,24 @@ class WorkspaceManager:
             # Resolved from the cascade exactly like `runtime` and persisted for
             # the same reason: it is applied at every launch, so the answer has
             # to be the one this workspace was created under.
-            brief=self._cfg.default_brief if request.brief is None else request.brief,
+            brief=launch.brief,
             # Same shape as `brief`: decided by the roster entry at create and
             # persisted, because every steer verb below reads the record, not
             # the config, to know whether a pane or a control channel is there.
-            native=self._native_for(agent, decision.runtime, request.native),
+            native=(
+                remote_runtime is not None
+                or self._native_for(agent, decision.runtime, request.native)
+            ),
+            # A HOST workspace's session gets its own tmux server, so one tmux
+            # crash costs one workspace (see `tmux.TmuxServer`). A container's
+            # agent tmux runs in-container already, and its degraded no-tmux
+            # arm stays on the default server like every pre-isolation record.
+            tmux_socket=(
+                tmux.TmuxServer.for_workspace(workspace_id)
+                if decision.runtime is Runtime.HOST
+                else ""
+            ),
+            created_by=created_by,
             # Arm 3, recorded as a create-time fact: the resolver hands back a
             # `config_path` only when it substituted Grove's packaged default
             # for a repo that had no `.devcontainer/`. Persisted rather than
@@ -1429,191 +1751,218 @@ class WorkspaceManager:
             # way the init trio reports a script that never ran — not a failure.
             provision_status=None if decision.is_container else ProvisionStatus.SKIPPED,
         )
-        # Persist before side effects so a crash leaves a recoverable record.
-        self._store.save(state)
+        # Each side effect from here is a recorded stage, so a failure unwinds exactly
+        # what began and a process killed mid-create is finished at daemon start.
+        with Stages.run("create", workspace_id) as stages:
+            # Persist before side effects so a crash leaves a recoverable record.
+            stages.enter("record")
+            self._store.save(state)
 
-        # Root placement creates no worktree and no branch — it adopts the live
-        # checkout. Only worktree placement issues `git worktree add`.
-        if not is_root:
+            # Root placement creates no worktree and no branch — it adopts the live
+            # checkout. Only worktree placement issues `git worktree add`.
+            if not is_root:
+                stages.enter("worktree")
+                try:
+                    self._add_worktree(resolved, worktree)
+                except Exception as exc:
+                    self._record_error(state, f"worktree_add failed: {exc}")
+                    self._emit("error", state.id, {"phase": "worktree_add", "error": str(exc)})
+                    # The full rollback, not a bare `store.delete`: `git
+                    # worktree add -b` creates the REF before it validates the path,
+                    # and `_add_worktree` sets an upstream after the add returns, so
+                    # a failure here routinely leaves Grove's own branch — and
+                    # sometimes the worktree — behind with the record gone. The next
+                    # create with the same name then fails `BranchConflict`, blaming
+                    # the user for a branch Grove abandoned. Safe to unwind
+                    # unconditionally because rollback deletes only a branch
+                    # `grove_owns_branch` vouches for.
+                    self._rollback_create(state, stages)
+                    raise GroveError(f"failed to create worktree: {exc}") from exc
+
+            # The agent's phase file is Grove's plumbing living inside the user's
+            # tree, exactly like the container provisioner's generated artifacts —
+            # and the exclusion is a CORRECTNESS requirement, not tidiness:
+            # `git worktree remove` refuses while untracked files exist, so the
+            # first phase an agent ever reports would otherwise break `pause` and
+            # `kill` for the rest of the workspace's life. Verified against real
+            # git: removal succeeds with an EXCLUDED phase file present and is
+            # refused with an unexcluded one.
+            #
+            # Unconditional, root placement included: there the reason is the other
+            # one `ensure_excluded` documents — a root workspace writes into the
+            # user's live checkout, where an untracked artifact of ours shows up as
+            # their own uncommitted work. Idempotent and best-effort by contract,
+            # and it targets the shared common dir, so one call per create is free
+            # after the first. BOTH shapes: the per-agent directory every launch
+            # now names, and the legacy single file a workspace created before the
+            # per-agent layout landed may still be carrying.
+            self._git.ensure_excluded(*PhaseFile.EXCLUDES)
+
+            # Attachments land HERE — after the worktree exists and before anything
+            # composes the prompt that names them. Both halves of that are forced:
+            # the store writes under the worktree, and the launch below turns
+            # `request.initial_prompt` into the argv, so a block appended
+            # after this point would never reach the agent.
+            #
+            # Rolled back rather than reported, because the failure is not local to
+            # the file: the prompt names every attachment, so a create that stored
+            # three of four would launch an agent against a path that is not there.
+            # The rollback also takes the stored bytes with the worktree, so there
+            # is nothing orphaned to clean up.
             try:
-                self._add_worktree(resolved, worktree)
-            except Exception as exc:
-                self._record_error(state, f"worktree_add failed: {exc}")
-                self._emit("error", state.id, {"phase": "worktree_add", "error": str(exc)})
-                # The full rollback, not a bare `store.delete`: `git
-                # worktree add -b` creates the REF before it validates the path,
-                # and `_add_worktree` sets an upstream after the add returns, so
-                # a failure here routinely leaves Grove's own branch — and
-                # sometimes the worktree — behind with the record gone. The next
-                # create with the same name then fails `BranchConflict`, blaming
-                # the user for a branch Grove abandoned. Safe to unwind
-                # unconditionally because rollback deletes only a branch
-                # `grove_owns_branch` vouches for.
-                self._rollback_create(state)
-                raise GroveError(f"failed to create worktree: {exc}") from exc
+                create_prompt = self._store_create_attachments(state, request)
+            except GroveError as exc:
+                self._rollback_create(state, stages)
+                self._emit("error", state.id, {"phase": "attachments", "error": str(exc)})
+                raise
 
-        # The agent's phase file is Grove's plumbing living inside the user's
-        # tree, exactly like the container provisioner's generated artifacts —
-        # and the exclusion is a CORRECTNESS requirement, not tidiness:
-        # `git worktree remove` refuses while untracked files exist, so the
-        # first phase an agent ever reports would otherwise break `pause` and
-        # `kill` for the rest of the workspace's life. Verified against real
-        # git: removal succeeds with an EXCLUDED phase file present and is
-        # refused with an unexcluded one.
-        #
-        # Unconditional, root placement included: there the reason is the other
-        # one `ensure_excluded` documents — a root workspace writes into the
-        # user's live checkout, where an untracked artifact of ours shows up as
-        # their own uncommitted work. Idempotent and best-effort by contract,
-        # and it targets the shared common dir, so one call per create is free
-        # after the first. BOTH shapes: the per-agent directory every launch
-        # now names, and the legacy single file a workspace created before the
-        # per-agent layout landed may still be carrying.
-        self._git.ensure_excluded(*PhaseFile.EXCLUDES)
+            # `skip_init` is a per-create override of `init_script.enabled`; either
+            # one being off — or an `applies_to` that doesn't cover this workspace's
+            # runtime — means the script never runs and the outcome is SKIPPED.
+            # Gating the call here (rather than relying on run_init_script's internal
+            # enabled-check) is what lets a single create opt out without touching
+            # config — and keeps the risky "init in the real repo root" path off by
+            # default for root workspaces, which auto-check skip in the UI. `state`
+            # already carries the resolved runtime (decided above, before any side
+            # effect), so the gate sees the EFFECTIVE runtime including a fallback.
+            init_enabled = self._init_enabled(state, skip=skip_init)
+            init_log = paths.init_log_path(state.id)
+            init_started = _utcnow()
+            init = _InitRun()
+            if init_enabled:
+                init = self._run_init_script(state=state, worktree=worktree, log_path=init_log)
 
-        # Attachments land HERE — after the worktree exists and before anything
-        # composes the prompt that names them. Both halves of that are forced:
-        # the store writes under the worktree, and `_brief_prompt` below turns
-        # `request.initial_prompt` into the launch argv, so a block appended
-        # after this point would never reach the agent.
-        #
-        # Rolled back rather than reported, because the failure is not local to
-        # the file: the prompt names every attachment, so a create that stored
-        # three of four would launch an agent against a path that is not there.
-        # The rollback also takes the stored bytes with the worktree, so there
-        # is nothing orphaned to clean up.
-        try:
-            create_prompt = self._store_create_attachments(state, request)
-        except GroveError as exc:
-            self._rollback_create(state)
-            self._emit("error", state.id, {"phase": "attachments", "error": str(exc)})
-            raise
+            state = _replace(
+                state,
+                **_init_outcome(init_enabled, init.rc, init_started, init_log),
+            )
 
-        # `skip_init` is a per-create override of `init_script.enabled`; either
-        # one being off — or an `applies_to` that doesn't cover this workspace's
-        # runtime — means the script never runs and the outcome is SKIPPED.
-        # Gating the call here (rather than relying on run_init_script's internal
-        # enabled-check) is what lets a single create opt out without touching
-        # config — and keeps the risky "init in the real repo root" path off by
-        # default for root workspaces, which auto-check skip in the UI. `state`
-        # already carries the resolved runtime (decided above, before any side
-        # effect), so the gate sees the EFFECTIVE runtime including a fallback.
-        init_enabled = self._init_enabled(state, skip=skip_init)
-        init_log = paths.init_log_path(state.id)
-        init_started = _utcnow()
-        init = _InitRun()
-        if init_enabled:
-            init = self._run_init_script(state=state, worktree=worktree, log_path=init_log)
+            # One decision, both failure shapes: a script that exited non-zero and a
+            # call that raised are the same "init failed" to fail_fast, so an
+            # explicit `fail_fast: false` never destroys the workspace either way.
+            abort = self._init_abort_detail(
+                init, log_path=init_log, rollback="workspace was rolled back"
+            )
+            if abort is not None:
+                self._rollback_create(state, stages)
+                self._emit(
+                    "error",
+                    state.id,
+                    {
+                        "phase": "init_script",
+                        "exit_code": str(init.rc),
+                        "log_path": str(init_log),
+                        "error": init.summary,
+                    },
+                )
+                raise GroveError(abort)
 
-        state = _replace(
-            state,
-            **_init_outcome(init_enabled, init.rc, init_started, init_log),
-        )
+            # The container comes up AFTER the init script (which preps the HOST
+            # worktree) and before the launch that execs into it. Failure is fatal
+            # and transactional exactly like a fail_fast init — but the container
+            # itself is kept, so the rolled-back worktree still has a diagnosable
+            # environment attached to the log.
+            if decision.is_container:
+                stages.enter("container")
+                try:
+                    state = self._provision_container(state, decision, phase="provision")
+                except GroveError:
+                    self._rollback_create(state, stages)
+                    raise
+                self._store.save(state)
 
-        # One decision, both failure shapes: a script that exited non-zero and a
-        # call that raised are the same "init failed" to fail_fast, so an
-        # explicit `fail_fast: false` never destroys the workspace either way.
-        abort = self._init_abort_detail(
-            init, log_path=init_log, rollback="workspace was rolled back"
-        )
-        if abort is not None:
-            self._rollback_create(state)
+            # Deterministic session correlation: mint the agent session id
+            # AFTER the worktree exists — claude_code ids carry no ordering
+            # constraint, but a mewbo create anchors the remote session to the
+            # worktree cwd, which the API validates is a real directory. Failure is
+            # loud and transactional, exactly like a fail_fast init.
+            try:
+                agent_session_id = self._mint_agent_session_id(
+                    agent,
+                    worktree=agent_cwd,
+                    title=request.title,
+                    model=model,
+                    resume_session_id=resume_session_id,
+                )
+            except MewboError as exc:
+                self._rollback_create(state, stages)
+                self._emit("error", state.id, {"phase": "agent_session", "error": str(exc)})
+                raise
+            if agent_session_id is not None:
+                state = _replace(state, agent_session_id=agent_session_id)
+                self._store.save(state)
+            # `initial_prompt` is create-only — never threaded into resume/respawn.
+            # For claude_code it rides the launch argv (race-free); for mewbo it is
+            # delivered after the workspace is persisted (below), so it isn't passed
+            # here (mewbo's decoration is empty anyway). `resume` flips the
+            # session-id flag to the tool's resume form (`--resume` / `resume <uuid>`).
+            # The first-turn brief is NOT folded in here: the `start` trigger rule
+            # delivers it once the session is working, through the one channel
+            # every agent kind shares (see `trigger_text`).
+            initial_prompt = create_prompt
+            launch_decoration = self._compose_launch(
+                agent,
+                agent_session_id,
+                state=state,
+                initial_prompt=initial_prompt,
+                model=model,
+                effort=request.effort,
+                resume=resume_session_id is not None,
+                native=state.native,
+                fork_from=fork_from,
+            )
+
+            transcript_context: TranscriptContext | None = None
+            if remote_runtime is not None:
+                # The workload is this runtime's "container": its stage's
+                # inverse is the runtime teardown, which removes it by handle.
+                stages.enter("container")
+                try:
+                    state = self._launch_remote(state, agent, launch_decoration, remote_runtime)
+                except GroveError as exc:
+                    self._rollback_create(state, stages)
+                    self._emit("error", state.id, {"phase": "remote", "error": str(exc)})
+                    raise
+                self._store.save(state)
+            else:
+                stages.enter("session")
+                try:
+                    # `state.tmux_session`/`state.agent_cwd` are the `session`/`agent_cwd`
+                    # locals above, read back off the record so all three launch verbs
+                    # hand `_launch` the identical shape.
+                    # A create that resumes a session must tell a native worker so,
+                    # or it greets the continued conversation as a fresh one.
+                    transcript_context = self._launch(
+                        state, agent, launch_decoration, resume=resume_session_id is not None
+                    )
+                except Exception as exc:
+                    self._rollback_create(state, stages)
+                    self._emit("error", state.id, {"phase": "tmux", "error": str(exc)})
+                    raise GroveError(f"failed to set up tmux session: {exc}") from exc
+
+            # Recorded on the SAME save that already closed create — a launch that
+            # raised rolled the whole record away above, so there is no window where
+            # a half-written context can survive.
+            state = _replace(_touch(state), transcript_context=transcript_context)
+            self._store.save(state)
             self._emit(
-                "error",
+                "created",
                 state.id,
                 {
-                    "phase": "init_script",
-                    "exit_code": str(init.rc),
-                    "log_path": str(init_log),
-                    "error": init.summary,
+                    "title": request.title,
+                    "agent": agent.name,
+                    # The runtime facts ride the create event so a subscriber can
+                    # surface the fallback (a degradation the user must see) or the
+                    # default-config notice (informational) without re-reading the
+                    # record. Empty string, not a missing key — the detail map is
+                    # `dict[str, str]` and consumers treat blank as "nothing to say".
+                    "runtime": state.runtime.value,
+                    "runtime_fallback_reason": state.runtime_fallback_reason or "",
+                    "runtime_notice": decision.notice or "",
                 },
             )
-            raise GroveError(abort)
-
-        # The container comes up AFTER the init script (which preps the HOST
-        # worktree) and before the launch that execs into it. Failure is fatal
-        # and transactional exactly like a fail_fast init — but the container
-        # itself is kept, so the rolled-back worktree still has a diagnosable
-        # environment attached to the log.
-        if decision.is_container:
-            try:
-                state = self._provision_container(state, decision, phase="provision")
-            except GroveError:
-                self._rollback_create(state)
-                raise
-            self._store.save(state)
-
-        # Deterministic session correlation: mint the agent session id
-        # AFTER the worktree exists — claude_code ids carry no ordering
-        # constraint, but a mewbo create anchors the remote session to the
-        # worktree cwd, which the API validates is a real directory. Failure is
-        # loud and transactional, exactly like a fail_fast init.
-        try:
-            agent_session_id = self._mint_agent_session_id(
-                agent,
-                worktree=agent_cwd,
-                title=request.title,
-                model=model,
-                resume_session_id=resume_session_id,
-            )
-        except MewboError as exc:
-            self._rollback_create(state)
-            self._emit("error", state.id, {"phase": "agent_session", "error": str(exc)})
-            raise
-        if agent_session_id is not None:
-            state = _replace(state, agent_session_id=agent_session_id)
-            self._store.save(state)
-        # `initial_prompt` is create-only — never threaded into resume/respawn.
-        # For claude_code it rides the launch argv (race-free); for mewbo it is
-        # delivered after the workspace is persisted (below), so it isn't passed
-        # here (mewbo's decoration is empty anyway). `resume` flips the
-        # session-id flag to the tool's resume form (`--resume` / `resume <uuid>`).
-        # One briefed prompt for BOTH delivery sites: composing it twice is how
-        # the launch argv and the remote dispatch come to disagree.
-        initial_prompt = self._brief_prompt(state, agent, create_prompt)
-        launch_decoration = self._compose_launch(
-            agent,
-            agent_session_id,
-            state=state,
-            initial_prompt=initial_prompt,
-            model=model,
-            resume=resume_session_id is not None,
-            native=state.native,
-        )
-
-        try:
-            # `state.tmux_session`/`state.agent_cwd` are the `session`/`agent_cwd`
-            # locals above, read back off the record so all three launch verbs
-            # hand `_launch` the identical shape.
-            transcript_context = self._launch(state, agent, launch_decoration)
-        except Exception as exc:
-            self._rollback_create(state)
-            self._emit("error", state.id, {"phase": "tmux", "error": str(exc)})
-            raise GroveError(f"failed to set up tmux session: {exc}") from exc
-
-        # Recorded on the SAME save that already closed create — a launch that
-        # raised rolled the whole record away above, so there is no window where
-        # a half-written context can survive.
-        state = _replace(_touch(state), transcript_context=transcript_context)
-        self._store.save(state)
-        self._emit(
-            "created",
-            state.id,
-            {
-                "title": request.title,
-                "agent": request.agent_name,
-                # The runtime facts ride the create event so a subscriber can
-                # surface the fallback (a degradation the user must see) or the
-                # default-config notice (informational) without re-reading the
-                # record. Empty string, not a missing key — the detail map is
-                # `dict[str, str]` and consumers treat blank as "nothing to say".
-                "runtime": state.runtime.value,
-                "runtime_fallback_reason": state.runtime_fallback_reason or "",
-                "runtime_notice": decision.notice or "",
-            },
-        )
-        self._deliver_remote_initial_prompt(state, agent, initial_prompt)
-        return state
+            self._deliver_remote_initial_prompt(state, agent, initial_prompt)
+            return state
 
     def _deliver_remote_initial_prompt(
         self, state: WorkspaceState, agent: AgentSpec, initial_prompt: str | None
@@ -1640,6 +1989,133 @@ class WorkspaceManager:
                 state.id,
                 exc,
             )
+
+    def _admit_remote(self, agent: AgentSpec, request: CreateWorkspaceRequest) -> str:
+        """The ``runtimes.<name>`` a remote create runs on, refused before any side effect.
+
+        A remote workload is reachable only through its worker dialling the
+        daemon, so a terminal agent, a daemon with no ``mailbox_url`` or a repo
+        with no remote to clone from could only ever start a workload nobody can
+        reach. Those refuse here, never at launch.
+        """
+        name = self._admit_remote_offline(agent, request)
+        if self._git.origin_url() is None:
+            raise CapabilityUnavailable("a remote workspace needs a git remote to clone from")
+        self._push_token()
+        return name
+
+    def _admit_remote_offline(self, agent: AgentSpec, request: CreateWorkspaceRequest) -> str:
+        """The config-only half of :meth:`_admit_remote`: no git, no credential read.
+
+        Split out so the launch preview reports the same refusals per keystroke
+        without a git subprocess; ``create`` still runs the whole admission.
+        """
+        resident = self._cfg.resident_runtimes
+        name = request.remote_runtime
+        if name is None:
+            if len(resident) != 1:
+                raise CapabilityUnavailable(
+                    "name the remote runtime to create on: "
+                    + (", ".join(resident) or "no runtimes are configured")
+                )
+            name = resident[0]
+        if name not in resident:
+            raise CapabilityUnavailable(f"runtimes.{name} is not a configured resident runtime")
+        if not agent.native_for(request.native):
+            raise CapabilityUnavailable(
+                f"agent {agent.name!r} cannot run remotely: only a native session dials back"
+            )
+        if not self._cfg.daemon.mailbox_url:
+            raise CapabilityUnavailable(
+                "a remote workspace needs daemon.mailbox_url, the address its worker dials"
+            )
+        return name
+
+    def _push_token(self) -> dict[str, str]:
+        """The push credential a remote workload is handed, as its secret env; empty when off.
+
+        Read from this process's environment at the moment of use, by the NAME
+        ``worktree.push_token_env`` holds, so a committed config never holds the
+        token. Without one, a remote that needs authentication refuses every
+        push, which is every freeze, hibernate and stop (#1068).
+
+        Raises:
+            ConfigError: the variable is named but unset or empty, naming both
+                it and the dotted path, before any side effect.
+        """
+        name = self._cfg.worktree.push_token_env
+        if not name:
+            return {}
+        value = os.environ.get(name, "")
+        if not value:
+            raise ConfigError(
+                f"worktree.push_token_env names {name}, which is not set in this "
+                "process's environment"
+            )
+        return {PUSH_TOKEN_ENV: value}
+
+    def _launch_remote(
+        self,
+        state: WorkspaceState,
+        agent: AgentSpec,
+        decoration: _Argv,
+        runtime: str,
+        *,
+        resume: bool = False,
+    ) -> WorkspaceState:
+        """Start ``state``'s workload on ``runtime`` and return the record naming it.
+
+        The worker clones the repository's remote and checks out the workspace
+        branch (or creates it at ``base_commit``), so that commit must be pushed.
+        ``resume`` tells the worker the decoration continues a session, so it
+        seeds the transcript from the host before starting the provider.
+        """
+        spec = self._remote_spec(state, agent, decoration, runtime, resume=resume)
+        return _replace(state, remote=self._runtimes.remote.launch(runtime, spec))
+
+    def _remote_spec(
+        self,
+        state: WorkspaceState,
+        agent: AgentSpec,
+        decoration: _Argv,
+        runtime: str,
+        *,
+        resume: bool = False,
+    ) -> WorkspaceSpec:
+        """The workload spec for ``state`` on ``runtime``, with a freshly minted worker bearer."""
+        # Deferred like `_launch_spec`'s: the launch module mints credentials.
+        from grove.core.native_launch import NativeLaunch  # noqa: PLC0415
+
+        block = self._cfg.runtimes[runtime]
+        initial_prompt, *owned = decoration
+        # The same composition every host and container launch passes through,
+        # so the sandboxed agent gets its provider settings and passthroughs.
+        # The phase path is a host path; the worker publishes its own.
+        composed = self._launch_env(state, agent)
+        composed.pop(PhaseFile.PATH_ENV, None)
+        # One rule splits it: a value the operator wrote into `AgentSpec.env` as a
+        # literal may appear in the emitted spec; anything resolved from the
+        # environment (a `${VAR}` reference in that same map, a `*_env` name,
+        # this process's env) rides the private channel only, because it may be
+        # a credential nobody chose to publish.
+        deferred = agent.deferred_env()
+        literal = {k: v for k, v in composed.items() if agent.env.get(k) == v and k not in deferred}
+        resolved = {k: v for k, v in composed.items() if k not in literal}
+        return NativeLaunch.remote_spec(
+            workspace_id=state.id,
+            image=block.image,
+            provider=agent.kind,
+            command=(*shlex.split(agent.command), *owned),
+            initial_prompt=initial_prompt,
+            mailbox_url=self._cfg.daemon.mailbox_url,
+            repo_url=self._git.origin_url() or "",
+            branch=state.branch,
+            start_commit=state.base_commit,
+            timeout_seconds=agent.native_timeout_seconds,
+            resume=resume,
+            agent_env=literal,
+            agent_secret_env={**resolved, **self._push_token()},
+        )
 
     def _add_worktree(self, resolved: ResolvedBranch, worktree: Path) -> None:
         """Issue the `git worktree add` for a worktree-placement create.
@@ -1729,49 +2205,38 @@ class WorkspaceManager:
         """Best-effort default branch (``origin/HEAD`` → ``init.defaultBranch`` → ``main``)."""
         return self._git.default_branch()
 
-    # ─── container lifecycle ─────────────────────────────────────────────────
+    # ─── post-launch runtime ─────────────────────────────────────────────────
 
-    def _container(self, state: WorkspaceState) -> ContainerLifecycle | None:
-        """The container verbs for *state*, or ``None`` for a host-mode workspace.
+    def git_for(self, state: WorkspaceState, *, runner_timeout: float | None = None) -> GitRepo:
+        """The git reads for THIS workspace, run wherever its worktree actually lives.
 
-        ``state.container is None`` is the single host/container branch every
-        lifecycle method makes — everything past it (ordering, argv assembly,
-        the teardown invariant) lives in ``container_runtime``, so the manager
-        never names a container itself.
-
-        The agent's in-container session NAME is the one thing the manager has
-        to supply, because it is cascaded config: the graceful shutdown
-        signals that session and no other, and a name baked into
-        ``container_runtime`` would be exactly the policy-in-code this tree
-        forbids. It is the same value the launch composes its ``new-session -A``
-        from, so the shutdown addresses what the launch created.
+        Every runtime but REMOTE shares this host's repository; a remote
+        workspace's worktree and branch exist only in its workload, so its
+        reads go to the worker, and an unreachable one raises ``GitError``
+        rather than answering zero. ``runner_timeout`` lets a bounded reader
+        tighten only its worker calls without changing lifecycle git work.
         """
-        if state.container is None:
-            return None
-        return ContainerLifecycle(
-            state.container,
-            docker_bin=self._cfg.container.docker_bin,
-            agent_session=self._cfg.container.tmux.session,
-        )
+        if state.runtime is not Runtime.REMOTE:
+            return self._git
+        remote = self._runtimes.remote
 
-    def _container_state(self, state: WorkspaceState) -> ContainerState | None:
-        """The live container substate; ``None`` on the host or if unreadable.
+        def run(argv: list[str], timeout: float) -> WorktreeRead:
+            try:
+                return remote.run_in_worktree(state, argv, timeout=timeout)
+            except GroveError as exc:
+                raise GitError(f"workspace {state.id}'s worktree cannot be read: {exc}") from exc
 
-        The READ half of the host/container branch `_container` owns — kept
-        beside it and gated the same way — but memoized, because its one caller
-        is `_reconcile_status` and that runs per workspace per poll (see
-        :class:`~grove.core.container_runtime.ContainerLiveness` for the cost
-        argument). The `runtime` test is what keeps a host workspace's
-        reconciliation byte-identical: it never constructs the reader, so it
-        never reaches for docker at all.
+        return GitRepo(Path(state.worktree_path), runner=run, runner_timeout=runner_timeout)
+
+    def _runtime_for(self, state: WorkspaceState) -> WorkspaceRuntime:
+        """What *state*'s PERSISTED runtime answers after launch.
+
+        The post-launch twin of `_backend_for`: liveness, teardown, stop and
+        attach live on the runtime (`core/workspace_runtime.py`), so the
+        manager never names a container itself. Launch and provisioning stay
+        here, beside `_backend_for`.
         """
-        if state.runtime is not Runtime.CONTAINER or state.container is None:
-            return None
-        if self._runtime_container_liveness is not None:
-            return self._runtime_container_liveness(state.container.container_id)
-        if self._container_liveness is None:
-            self._container_liveness = ContainerLiveness(docker_bin=self._cfg.container.docker_bin)
-        return self._container_liveness.state_of(state.container)
+        return self._runtimes.for_state(state)
 
     def pause(self, workspace_id: str, *, force: bool = False) -> WorkspaceState:
         state = self._store.get(workspace_id)
@@ -1784,10 +2249,10 @@ class WorkspaceManager:
         # refusal fires at step three, by which point the session is dead and the
         # container stopped, and neither is undone. `force` means the user has
         # already said discard, so the question is not worth a subprocess.
-        clean = True if force else self._git.is_clean(Path(state.worktree_path))
+        clean = True if force else self.git_for(state).is_clean(Path(state.worktree_path))
         ensure_can_pause(state, clean=clean)
         try:
-            tmux.kill_session(state.tmux_session)
+            tmux.kill_session(state.tmux_session, server=self._tmux_server(state))
         except Exception as exc:
             logger.warning("kill_session during pause failed: {}", exc)
         # ── container: stop AFTER the session (the pane's exec dies with
@@ -1800,12 +2265,10 @@ class WorkspaceManager:
         # Nothing to persist afterwards: a stop leaves the IDENTITY untouched
         # (the id is exactly what has to survive so resume can reuse it), and
         # the container's new substate is a live read, never a stored field.
-        container = self._container(state)
-        if container is not None:
-            try:
-                container.pause()
-            except Exception as exc:
-                logger.warning("container stop during pause failed: {}", exc)
+        try:
+            self._runtime_for(state).stop(state)
+        except Exception as exc:
+            logger.warning("container stop during pause failed: {}", exc)
         # Clear anyone still standing in the worktree before it is unlinked.
         # `tmux kill-session` only SIGHUPs each pane's own process group, which
         # misses a prompt-forked subshell; that survivor keeps the worktree as
@@ -1831,6 +2294,53 @@ class WorkspaceManager:
         self._emit("paused", state.id)
         return new_state
 
+    def fork(self, workspace_id: str, *, created_by: str = LOCAL_SUBJECT) -> WorkspaceState:
+        """Create a new workspace whose agent starts from a copy of this one's conversation.
+
+        The source workspace and its session are left running. The fork gets
+        its own worktree on a new branch cut from the source's branch, the same
+        agent and session mode, and the session the source is using right now
+        (`_todo_session_id`, so a Codex workspace or a rotated Claude id still
+        resolves). Uncommitted changes in the source do not carry over.
+
+        Args:
+            workspace_id: The workspace whose conversation is copied.
+            created_by: The subject recorded as the new workspace's creator.
+
+        Returns:
+            The new workspace.
+
+        Raises:
+            AgentSessionNotFound: The source has no session to copy.
+            ResumeNotSupported: The source is not on this host, or its agent
+                cannot fork (see
+                `CreateWorkspaceRequest.fork_session`).
+        """
+        source = self._store.get(workspace_id)
+        if source.runtime is not Runtime.HOST:
+            # The provider reads the source transcript, which only a host session keeps here.
+            raise ResumeNotSupported(
+                f"workspace {source.id} runs on {source.runtime.value}; only a host workspace "
+                "can be forked"
+            )
+        session_id = self._todo_session_id(source)
+        if not session_id:
+            raise AgentSessionNotFound(f"workspace {source.id} has no agent session to fork")
+        subpath = source.project_subpath
+        request = CreateWorkspaceRequest(
+            agent_name=source.agent_name,
+            title=f"{source.title[:113]} (fork)",
+            description=f"Forked from {source.title} ({source.id})",
+            branch_plan=AutoBranch(base_ref=source.branch),
+            runtime=Runtime.HOST,
+            native=source.native,
+            brief=source.brief,
+            resume_session_id=session_id,
+            fork_session=True,
+            project_cwd=Path(source.repo_root) / subpath if subpath else None,
+        )
+        return self.create(request, created_by=created_by)
+
     def resume(self, workspace_id: str) -> WorkspaceState:
         state = self._store.get(workspace_id)
         ensure_can_resume(state)
@@ -1840,6 +2350,7 @@ class WorkspaceManager:
                 f"agent {state.agent_name!r} no longer present in config; "
                 "edit your config or kill this workspace"
             )
+        agent.launch_env(os.environ)  # refuse before the worktree is re-added
 
         # Resume *continues* the same agent session, so reuse the persisted id —
         # Claude Code re-opens that transcript. respawn() takes the other branch
@@ -1899,7 +2410,7 @@ class WorkspaceManager:
             raise
 
         try:
-            transcript_context = self._launch(state, agent, launch_decoration)
+            transcript_context = self._launch(state, agent, launch_decoration, resume=resume)
         except Exception as exc:
             # A partially-started launch can already have shells in the
             # worktree; see `pause`.
@@ -1920,6 +2431,211 @@ class WorkspaceManager:
         self._store.save(new_state)
         self._emit("resumed", state.id)
         return new_state
+
+    def freeze(self, workspace_id: str) -> WorkspaceState:
+        """Suspend an idle RUNNING workspace's runtime in place; the next message thaws it.
+
+        Unlike ``pause`` this keeps the worktree and the agent's process state,
+        so a dirty tree is no reason to refuse. Idempotent: freezing a frozen or
+        not-running workspace returns it unchanged.
+
+        Raises:
+            ContainerError: The runtime could not be suspended; nothing is recorded.
+        """
+        state = self._store.get(workspace_id)
+        if state.status is not WorkspaceStatus.RUNNING or state.frozen_at is not None:
+            return state
+        self._runtime_for(state).freeze(state)
+        frozen = _replace(state, frozen_at=_utcnow(), updated_at=_utcnow())
+        self._store.save(frozen)
+        self._emit("frozen", state.id)
+        return frozen
+
+    def thaw(self, workspace_id: str) -> WorkspaceState:
+        """Resume a frozen workspace's runtime. A no-op for one that is not frozen.
+
+        Raises:
+            ContainerError: The runtime could not be resumed; it stays frozen.
+        """
+        state = self._store.get(workspace_id)
+        if state.frozen_at is None:
+            return state
+        if state.hibernated_at is not None:
+            return self._wake(state)
+        try:
+            handle = self._runtime_for(state).thaw(state)
+        except ContainerError:
+            if not self._workload_gone(state):
+                raise
+            # The platform lost the frozen workload (a host reboot under a
+            # memory-resident pause, an expiry). Its branch was pushed before
+            # the freeze, so a fresh workload on it is the whole remedy.
+            logger.warning("frozen workload of {} is gone; starting a fresh one", state.id)
+            self._store.save(_replace(state, frozen_at=None))
+            return self.respawn(workspace_id)
+        now = _utcnow()
+        thawed = _replace(
+            state,
+            frozen_at=None,
+            thawed_at=now,
+            updated_at=now,
+            remote=handle if handle is not None else state.remote,
+        )
+        self._store.save(thawed)
+        self._emit("thawed", state.id, {"frozen_at": state.frozen_at.isoformat()})
+        return thawed
+
+    def hibernate(self, workspace_id: str) -> WorkspaceState:
+        """Release a frozen REMOTE workspace's workload to a stored snapshot.
+
+        A no-op for a workspace that is not frozen, already hibernated, or on a
+        runtime that cannot hibernate: those stay frozen, which is the whole
+        contract for them.
+
+        Raises:
+            ContainerError: A step failed; the workspace stays frozen.
+        """
+        state = self._store.get(workspace_id)
+        if state.frozen_at is None or state.hibernated_at is not None:
+            return state
+        if state.runtime is not Runtime.REMOTE or state.remote is None:
+            return state
+        remote = self._runtimes.remote
+        try:
+            remote.hibernating(state.remote)
+        except CapabilityUnavailable:
+            return state
+        if state.pending_snapshot is not None:
+            # This worker is about to produce a newer recovery point. Keeping
+            # the older, never-confirmed one would orphan its only reference.
+            remote.hibernating(state.pending_snapshot).forget(state.pending_snapshot)
+            state = _replace(state, pending_snapshot=None)
+        handle = remote.hibernate(state)
+        hibernated = _replace(state, remote=handle, hibernated_at=_utcnow(), updated_at=_utcnow())
+        self._store.save(hibernated)
+        self._emit("hibernated", state.id)
+        return hibernated
+
+    def _wake(self, state: WorkspaceState) -> WorkspaceState:
+        """Restore a hibernated workspace from its snapshot, continuing its session.
+
+        The snapshot keeps the workload's filesystem, the worker's home and its
+        transcript included, so the pinned session is resumed rather than
+        minted; the worker finds the worktree already there and skips its clone.
+        """
+        agent = self._cfg.find_agent(state.agent_name)
+        if agent is None or state.remote is None:
+            raise GroveError(f"workspace {state.id} cannot be woken: its agent is not configured")
+        resume = bool(state.agent_session_id) and agent.kind in _RESUMABLE_KINDS
+        decoration = self._compose_launch(
+            agent, state.agent_session_id, state=state, native=True, resume=resume
+        )
+        spec = self._remote_spec(state, agent, decoration, state.remote.runtime, resume=resume)
+        handle = self._runtimes.remote.wake(state, spec)
+        now = _utcnow()
+        woken = _replace(
+            state,
+            remote=handle,
+            frozen_at=None,
+            hibernated_at=None,
+            thawed_at=now,
+            updated_at=now,
+            # A create acceptance is not proof that the restored worker reached
+            # the daemon. Keep the snapshot until its first owner registration
+            # confirms that edge; no timer may discard an unconfirmed recovery.
+            pending_snapshot=state.remote,
+        )
+        self._store.save(woken)
+        self._emit("thawed", state.id, {"frozen_at": (state.frozen_at or now).isoformat()})
+        return woken
+
+    def confirm_wake(self, workspace_id: str) -> None:
+        """Forget a restored snapshot after its worker has registered once.
+
+        A pending snapshot is the only durable copy of a hibernated worker's
+        home until this edge arrives. Clearing it only after ``forget`` succeeds
+        makes a failed registry delete retryable on a later registration, and a
+        daemon restart retains the same obligation.
+        """
+        state = self._store.get(workspace_id)
+        snapshot = state.pending_snapshot
+        if snapshot is None:
+            return
+        self._runtimes.remote.hibernating(snapshot).forget(snapshot)
+        # Cleanup runs asynchronously from registration, so a concurrent kill
+        # may have removed the record while the registry call was in flight.
+        # Re-read before clearing to avoid writing a deleted workspace back.
+        current = self._store.get(workspace_id)
+        if current.pending_snapshot != snapshot:
+            return
+        self._store.save(_replace(current, pending_snapshot=None, updated_at=_utcnow()))
+
+    def record_mirrored_transcript(self, workspace_id: str, agent_cwd: str) -> None:
+        """Point a REMOTE workspace's transcript reads at the host mirror.
+
+        A remote worker that mirrors its transcript (``transcripts=1`` at
+        registration) lays the files out under this workspace's own agent
+        config dir, so from its first registration every host reader resolves
+        them through the ordinary :class:`TranscriptContext`, the same bridge a
+        container's mount table answers. ``agent_cwd`` is the WORKLOAD's cwd,
+        the one its provider encoded into the transcript's folder name, which
+        only the worker can know. Recorded once; a later registration with the
+        same answer is a no-op, and a non-remote workspace is left alone, since
+        its context was decided by its launch backend.
+        """
+        state = self._store.get(workspace_id)
+        if state.runtime is not Runtime.REMOTE:
+            return
+        context = TranscriptContext(
+            config_dir=str(paths.agent_workspace_config_dir(state.id)), agent_cwd=agent_cwd
+        )
+        if state.transcript_context == context:
+            return
+        self._store.save(_replace(state, transcript_context=context, updated_at=_utcnow()))
+
+    def mirrored_transcripts(
+        self, workspace_id: str, session_id: str
+    ) -> tuple[tuple[str, int], ...]:
+        """``(relative_path, size)`` of every host-mirrored file of a REMOTE session.
+
+        What a fresh workload copies into its home before it resumes the
+        session, located the way every host reader locates them (the
+        adapter, inside :meth:`transcript_scope`) and placed relative to the
+        mirror root. Empty for a non-remote workspace, for any session but the
+        record's own, and before anything was mirrored.
+        """
+        state = self._store.get(workspace_id)
+        ctx = state.transcript_context
+        if (
+            state.runtime is not Runtime.REMOTE
+            or ctx is None
+            or ctx.config_dir is None
+            or not ctx.agent_cwd
+            or session_id != state.agent_session_id
+        ):
+            return ()
+        root = Path(ctx.config_dir).resolve()
+        with self.transcript_scope(state):
+            found = get_adapter(self.effective_kind(state)).locate_transcripts(
+                Path(ctx.agent_cwd), session_id
+            )
+        out: tuple[tuple[str, int], ...] = ()
+        for path in found:
+            try:
+                out += ((path.resolve().relative_to(root).as_posix(), path.stat().st_size),)
+            except (OSError, ValueError):
+                continue
+        return out
+
+    def _workload_gone(self, state: WorkspaceState) -> bool:
+        """Whether a REMOTE workspace's platform confidently reports its workload absent."""
+        if state.runtime is not Runtime.REMOTE or state.remote is None:
+            return False
+        try:
+            found = self._runtimes.remote.driver(state.remote).status(state.remote)
+        except GroveError:
+            return False
+        return found is RuntimeState.ABSENT
 
     def kill(self, workspace_id: str, *, delete_branch: bool | None = None) -> None:
         """Tear down the workspace's tmux session (always) and worktree.
@@ -1954,6 +2670,14 @@ class WorkspaceManager:
         """
         state = self._store.get(workspace_id)
         ensure_can_kill(state)
+        # Recorded so a kill whose process dies is FINISHED at daemon start: a
+        # half-killed workspace has already lost the session its user reached it by.
+        with Stages.run("kill", workspace_id) as stages:
+            stages.enter("teardown")
+            self._kill(state, delete_branch=delete_branch)
+
+    def _kill(self, state: WorkspaceState, *, delete_branch: bool | None) -> None:
+        """The body of :meth:`kill`, run under its recorded stage."""
         is_root = state.placement is Placement.ROOT
         if delete_branch is None:
             delete_branch = state.grove_owns_branch
@@ -1963,25 +2687,20 @@ class WorkspaceManager:
             delete_branch = False
 
         try:
-            tmux.kill_session(state.tmux_session)
+            tmux.kill_session(state.tmux_session, server=self._tmux_server(state))
         except Exception as exc:
             logger.warning("kill_session during kill failed: {}", exc)
         # ── container: tmux-first, then the container, then the worktree.
         # Removing a container out from under a live `docker exec` wedges the
         # TTY, and the worktree is the container's bind mount — so this is the
         # only correct position for it, not merely a convenient one.
-        container = self._container(state)
-        teardown_error: str | None = None
-        if container is not None:
-            try:
-                container.teardown()
-            except Exception as exc:
-                # Remembered rather than merely logged: the record is the
-                # only thing on this host that can still NAME this container, so
-                # dropping it below would strand a running container that nothing
-                # — no verb, no sweep — can ever find again.
-                teardown_error = str(exc)
-                logger.warning("container teardown during kill failed: {}", exc)
+        # Remembered rather than merely logged: the record is the only thing on
+        # this host that can still NAME this container, so dropping it below
+        # would strand a running container that nothing — no verb, no sweep —
+        # can ever find again.
+        teardown_error = self._runtime_for(state).teardown(state).failure
+        if teardown_error is not None:
+            logger.warning("container teardown during kill failed: {}", teardown_error)
         branch_deleted, residue = self._drop_git_artifacts(
             state, is_root=is_root, delete_branch=delete_branch
         )
@@ -2004,6 +2723,7 @@ class WorkspaceManager:
         # container cannot be re-run to produce it again, so dropping it here
         # destroyed the one artifact a user debugging that container needs.
         _drop_init_log(state.id)
+        self._revoke_worker_credential(state)
         self._store.delete(state.id)
         self._last_reconciled_status.pop(state.id, None)
         killed_detail = {"branch_deleted": "true" if branch_deleted else "false"}
@@ -2286,6 +3006,101 @@ class WorkspaceManager:
         self._emit("updated", new_state.id, {"ticket_detached": f"{provider}:{ticket_id}"})
         return new_state
 
+    # ─── artifacts ──────────────────────────────────────────────────────────
+
+    def _artifact_files(self, state: WorkspaceState) -> ArtifactFiles:
+        """The validator for one workspace: its checkout, the project, the host roots."""
+        extra = (Path(root).expanduser() for root in self._cfg.artifacts.roots)
+        return ArtifactFiles((Path(state.worktree_path), self._repo_root, *extra))
+
+    def attach_artifact(
+        self, workspace_id: str, target: str, title: str | None = None
+    ) -> WorkspaceState:
+        """Attach a file or a link to a workspace as one of its artifacts.
+
+        Idempotent by target: attaching the same file or URL again changes
+        nothing, and attaching it with a different title renames that row
+        instead of adding a second one.
+
+        Args:
+            workspace_id: The workspace to attach to.
+            target: An ``http(s)`` URL or a file path. A relative path
+                resolves against the workspace checkout.
+            title: Optional label. ``None`` keeps a title already stored.
+
+        Returns:
+            The updated workspace state.
+
+        Raises:
+            ArtifactInvalid: The target is not an http(s) link, or not a
+                regular file under an allowed directory.
+            WorkspaceStateError: The workspace is ORPHANED.
+        """
+        persisted = self._store.get(workspace_id)
+        ensure_can_update(self._reconcile_status(persisted))
+        ref = self._artifact_files(persisted).resolve(
+            target, base=Path(persisted.worktree_path), title=title
+        )
+        current = next((r for r in persisted.artifact_refs if r.id == ref.id), None)
+        if current is not None and (title is None or current.title == title):
+            return persisted
+        new_refs = [*(r for r in persisted.artifact_refs if r.id != ref.id), ref]
+        new_state = _replace(persisted, updated_at=_utcnow(), artifact_refs=new_refs)
+        self._store.save(new_state)
+        self._emit("updated", new_state.id, {"artifact_attached": ref.id})
+        return new_state
+
+    def detach_artifact(self, workspace_id: str, ref: str) -> WorkspaceState:
+        """Remove an artifact. Idempotent: an unknown ref changes nothing.
+
+        Args:
+            workspace_id: The workspace to detach from.
+            ref: The artifact's id, or the target it was attached with (the
+                URL, or the file's absolute or checkout-relative path).
+
+        Returns:
+            The updated workspace state.
+        """
+        persisted = self._store.get(workspace_id)
+        ensure_can_update(self._reconcile_status(persisted))
+        # No validation on the way out: a file that was deleted or moved must
+        # still be detachable, so the path is only normalized, never resolved.
+        path = os.path.abspath(Path(persisted.worktree_path) / Path(ref).expanduser())
+        names = {ref, path}
+        new_refs = [
+            r for r in persisted.artifact_refs if r.id not in names and r.target not in names
+        ]
+        if len(new_refs) == len(persisted.artifact_refs):
+            return persisted
+        new_state = _replace(persisted, updated_at=_utcnow(), artifact_refs=new_refs)
+        self._store.save(new_state)
+        self._emit("updated", new_state.id, {"artifact_detached": ref})
+        return new_state
+
+    def read_artifact(self, workspace_id: str, artifact_id: str) -> ArtifactContent:
+        """Read the current bytes of one attached file artifact.
+
+        Args:
+            workspace_id: The workspace the artifact is attached to.
+            artifact_id: The ref's id. Only an attached artifact can be read,
+                so a client can never name a path.
+
+        Returns:
+            The file's name and bytes as they are on disk now.
+
+        Raises:
+            ArtifactUnavailable: No such artifact, or its file is gone or has
+                left the allowed directories.
+            ArtifactInvalid: The artifact is a link, or the file is too large.
+        """
+        state = self._store.get(workspace_id)
+        ref: ArtifactRef | None = next(
+            (r for r in state.artifact_refs if r.id == artifact_id), None
+        )
+        if ref is None:
+            raise ArtifactUnavailable(f"workspace has no artifact {artifact_id!r}")
+        return self._artifact_files(state).read(ref)
+
     def find_by_ticket(self, provider: str, ticket_id: str) -> WorkspaceState | None:
         """Resolve the workspace tracking ticket ``(provider, ticket_id)``, if any.
 
@@ -2503,37 +3318,7 @@ class WorkspaceManager:
         """
         state = self._reconcile_status(self._store.get(workspace_id))
         ensure_can_attach(state)
-        entry = self._container_entry(
-            state, session=self._cfg.container.tmux.session, read_only=state.native
-        )
-        if entry is not None:
-            return ContainerAttach(argv=tuple(entry.argv(detached=False)), read_only=state.native)
-        return tmux.attach_instruction(state.tmux_session, read_only=state.native)
-
-    def _container_entry(
-        self, state: WorkspaceState, *, session: str, read_only: bool = False
-    ) -> ContainerAgentEntry | None:
-        """The in-container entry for *session*, or ``None`` if there is no tmux there.
-
-        The one composition behind every "get me into this container's tmux"
-        answer — `attach` and `container_agent_argv` — so the workspace's own
-        agent and any additional one are entered identically. ``None`` on
-        exactly the predicate `_container_tmux` already owns (host workspace,
-        fallback workspace, or a container image with no reachable tmux), which
-        is what keeps the degrade path a single condition rather than a second
-        notion of "can this container run tmux".
-        """
-        if self._container_tmux(state) is None or state.container is None:
-            return None
-        return ContainerAgentEntry(
-            container=state.container,
-            cfg=self._cfg,
-            worktree=Path(state.worktree_path),
-            cwd=state.agent_cwd,
-            session=session,
-            cli=self._devcontainer(),
-            read_only=read_only,
-        )
+        return self._runtime_for(state).attach_instruction(state)
 
     # ─── several agents in one container ────────────────────────────────────
     #
@@ -2750,7 +3535,7 @@ class WorkspaceManager:
                 f"no agent {slot!r} is running in workspace {state.id}'s container "
                 f"(running: {', '.join(sorted(running)) or 'none'})"
             )
-        entry = self._container_entry(state, session=slot)
+        entry = self._runtimes.container.entry(state, session=slot)
         if entry is None:  # pragma: no cover - `container_agents` proved it
             raise CapabilityUnavailable(f"workspace {state.id} has no container")
         return entry.argv(detached=False)
@@ -2945,6 +3730,11 @@ class WorkspaceManager:
             # into a session (web composer, `grove message`, MCP) inherits it here.
             self.run_macro(workspace_id, text)
             return
+        # A frozen workspace is woken before anything reads its liveness: the
+        # message is the activity that ends the idle spell (the revive precedent).
+        thawed = self._store.get(workspace_id).frozen_at is not None
+        if thawed:
+            self.thaw(workspace_id)
         state = self._reconcile_status(self._store.get(workspace_id))
         text = GroveInstruction.append(text, self._attachment_block(state, attachments))
         if agent:
@@ -2957,6 +3747,13 @@ class WorkspaceManager:
             # worker's output; a paneless runtime has none), so deliver over
             # the agent's native channel instead of raising. Same
             # dispatch-point pattern as the remote arm — one seam, not a fork.
+            if thawed:
+                # The workload this call just thawed or woke is booting, so a
+                # missing owner is expected, whatever its status reads. Reviving
+                # would respawn it and discard the session the wake restored
+                # (#1076), so deliver if the worker is already here, else refuse.
+                self._steer_woken(state, text)
+                return
             if revive:
                 state = self._revive_for_steer(state)
             else:
@@ -2976,6 +3773,25 @@ class WorkspaceManager:
             state.id,
             {"target": pane.display, "text_length": str(len(text))},
         )
+
+    def _steer_woken(self, state: WorkspaceState, text: str) -> None:
+        """Deliver a message to a workspace the same call just thawed or woke.
+
+        Args:
+            state: The reconciled workspace, its workload freshly resumed.
+            text: The message, attachments already appended.
+
+        Raises:
+            PaneNotFound: Its worker has not connected yet; retrying shortly
+                delivers to the same workload.
+        """
+        try:
+            self._steer_native(state, "message", text)
+        except PaneNotFound as exc:
+            raise PaneNotFound(
+                f"workspace {state.id} is waking; its worker has not connected yet, "
+                "so retry the message shortly"
+            ) from exc
 
     def _revive_for_steer(self, state: WorkspaceState) -> WorkspaceState:
         """Respawn a native workspace whose owner is gone, so a message lands.
@@ -3142,7 +3958,9 @@ class WorkspaceManager:
     def _steer_native(
         self,
         state: WorkspaceState,
-        op: Literal["message", "interrupt", "set_model", "answer", "compact", "command"],
+        op: Literal[
+            "message", "interrupt", "set_model", "set_effort", "answer", "compact", "command"
+        ],
         text: str | None = None,
     ) -> None:
         """THE single dispatch point for agents steered over a native channel.
@@ -3165,6 +3983,9 @@ class WorkspaceManager:
             self._native_steer().interrupt(state)
         elif op == "answer":
             self._native_steer().answer(state, text or "")
+        elif op == "set_effort":
+            self._native_steer().set_effort(state, text or "")
+            self._emit("control_invoked", state.id, {"control": "effort", "target": target})
         elif op == "compact":
             self._native_steer().compact(state)
         elif op == "command":
@@ -3431,6 +4252,7 @@ class WorkspaceManager:
             models=models,
             current_model=self._current_model(adapter, state, session_id),
             permission_mode=permission_mode,
+            efforts=adapter.efforts if self._steers_natively(state) else (),
         )
 
     def _current_model(
@@ -3580,7 +4402,12 @@ class WorkspaceManager:
         session_id = self._todo_session_id(state)
         if not session_id:
             raise AgentSessionNotFound(f"workspace {state.id} has no recorded agent session")
-        return self.pending_queue_for(state, session_id=session_id)
+        queued = self.pending_queue_for(state, session_id=session_id)
+        # Only the daemon's in-process client saw the sends; never build one here.
+        recent = getattr(self._native_steer_client, "recent_inputs", None)
+        if recent is None or all(m.text for m in queued):
+            return queued
+        return label_queue(queued, recent(state))
 
     def pending_queue_for(
         self, state: WorkspaceState, *, session_id: str | None = None
@@ -3658,7 +4485,9 @@ class WorkspaceManager:
 
     # ─── task phase (the third status axis, see grove.core.phase) ──────────
 
-    def phase_for(self, state: WorkspaceState) -> PhaseReport | None:
+    def phase_for(
+        self, state: WorkspaceState, *, timeout: float | None = None, strict: bool = False
+    ) -> PhaseReport | None:
         """The agent's own claim about how far through its task it is, or ``None``.
 
         Read from ``<worktree>/.grove/phase/<workspace id>.json`` — **the
@@ -3696,7 +4525,32 @@ class WorkspaceManager:
         worktree is gone, an unreadable file, or an agent's typo yields ``None``
         rather than breaking a caller's snapshot.
         """
+        if state.runtime is Runtime.REMOTE:
+            return self._remote_phase(state, timeout=timeout, strict=strict)
         return PhaseFile.read(state.worktree_path, PhaseFile.key_for(state.id))
+
+    def _remote_phase(
+        self, state: WorkspaceState, *, timeout: float | None = None, strict: bool = False
+    ) -> PhaseReport | None:
+        """The phase claim in a remote worktree, read by its worker; ``None`` on any failure."""
+        rel = PhaseFile.relpath(PhaseFile.key_for(state.id))
+        remote = self._runtimes.remote
+        try:
+            bound = timeout if timeout is not None else GitRepo.TIMEOUT_SECONDS
+            stamp = remote.run_in_worktree(state, ["stat", "-c", "%Y", rel], timeout=bound)
+            body = remote.run_in_worktree(state, ["cat", rel], timeout=bound)
+        except GroveError as exc:
+            if strict:
+                raise
+            logger.debug("remote phase read for {} failed: {}", state.id, exc)
+            return None
+        if stamp.returncode != 0 or body.returncode != 0:
+            return None
+        try:
+            updated_at = datetime.fromtimestamp(int(stamp.output.strip()), tz=UTC)
+        except ValueError:
+            return None
+        return PhaseFile.from_text(body.output, updated_at)
 
     def phase(self, workspace_id: str) -> PhaseReport | None:
         """:meth:`phase_for` by workspace id — the CLI/MCP read seam."""
@@ -3774,7 +4628,14 @@ class WorkspaceManager:
         if not cleaned:
             raise CapabilityUnavailable("cannot invoke an empty control")
         if state.native:
-            if cleaned == "compact":
+            control = "compact" if cleaned == "compact" else "command"
+            supported = get_adapter(self.effective_kind(state)).native_controls
+            if control not in supported:
+                # Refused HERE, before dispatch: a native control crosses the
+                # daemon fire-and-forget, so an owner's refusal would reach the
+                # caller as "delivered" while nothing happened.
+                raise CapabilityUnavailable(f"{state.agent_name} has no native {control} control")
+            if control == "compact":
                 self._steer_native(state, "compact")
             else:
                 self._steer_native(state, "command", cleaned)
@@ -3835,6 +4696,39 @@ class WorkspaceManager:
             return
         self._deliver_control(workspace_id, f"model {cleaned}")
 
+    def switch_effort(self, workspace_id: str, effort: str) -> None:
+        """Change a running native session's reasoning effort over its control channel.
+
+        Unlike the model id, the level IS validated here, against the adapter's
+        ``efforts``: Claude acknowledges any string at all, so without this a
+        typo reads as applied. Only a native session has a live control
+        channel; a terminal one would need the tool's interactive ``/effort``
+        typed into its pane, which cannot report back, so it is refused rather
+        than guessed at.
+
+        Args:
+            workspace_id: The workspace whose session to change.
+            effort: One of the agent kind's ``efforts``.
+
+        Raises:
+            EffortNotSupported: The kind lists no such level, or the workspace
+                has no native control channel to carry it.
+        """
+        state = self._reconcile_status(self._store.get(workspace_id))
+        offered = get_adapter(self.effective_kind(state)).efforts
+        if effort not in offered:
+            accepted = ", ".join(offered) if offered else "none"
+            raise EffortNotSupported(
+                f"workspace {state.id} cannot change effort to {effort!r}; "
+                f"accepted levels: {accepted}"
+            )
+        if not self._steers_natively(state):
+            raise EffortNotSupported(
+                f"workspace {state.id} is not a native session; effort can only be "
+                "changed live over the native control channel"
+            )
+        self._steer_native(state, "set_effort", effort)
+
     def _deliver_control(self, workspace_id: str, invocation: str) -> None:
         """Deliver a ``/invocation`` slash control through the steer path —
         the one dispatch both ``invoke_control`` and ``switch_model`` share, so
@@ -3878,7 +4772,7 @@ class WorkspaceManager:
             )
         return pending
 
-    def respawn(self, workspace_id: str) -> WorkspaceState:
+    def respawn(self, workspace_id: str) -> WorkspaceState:  # noqa: PLR0912, PLR0915
         """Recover a missing session or explicitly restart a host-native owner.
 
         OFFLINE means the persisted intent is RUNNING but the tmux session
@@ -3903,7 +4797,7 @@ class WorkspaceManager:
                 # this gate exists to rebuild — and rebuilding it now REATTACHES
                 # the same agent rather than starting a new one (tmux's `-A`),
                 # so the verb is cheap where it used to be destructive.
-                sessionless=not tmux.has_session(state.tmux_session),
+                sessionless=not tmux.has_session(state.tmux_session, self._tmux_server(state)),
             )
         else:
             # Headless: no tmux session can vanish to OFFLINE, so the
@@ -3923,6 +4817,7 @@ class WorkspaceManager:
                 f"agent {state.agent_name!r} no longer present in config; "
                 "edit your config or kill this workspace"
             )
+        agent.launch_env(os.environ)  # refuse before the old session is torn down
         worktree = Path(state.worktree_path)
         if not worktree.is_dir():
             # Defensive: reconcile should already have flagged this as
@@ -4001,13 +4896,19 @@ class WorkspaceManager:
         if self._launch_backend.provides_pane:
             # Stop the old writer before another process resumes its transcript.
             # An absent session is already a no-op; a failed stop must be loud.
-            tmux.kill_session(state.tmux_session, wait_for_exit=state.native)
+            tmux.kill_session(
+                state.tmux_session, wait_for_exit=state.native, server=self._tmux_server(state)
+            )
 
-        try:
-            transcript_context = self._launch(state, agent, launch_decoration)
-        except Exception as exc:
-            self._emit("error", state.id, {"phase": "respawn.tmux", "error": str(exc)})
-            raise GroveError(f"could not start tmux session: {exc}") from exc
+        transcript_context: TranscriptContext | None = None
+        if state.runtime is Runtime.REMOTE:
+            state = self._respawn_remote(state, agent, launch_decoration, resume=resume)
+        else:
+            try:
+                transcript_context = self._launch(state, agent, launch_decoration, resume=resume)
+            except Exception as exc:
+                self._emit("error", state.id, {"phase": "respawn.tmux", "error": str(exc)})
+                raise GroveError(f"could not start tmux session: {exc}") from exc
 
         # Persisted intent is already RUNNING; refresh the timestamp, the freshly
         # minted session id, the launch-derived transcript context, and any init
@@ -4026,6 +4927,7 @@ class WorkspaceManager:
             runtime=state.runtime,
             runtime_fallback_reason=state.runtime_fallback_reason,
             container=state.container,
+            remote=state.remote,
             provision_status=state.provision_status,
             provision_duration_ms=state.provision_duration_ms,
             provision_log_path=state.provision_log_path,
@@ -4034,6 +4936,39 @@ class WorkspaceManager:
         self._store.save(new_state)
         self._emit("respawned", state.id)
         return new_state
+
+    def _respawn_remote(
+        self, state: WorkspaceState, agent: AgentSpec, decoration: _Argv, *, resume: bool
+    ) -> WorkspaceState:
+        """Replace a remote workload with a fresh one on the pushed branch.
+
+        The session CONTINUES when its transcript is mirrored on this host
+        (``resume``, the same answer respawn gives every runtime): the new
+        worker seeds its home from the host copy before it starts the provider,
+        and mints the pinned id fresh only if that copy cannot be fetched. The
+        branch is pushed first while the worker still answers; a failed push
+        refuses unless the platform says the old workload is already gone, since
+        then there is nothing left to lose.
+        """
+        remote = self._runtimes.remote
+        if state.remote is None:
+            raise GroveError(f"workspace {state.id} has no remote workload to respawn")
+        try:
+            remote.push(state)
+        except ContainerError:
+            if remote.liveness(state) is not False:
+                raise
+            logger.warning("respawning {} from its last pushed branch", state.id)
+        residue = remote.teardown(state).failure
+        if residue is not None:
+            raise GroveError(f"the old workload of {state.id} was not removed: {residue}")
+        try:
+            return self._launch_remote(
+                state, agent, decoration, state.remote.runtime, resume=resume
+            )
+        except GroveError as exc:
+            self._emit("error", state.id, {"phase": "respawn.remote", "error": str(exc)})
+            raise
 
     def provision_progress(self, workspace_id: str) -> ProvisionProgress:
         """How far along this workspace's container provision is.
@@ -4063,16 +4998,17 @@ class WorkspaceManager:
         state = self._reconcile_status(self._store.get(workspace_id))
 
         try:
-            ahead, behind = self._git.ahead_behind(state.branch, state.base_branch)
-            added, removed = self._git.diff_stats(state.branch, state.diff_base)
-            commits = self._git.recent_commits(state.branch, limit=3)
+            git = self.git_for(state)
+            ahead, behind = git.ahead_behind(state.branch, state.base_branch)
+            added, removed = git.diff_stats(state.branch, state.diff_base)
+            commits = git.recent_commits(state.branch, limit=3)
         except Exception as exc:  # peek is best-effort; never raise
             logger.debug("peek({}) git stats failed: {}", workspace_id, exc)
             ahead = behind = added = removed = 0
             commits = ()
 
         try:
-            dirty = self._git.dirty_file_count(Path(state.worktree_path))
+            dirty = self.git_for(state).dirty_file_count(Path(state.worktree_path))
         except Exception as exc:
             logger.debug("peek({}) dirty count failed: {}", workspace_id, exc)
             dirty = 0
@@ -4140,8 +5076,8 @@ class WorkspaceManager:
         state = self._reconcile_status(self._store.get(workspace_id))
         try:
             if state.base_commit is None and self._range_is_degenerate(state):
-                return self._git.branch_commits_since(state.branch, state.created_at)
-            return self._git.branch_commits(state.branch, state.diff_base)
+                return self.git_for(state).branch_commits_since(state.branch, state.created_at)
+            return self.git_for(state).branch_commits(state.branch, state.diff_base)
         except Exception as exc:
             logger.debug("commits({}) git failed: {}", workspace_id, exc)
             return ()
@@ -4201,20 +5137,27 @@ class WorkspaceManager:
         """
         state = self._reconcile_status(self._store.get(workspace_id))
         worktree = Path(state.worktree_path)
-        if not worktree.exists():
-            return WorkspaceDiff.unavailable("worktree_missing")
-        if GitRepo.detect_root(worktree) is None:
-            return WorkspaceDiff.unavailable("not_a_repo")
+        # A remote worktree is never on this disk; its worker answers or the
+        # read fails below as `git_failed`, never as a confident empty patch.
+        if state.runtime is not Runtime.REMOTE:
+            if not worktree.exists():
+                return WorkspaceDiff.unavailable("worktree_missing")
+            if GitRepo.detect_root(worktree) is None:
+                return WorkspaceDiff.unavailable("not_a_repo")
         try:
             return self._compose_working_diff(
-                worktree, base=state.base_commit or "HEAD", path=path, max_bytes=max_bytes
+                self.git_for(state),
+                worktree,
+                base=state.base_commit or "HEAD",
+                path=path,
+                max_bytes=max_bytes,
             )
         except Exception as exc:  # a read must never break the caller
             logger.debug("working_diff({}) failed: {}", workspace_id, exc)
             return WorkspaceDiff.unavailable("git_failed")
 
     def _compose_working_diff(
-        self, worktree: Path, *, base: str, path: str | None, max_bytes: int
+        self, git: GitRepo, worktree: Path, *, base: str, path: str | None, max_bytes: int
     ) -> WorkspaceDiff:
         """Concatenate the tracked patch and each untracked file's, under the cap.
 
@@ -4224,12 +5167,12 @@ class WorkspaceManager:
         describe the patch actually returned rather than the one git offered.
         """
         chunks: list[str] = []
-        tracked = self._git.tracked_patch(worktree, base=base, path=path)
+        tracked = git.tracked_patch(worktree, base=base, path=path)
         if tracked:
             chunks.extend(_split_file_patches(tracked))
-        untracked = self._git.untracked_files(worktree)
+        untracked = git.untracked_files(worktree)
         for rel in untracked if path is None else [p for p in untracked if p == path]:
-            chunk = self._git.untracked_patch(worktree, rel)
+            chunk = git.untracked_patch(worktree, rel)
             if chunk:
                 chunks.append(chunk)
 
@@ -4313,6 +5256,57 @@ class WorkspaceManager:
         cwd = Path(ctx.agent_cwd) if ctx is not None else Path(state.worktree_path)
         with self.transcript_config_dir_scope(kind, ctx.config_dir if ctx is not None else None):
             return tuple(get_adapter(kind).locate_transcripts(cwd, state.agent_session_id))
+
+    def final_result(self, workspace_id: str) -> FinalResult | None:
+        """The primary session's latest assistant reply and whether its turn is over.
+
+        Resolved exactly like :meth:`primary_transcript` (persisted session id,
+        effective kind, recorded transcript context), so the reply read here is
+        the one the transcript view shows. Best-effort like the adapter itself.
+
+        Returns:
+            The reply, or ``None`` before the agent has answered, for an agent
+            with no session id (a bare shell), or for a remote workspace, whose
+            transcript lives on its worker.
+        """
+        state = self._store.get(workspace_id)
+        if not state.agent_session_id or state.runtime is Runtime.REMOTE:
+            return None
+        kind = self.effective_kind(state)
+        ctx = state.transcript_context
+        cwd = Path(ctx.agent_cwd) if ctx is not None else Path(state.worktree_path)
+        with self.transcript_config_dir_scope(kind, ctx.config_dir if ctx is not None else None):
+            return get_adapter(kind).final_result(cwd, state.agent_session_id)
+
+    def transcript_tail(self, workspace_id: str, lines: int) -> str:
+        """The newest ``lines`` of the workspace's primary transcript, as text.
+
+        Read where the transcript lives: this host's file, or for a REMOTE
+        workspace its worker's, located by the worker in its own namespace.
+        Empty means no transcript has been written yet.
+
+        Raises:
+            CapabilityUnavailable: A remote workspace read from a process with
+                no channel to its worker.
+            PaneNotFound: A remote worker that is not connected or did not
+                answer: unreachable, never an empty transcript.
+        """
+        state = self._store.get(workspace_id)
+        if state.runtime is Runtime.REMOTE:
+            answered = self._runtimes.remote.transcript_tail(
+                state, lines, timeout=GitRepo.TIMEOUT_SECONDS
+            )
+            if answered.returncode != 0:
+                raise PaneNotFound(f"workspace {state.id}'s transcript: {answered.output.strip()}")
+            return answered.output
+        files = self.primary_transcript(workspace_id)
+        if not files:
+            return ""
+        try:
+            text = files[-1].read_text(errors="replace")
+        except OSError:
+            return ""
+        return "".join(text.splitlines(keepends=True)[-lines:])
 
     @staticmethod
     def transcript_config_dir_scope(
@@ -4483,7 +5477,12 @@ class WorkspaceManager:
         return self._native_steer_client
 
     def _launch(
-        self, state: WorkspaceState, agent: AgentSpec, decoration: _Argv
+        self,
+        state: WorkspaceState,
+        agent: AgentSpec,
+        decoration: _Argv,
+        *,
+        resume: bool = False,
     ) -> TranscriptContext | None:
         """Start the agent for ``state`` and return the transcript context to persist.
 
@@ -4505,7 +5504,7 @@ class WorkspaceManager:
         on whatever is stored and a wrong context is worse than none.
         """
         backend = self._backend_for(state)
-        spec = self._launch_spec(state, agent, decoration)
+        spec = self._launch_spec(state, agent, decoration, resume=resume)
         # So the path this launch is about to NAME in the agent's env is a plain
         # file write, with no `mkdir` step to spend a line of the instructions
         # string on. Best-effort, and free after the first launch.
@@ -4531,7 +5530,12 @@ class WorkspaceManager:
         return backend.transcript_context(spec)
 
     def _launch_spec(
-        self, state: WorkspaceState, agent: AgentSpec, decoration: _Argv
+        self,
+        state: WorkspaceState,
+        agent: AgentSpec,
+        decoration: _Argv,
+        *,
+        resume: bool = False,
     ) -> LaunchSpec:
         """Assemble the `LaunchSpec` handed to the launch backend.
 
@@ -4558,6 +5562,9 @@ class WorkspaceManager:
                 provider=agent.kind,
                 command=(*shlex.split(agent.command), *native_decoration),
                 initial_prompt=initial_prompt,
+                # The verb's own decision, never re-derived from the prompt: a
+                # promptless create and a resume both carry an empty one.
+                resume=resume,
                 container=state.runtime is Runtime.CONTAINER,
                 config_root=share.host_config_dir if share else None,
                 container_config_root=str(share.container_config_dir) if share else None,
@@ -4565,11 +5572,14 @@ class WorkspaceManager:
                 # containerized hook spools into, bind-mounted at its own
                 # absolute path, so one string resolves on both sides.
                 ask_spool_dir=paths.agent_hook_spool_dir(),
+                timeout_seconds=agent.native_timeout_seconds,
+                mailbox_url=self._cfg.daemon.mailbox_url,
             )
             command = shlex.join(mailbox.command)
             decoration = list(mailbox.decoration)
         return LaunchSpec(
             session_name=state.tmux_session,
+            tmux_socket=state.host_tmux_socket,
             cwd=state.agent_cwd,
             command=command,
             decoration=tuple(decoration),
@@ -4633,7 +5643,9 @@ class WorkspaceManager:
         # nowhere. The gateway proxy points the tool at Grove's loopback
         # proxy. All derive from config + the process env, never stored pre-built;
         # a disabled knob yields `{}` (no-op default). Agent `env` wins any
-        # collision (the explicit user override).
+        # collision (the explicit user override). Its `${VAR}` references resolve
+        # here first, so a missing one refuses before anything below runs.
+        agent_env = agent.launch_env(os.environ)
         telemetry = (
             self._cfg.telemetry.derive_env(os.environ)
             if agent.kind in self._cfg.telemetry.passthrough_kinds
@@ -4687,7 +5699,7 @@ class WorkspaceManager:
         # taken over. A user who wired their own agent telemetry must be told,
         # once per launch, in a line that names variables and never values.
         reservation = self._cfg.telemetry.reserve(
-            agent.kind, grove=telemetry, claimed={**os.environ, **agent.env}
+            agent.kind, grove=telemetry, claimed={**os.environ, **agent_env}
         )
         if reservation.displaced:
             logger.warning(
@@ -4704,7 +5716,6 @@ class WorkspaceManager:
                 # the agent, not an isolation contract like the config-dir pointer
                 # below, so an operator who names it explicitly wins.
                 **self._phase_env(state, agent_slot),
-                **self._brief_env(state, agent),
                 **telemetry,
                 **resource_env,
                 **self._cfg.proxy.proxy_env(agent.kind),
@@ -4724,108 +5735,97 @@ class WorkspaceManager:
                 # Only for a container workspace: on the host that var would
                 # redirect the agent away from the user's real config.
                 **(dict(share.env) if share is not None else {}),
-                **agent.env,
+                **agent_env,
             }
         )
 
     @staticmethod
-    def _native_for(agent: AgentSpec, runtime: Runtime, choice: bool | None = None) -> bool:
+    def _revoke_worker_credential(state: WorkspaceState) -> None:
+        """End the bearer a container worker was launched with, best-effort.
+
+        Revocation is the workspace's last edge; a failure to rewrite
+        `auth.json` must not stop the record going, and the session still
+        expires on its own TTL.
+        """
+        if not (state.native and state.runtime in (Runtime.CONTAINER, Runtime.REMOTE)):
+            return
+        from grove.core.auth import SessionStore  # noqa: PLC0415
+        from grove.core.native_launch import worker_label  # noqa: PLC0415
+
+        try:
+            SessionStore().revoke_label(worker_label(state.id))
+        except GroveError as exc:
+            logger.warning("worker credential for {} not revoked: {}", state.id, exc)
+
+    def _native_for(self, agent: AgentSpec, runtime: Runtime, choice: bool | None = None) -> bool:
         """Can THIS create own the session natively, given where it will run?
 
         ``choice`` is the request's per-launch answer (``None`` = the roster
         entry's own ``native``), resolved through `AgentSpec.native_for` so the
-        kind gate is applied in exactly one place. A container owner reaches
-        the daemon only through the private mailbox socket the daemon mounts
-        (`GROVE_MAILBOX_SOCKET`); without one the worker would boot, fail to
-        register, and the workspace would sit with no agent at all — after a
+        kind gate is applied in exactly one place. A container's worker cannot
+        reach the host's loopback, so it needs a reachable daemon address: the
+        configured `daemon.mailbox_url`, or the private socket the daemon mounts
+        (`GROVE_MAILBOX_SOCKET`). Without either the worker would boot, fail to
+        register, and the workspace would sit with no agent at all, after a
         minutes-long provision. The terminal launch is the honest degrade, said
         once here rather than failing at launch.
         """
         if not agent.native_for(choice):
             return False
-        if runtime is Runtime.CONTAINER and not os.environ.get("GROVE_MAILBOX_SOCKET"):
+        if runtime is Runtime.CONTAINER and not (
+            self._cfg.daemon.mailbox_url or os.environ.get("GROVE_MAILBOX_SOCKET")
+        ):
             logger.warning(
-                "agent {!r} is native but GROVE_MAILBOX_SOCKET is unset; a container "
-                "cannot reach the daemon, so this workspace runs the interactive terminal",
+                "agent {!r} is native but neither daemon.mailbox_url nor "
+                "GROVE_MAILBOX_SOCKET is set; a container cannot reach the daemon, "
+                "so this workspace runs the interactive terminal",
                 agent.name,
             )
             return False
         return True
 
-    def _briefed_by_hook(self, state: WorkspaceState, agent: AgentSpec) -> bool:
-        """Can THIS launch's hook deliver the first-turn brief?
+    @staticmethod
+    def _admit_effort(agent: AgentSpec, effort: str | None) -> None:
+        """Refuse a reasoning effort the agent's tool cannot be launched with.
 
-        Three facts, and each of them is a hard no on its own. Only Claude
-        Code's ``UserPromptSubmit`` hook injects a command's stdout into the
-        model's context, so no other kind has the channel at all. `hooks.enabled`
-        is what installs the settings file the hook lives in. And a container's
-        agent has no ``grove-agent-hook`` on its ``PATH``, so the rendered
-        command takes its spool fallback, which moves bytes to the host and
-        prints nothing — a real delivery failure that looks exactly like a
-        working feature from here.
+        Checked before any side effect. Dropping an unsupported level instead
+        would create a workspace that reads as configured and runs on the tool's
+        default.
 
-        Everything that answers ``False`` falls to the create-time prompt
-        instead (:meth:`_brief_prompt`, which carries its own exclusions), so
-        the option is not silently inert for a kind Grove installs no hook for.
-        Read off the PERSISTED runtime like every other runtime-shaped decision,
-        so a container create that fell back to the host answers correctly for
-        free.
+        Args:
+            agent: The agent the create will launch.
+            effort: The requested level, or ``None`` for the tool's default.
+
+        Raises:
+            EffortNotSupported: The kind has no effort setting, or does not list
+                this level.
         """
-        return (
-            agent.kind == "claude_code"
-            and self._cfg.hooks.enabled
-            and state.runtime is not Runtime.CONTAINER
-        )
+        if effort is None:
+            return
+        offered = get_adapter(agent.kind).efforts
+        if effort not in offered:
+            accepted = ", ".join(offered) if offered else "none"
+            raise EffortNotSupported(
+                f"agent {agent.name!r} cannot launch with effort {effort!r}; "
+                f"accepted levels: {accepted}"
+            )
 
-    def _brief_env(self, state: WorkspaceState, agent: AgentSpec) -> dict[str, str]:
-        """Name the rendered brief for a launch whose hook can actually read it.
+    def trigger_text(self, state: WorkspaceState, rule: TriggerRule, text: str) -> str:
+        """The instruction a trigger rule puts into this workspace's session, fenced.
 
-        The env var is the whole per-workspace mechanism: the hook settings file
-        is host-global and shared by every workspace on the machine, so the
-        opt-out cannot live there, while this composition is per workspace and
-        per launch and the hook process inherits it from the agent.
-
-        Rendering happens HERE rather than in `_ensure_control_files` so the
-        file and the variable can never disagree — an unwritable config dir
-        yields no variable, instead of pointing the hook at a file it will fail
-        to read on every prompt of every session.
+        Every rule is Grove's voice, so every one is fenced as a reminder the
+        transcript readers classify as a notice, never a human turn. A rule that
+        asks for it (the built-in ``start``) also carries the operator's
+        ``brief.instructions`` and this workspace's own record, because a claim
+        that the agent is in a Grove workspace is one it cannot check without
+        the facts beside it. A workspace created with ``brief`` off gets no
+        ``start`` rule at all, so that choice still means what it always meant.
         """
-        if not (state.brief and self._briefed_by_hook(state, agent)):
-            return {}
-        rendered = AgentBrief.render(paths.agent_brief_path(state.id), self._brief_text(state))
-        return {} if rendered is None else {AgentBrief.PATH_ENV: str(rendered)}
-
-    def _brief_text(self, state: WorkspaceState) -> str:
-        """This workspace's brief: Grove's own, its own specification, then the cascade's.
-
-        The one composer, so the hook road and the initial-prompt road cannot
-        hand an agent two different briefs — which is exactly the drift that
-        would go unnoticed, since a given workspace only ever takes one of them.
-
-        **The specification exists because the brief's central claim was
-        deniable without it.** "You are in a Grove workspace" is unfalsifiable
-        from inside a ROOT-placement workspace: the agent is standing in an
-        ordinary repository checkout on an ordinary branch, with no
-        ``.worktrees/`` in the path and nothing else to corroborate the note, so
-        the reasonable reading is that the note is boilerplate about somebody
-        else's situation. Naming the placement, the branch, the runtime and the
-        phase file turns it into a claim the agent can check against what it
-        sees — and every one of those facts is already on the record, so this
-        costs a render rather than a read.
-
-        ``self_naming`` is gated on an empty description rather than on how the
-        title was made: title generation happens in the CLIENT (``grove create``
-        and the web composer each mint their own), so the engine never learns it
-        without a new request field threaded through every caller — and the
-        description is the better question anyway.
-        """
-        return GroveInstruction.workspace(
-            AgentBrief.compose(
-                appended=self._cfg.brief.instructions,
-                unnamed=self._cfg.brief.self_naming and not (state.description or "").strip(),
-            ),
-            self._brief_facts(state),
-        )
+        if not rule.include_instructions:
+            return GroveInstruction.reminder(text)
+        appended = self._cfg.brief.instructions.strip()
+        body = f"{text.strip()}\n\n{appended}" if appended else text
+        return GroveInstruction.workspace(body, self._brief_facts(state))
 
     @staticmethod
     def _brief_facts(state: WorkspaceState) -> tuple[tuple[str, str], ...]:
@@ -4864,43 +5864,6 @@ class WorkspaceManager:
             ("phase file", WorkspaceManager._phase_env(state, None).get(PhaseFile.PATH_ENV, "")),
             ("attached tickets", ", ".join(ref.key for ref in state.ticket_refs)),
         )
-
-    def _brief_prompt(
-        self, state: WorkspaceState, agent: AgentSpec, initial_prompt: str | None
-    ) -> str | None:
-        """The create-time prompt, carrying the brief where no hook can deliver it.
-
-        The fallback for codex and for every containerized agent. It costs no
-        extra turn — the prompt already rides the launch — and it lands on turn
-        one, which is the whole point of the brief.
-
-        **It cannot brief a create that had no prompt**, and inventing one is
-        worse than the gap: an agent handed the brief alone as its task starts a
-        turn about nothing. So a workspace created with no initial prompt on a
-        kind with no hook is genuinely not briefed — the honest answer rather
-        than a silent one.
-
-        **And it inherits `_compose_launch`'s own kind policy for prompts**,
-        which is narrower than this seam: the prompt rides the launch as a
-        trailing positional for `claude_code` only, and reaches mewbo through
-        the remote dispatch. A codex workspace's initial prompt is dropped
-        there today — a pre-existing gap in prompt delivery, not in the brief —
-        so codex ends up unbriefed until that is closed.
-
-        **A remote-steered kind is excluded outright**, not for want of a
-        channel — mewbo's `/message` would carry it perfectly — but because the
-        agent is not IN the workspace: it runs on a backend with no worktree, no
-        phase file and no `working-in-grove` skill installed, so the brief would
-        point it at a contract it cannot keep.
-        """
-        if (
-            not initial_prompt
-            or not state.brief
-            or agent.kind in _REMOTE_STEERED_KINDS
-            or self._briefed_by_hook(state, agent)
-        ):
-            return initial_prompt
-        return f"{self._brief_text(state)}\n{initial_prompt}"
 
     @staticmethod
     def _phase_env(state: WorkspaceState, agent_slot: str | None) -> dict[str, str]:
@@ -4943,8 +5906,10 @@ class WorkspaceManager:
         state: WorkspaceState,
         initial_prompt: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
         resume: bool = False,
         native: bool = False,
+        fork_from: str | None = None,
     ) -> _Argv:
         """Full argv appended to the agent command at launch, for a known session id.
 
@@ -4990,6 +5955,11 @@ class WorkspaceManager:
         positional) is unchanged, so a resume launch composes identically bar the
         one flag.
 
+        `fork_from` (create-only) appends the adapter's fork decoration in both
+        shapes, so the launch starts from a copy of that session under
+        `session_id` (Claude) or a provider-minted id (Codex). A native Codex
+        worker turns the same tokens into `thread/fork`.
+
         `agent.tools_offline` appends the adapter's network-tool-gating
         flags (`--disallowedTools WebFetch,WebSearch` for claude_code; a
         no-network sandbox for codex). Unlike `model`/`initial_prompt` it is not
@@ -5001,6 +5971,10 @@ class WorkspaceManager:
             # Explicitly separate the task from provider argv at the launch seam.
             # No Channels or permission-relay flags enter this owned input path.
             owned: _Argv = list(adapter.model_decoration(model)) if model else []
+            if effort:
+                owned = [*owned, *adapter.effort_decoration(effort)]
+            if fork_from is not None:
+                owned = [*adapter.fork_decoration(fork_from), *owned]
             if agent.kind == "claude_code" and session_id is not None:
                 # `--resume <id>` on the owned `claude -p` stream CONTINUES the
                 # same session and file (measured 2.1.270: a codeword set before
@@ -5032,12 +6006,18 @@ class WorkspaceManager:
                 )
                 if settings is not None:
                     decoration = [*decoration, "--settings", settings]
+        if fork_from is not None:
+            decoration = [*decoration, *adapter.fork_decoration(fork_from)]
         # `model` rides the launch INDEPENDENTLY of session correlation:
         # Codex mints no id (empty `launch_decoration`) yet still honors
         # `--model`, so it's appended whether or not a session id exists. Adapters
         # with no launch-time model flag (mewbo, generic) return [] — a no-op.
         if model:
             decoration = [*decoration, *adapter.model_decoration(model)]
+        # `effort` rides beside `model` for the same reason: create-only, the
+        # tool's own flag, and before the trailing prompt positional.
+        if effort:
+            decoration = [*decoration, *adapter.effort_decoration(effort)]
         # `--channels` declares Grove as a native Claude Code channel so a
         # RUNNING session can act on messages Grove delivers (and relay a
         # permission decision). Opt-in + auth-gated research preview, claude_code
@@ -5156,6 +6136,7 @@ class WorkspaceManager:
             statusline=decor.statusline,
             tmux_conf=decor.tmux_conf,
             payload=DecorPayload.resolve(decor.payload),
+            user_tmux_conf=paths.tmux_user_conf_path(),
         )
 
     def _settings_file(self, share_plan: AgentSharePlan | None) -> Path | None:
@@ -5373,22 +6354,31 @@ class WorkspaceManager:
         if container_tmux is not None:
             return container_tmux.pane
         host_session = state.tmux_session
-        windows = tmux.list_windows(host_session)
+        server = self._tmux_server(state)
+        windows = tmux.list_windows(host_session, server)
         if not windows:
             return None
         preferred = self._cfg.tmux.agent_window_name
-        if preferred in windows:
-            return tmux.TmuxPane(target=f"{host_session}:{preferred}")
         shell = self._cfg.tmux.shell_window_name
         non_shell = [w for w in windows if w != shell]
-        candidate = non_shell[0] if non_shell else windows[0]
-        return tmux.TmuxPane(target=f"{host_session}:{candidate}")
+        candidate = preferred if preferred in windows else (non_shell or windows)[0]
+        return tmux.TmuxPane(target=f"{host_session}:{candidate}", command=server.command)
+
+    @staticmethod
+    def _tmux_server(state: WorkspaceState) -> tmux.TmuxServer:
+        """The HOST tmux server *state*'s session lives on — its own, or the default.
+
+        The one place a record's socket becomes a server, so no host tmux read,
+        steer or teardown can address the shared default for a workspace that
+        was started on its own (that mismatch reads as a dead session).
+        """
+        return tmux.TmuxServer(socket=state.host_tmux_socket)
 
     def _container_tmux(self, state: WorkspaceState, *, session: str = "") -> ContainerTmux | None:
         """The in-container tmux reader for *state*, or ``None`` if it has none.
 
         The single host/container branch for reading and steering, and the
-        counterpart to `_container`/`_container_state` on the lifecycle side.
+        counterpart to `_runtime_for` on the lifecycle side.
         ``None`` for a host workspace, for a fallback workspace, and for a
         container whose image had no tmux (`tmux_command` empty, the honest
         degradation) — so a host workspace never constructs a reader
@@ -5551,14 +6541,20 @@ class WorkspaceManager:
         if state.provision_status is ProvisionStatus.PROVISIONING:
             # BEFORE the container read, and that ordering is the whole point:
             # during a provision the container legitimately does not exist yet,
-            # so `_container_state` answers ABSENT and the next branch would
+            # so the runtime's liveness answers ABSENT and the next branch would
             # demote a workspace that is building normally to OFFLINE — the
             # status whose advertised remedy is `respawn`, i.e. destroy this
             # build and start it again. It also saves the `docker inspect`,
             # which has nothing to inspect.
             return _with_status(state, WorkspaceStatus.PROVISIONING)
-        container = self._container_state(state)
-        if container is not None and container is not ContainerState.RUNNING:
+        if self._runtime_for(state).liveness(state) is False:
+            if state.frozen_at is not None:
+                # A `docker pause`d container reads as not running, which would
+                # advertise `respawn` for a workspace the next message simply
+                # wakes. IDLE carries that remedy already. Only the negative
+                # answer is overridden, so a frozen host workspace whose tmux
+                # died still falls through to OFFLINE below.
+                return _with_status(state, WorkspaceStatus.IDLE)
             # Everything that is not RUNNING is a workspace the agent cannot be
             # alive in, and every one of them is respawn's job: ABSENT/STOPPED
             # need the container back, MISSING_IMAGE needs a rebuild, and
@@ -5568,6 +6564,11 @@ class WorkspaceManager:
             # `None` is "could not read the engine" and deliberately changes
             # nothing.
             return _with_status(state, WorkspaceStatus.OFFLINE)
+        if state.runtime is Runtime.REMOTE:
+            # No host tmux exists for a workload elsewhere; the runtime's
+            # liveness (platform plus a connected worker) is the whole answer,
+            # and the activity blend derives the agent axis.
+            return _with_status(state, WorkspaceStatus.ACTIVE)
         if not self._launch_backend.provides_pane:
             # Headless runtime: there is deliberately no tmux session, so
             # `has_session` (→ OFFLINE) and pane activity (→ ACTIVE/IDLE) probe a
@@ -5585,7 +6586,7 @@ class WorkspaceManager:
         # was refused as pane_not_found. `None` means "no event coverage for
         # this session", which is exactly when the direct probe must still run.
         session_alive = (
-            self._runtime_host_tmux_liveness(state.tmux_session)
+            self._runtime_host_tmux_liveness(self._tmux_server(state).handle(state.tmux_session))
             if self._runtime_host_tmux_liveness is not None
             else None
         )
@@ -5601,7 +6602,9 @@ class WorkspaceManager:
         # cache SUPPLEMENTS the probe, it does not replace it. The cost is one
         # `has_session` on the path that was about to report a dead workspace,
         # never on the healthy one — a live witness still short-circuits.
-        if session_alive is not True and not tmux.has_session(state.tmux_session):
+        if session_alive is not True and not tmux.has_session(
+            state.tmux_session, self._tmux_server(state)
+        ):
             return self._status_without_a_viewport(state)
         if self._native_owner_exited(state):
             return _with_status(state, WorkspaceStatus.OFFLINE)
@@ -5613,7 +6616,7 @@ class WorkspaceManager:
         # first frame — so fall through to the direct probe rather than
         # reporting a fresh, working agent as IDLE.
         activity = (
-            self._runtime_host_tmux_activity(state.tmux_session)
+            self._runtime_host_tmux_activity(self._tmux_server(state).handle(state.tmux_session))
             if self._runtime_host_tmux_activity is not None
             else None
         )
@@ -5621,7 +6624,9 @@ class WorkspaceManager:
             age: float | None = (_utcnow() - activity).total_seconds()
         else:
             target = self._pane_target_for_running(state)
-            age = tmux.pane_activity_seconds_ago(target) if target else None
+            age = (
+                tmux.pane_activity_seconds_ago(target, self._tmux_server(state)) if target else None
+            )
         if age is not None and age <= threshold:
             return _with_status(state, WorkspaceStatus.ACTIVE)
         return _with_status(state, WorkspaceStatus.IDLE)
@@ -5700,7 +6705,7 @@ class WorkspaceManager:
         agent-window target spec.
         """
         session = state.tmux_session
-        windows = tmux.list_windows(session)
+        windows = tmux.list_windows(session, self._tmux_server(state))
         if not windows:
             return None
         preferred = self._cfg.tmux.agent_window_name
@@ -5750,56 +6755,87 @@ class WorkspaceManager:
             logger.debug("workspace {} flagged ORPHANED (worktree missing)", before.id)
             self._emit("orphaned_detected", before.id)
 
-    def _rollback_create(self, state: WorkspaceState) -> None:
-        """Best-effort cleanup when create fails partway through.
+    def _rollback_create(self, state: WorkspaceState, stages: Stages) -> Sequence[str]:
+        """Undo the stages a failed create entered, newest first; return what stayed.
 
-        Mirrors the placement gating of the create path it unwinds: for root
-        placement the worktree is the repo root and the branch is the live
-        checkout, so rollback must never remove the directory or delete the
-        branch — it only kills any session and forgets the record. Reusing the
-        same gate here is what keeps a failed root create from destroying the
-        user's repo.
+        Driven by what actually BEGAN rather than by re-deriving it from the
+        record, so a create that failed at its worktree never touches a tmux
+        session it did not start. Root placement never enters ``worktree``,
+        which is what keeps a failed root create from removing the repo or
+        deleting the live branch. The branch has a second gate,
+        ``state.grove_owns_branch``: create did not create a branch it merely
+        checked out.
 
-        The branch has a SECOND gate, ``state.grove_owns_branch``: a rollback
-        unwinds what create did, and create did not create a branch it merely
-        checked out. Placement alone is not enough — a WORKTREE
-        workspace attached to the user's existing branch is the ordinary case
-        the placement gate lets through.
+        The init log is deliberately kept: rollback fires exactly when a failed
+        init needs diagnosing, and ``kill`` remains its cleanup point.
         """
-        try:
-            tmux.kill_session(state.tmux_session)
-        except Exception as exc:
-            logger.warning("rollback: kill_session failed: {}", exc)
-        # ── container: a create that failed AFTER `up` still left a
-        # container on the host — including an `outcome:error` one, whose id the
-        # CLI reports and the create path persists before touching tmux for
-        # exactly this reason. Skipping it here is how orphans are made.
-        container = self._container(state)
-        if container is not None:
-            try:
-                container.teardown()
-            except Exception as exc:
-                logger.warning("rollback: container teardown failed: {}", exc)
-        if state.placement is not Placement.ROOT:
+        return stages.unwind(self._create_inverses(state))
+
+    def _create_inverses(self, state: WorkspaceState) -> dict[str, Callable[[], None]]:
+        """The undo for each ``create`` stage, shared by a rollback and by start-up recovery."""
+
+        def session() -> None:
+            tmux.kill_session(state.tmux_session, server=self._tmux_server(state))
+
+        def container() -> None:
+            # A create that failed AFTER `up` still left a container, including an
+            # `outcome:error` one whose id the create path persisted for this.
+            # The worker bearer is minted before the workload starts, so a
+            # refused start leaves a live credential nothing will ever use; it
+            # goes with the workload, exactly as `kill` revokes it.
+            self._revoke_worker_credential(state)
+            failure = self._runtime_for(state).teardown(state).failure
+            if failure is not None:
+                raise GroveError(failure)
+
+        def worktree() -> None:
             # See `pause`: strand nobody on a cwd that is about to be unlinked.
             reap_cwd_holders(Path(state.worktree_path))
+            removal: Exception | None = None
             try:
                 self._git.worktree_remove(Path(state.worktree_path), force=True)
             except Exception as exc:
-                logger.warning("rollback: worktree_remove failed: {}", exc)
+                removal = exc
             if state.grove_owns_branch:
-                try:
-                    self._git.branch_delete(state.branch, force=True)
-                except Exception as exc:
-                    logger.warning("rollback: branch_delete failed: {}", exc)
-        # Deliberately NOT dropping the init log here: rollback fires exactly
-        # when a failed init needs diagnosing, and the log is the only artifact
-        # that survives the worktree teardown. kill() — intentional
-        # teardown — remains the cleanup point.
-        try:
+                self._git.branch_delete(state.branch, force=True)
+            if removal is not None:
+                raise removal
+
+        def record() -> None:
             self._store.delete(state.id)
-        except Exception as exc:
-            logger.warning("rollback: store.delete failed: {}", exc)
+
+        return {"session": session, "container": container, "worktree": worktree, "record": record}
+
+    def resume_interrupted(self, workspace_id: str, stages: Stages) -> Sequence[str]:
+        """Finish a verb whose process died mid-run: unwind a create, complete a kill.
+
+        Args:
+            workspace_id: the workspace the verb was acting on.
+            stages: what it had entered when it died.
+
+        Returns:
+            The stages that could not be undone or finished; empty when clean.
+        """
+        try:
+            state = self._store.get(workspace_id)
+        except WorkspaceNotFound:
+            return []
+        if stages.verb == "create":
+            # A create that died never reached its `created` event, so nothing has
+            # claimed this workspace; undo what began rather than guess the rest.
+            residue = stages.unwind(self._create_inverses(state))
+            stages.path.unlink(missing_ok=True)
+        else:
+            # `kill` records its own run, which replaces and then removes this file.
+            self.kill(workspace_id)
+            residue = []
+        logger.warning(
+            "workspace {}: {} was interrupted; finished at start (residue: {})",
+            workspace_id,
+            stages.verb,
+            ",".join(residue) or "none",
+        )
+        return residue
 
     def _record_error(self, state: WorkspaceState, detail: str) -> None:
         errored = _replace(
@@ -5985,6 +7021,46 @@ def _list_sort_key(state: WorkspaceState) -> tuple[int, float]:
     rank = _STATUS_RANK.get(state.status, 99)
     # Negative timestamp so newer first within a rank tier.
     return (rank, -state.updated_at.timestamp())
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchPreview:
+    """What ``WorkspaceManager.preview`` found: the resolution plus the create's own checks."""
+
+    launch: LaunchResolution
+    runtime: Runtime
+    remote_runtime: str | None
+    runtime_fallback_reason: str | None
+    native: bool
+    project_subpath: str
+    problems: tuple[LaunchProblem, ...]
+    adjustments: tuple[LaunchAdjustment, ...] = ()
+
+
+#: The stable code a refusal crosses the wire with, by the exception ``create``
+#: raises. The daemon's create route answers these same exceptions with these
+#: same codes, which a test holds equal, so a preview and the create it
+#: previews name one refusal one way.
+_REFUSAL_CODES: tuple[tuple[type[GroveError], str], ...] = (
+    (EffortNotSupported, "effort_not_supported"),
+    (CapabilityUnavailable, "capability_unavailable"),
+)
+
+
+def _refusal(exc: GroveError, *, field: str) -> LaunchProblem:
+    if isinstance(exc, InvalidLaunch):
+        return LaunchProblem(exc.field, exc.error, str(exc))
+    code = next((c for cls, c in _REFUSAL_CODES if isinstance(exc, cls)), "grove_error")
+    return LaunchProblem(field, code, str(exc))
+
+
+def _launch_problem(check: Callable[[], object], *, field: str) -> LaunchProblem | None:
+    """Run one of ``create``'s pre-side-effect checks and report its refusal, if any."""
+    try:
+        check()
+    except GroveError as exc:
+        return _refusal(exc, field=field)
+    return None
 
 
 __all__ = [

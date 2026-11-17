@@ -26,13 +26,13 @@ describe("subtle outlined control chrome", () => {
     expect(css).toContain(`${outlinedControl} {\n  box-shadow: none;\n}`);
   });
 
-  it("gives the composer's focused border a visible ring without an outer frame", () => {
+  it("steps the composer's focused border halfway toward the ring, without an outer frame", () => {
     const composerFocus = css.slice(
       css.indexOf('[data-slot="composer-bar"]:has([data-slot="textarea"]:focus-visible)'),
       css.indexOf("/* Placeholder contrast"),
     );
 
-    expect(composerFocus).toContain("border-color: var(--ring);");
+    expect(composerFocus).toContain("color-mix(in oklab, var(--ring) 50%,");
     expect(composerFocus).not.toContain("outline:");
   });
 

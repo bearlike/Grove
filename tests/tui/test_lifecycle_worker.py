@@ -433,7 +433,9 @@ async def test_ticks_do_no_work_while_the_terminal_is_handed_to_an_attach(
         lambda _wid: HostAttach(tmux_session=state.tmux_session, inside_outer_tmux=True),
     )
     monkeypatch.setattr("grove.tui.screens.list.subprocess.run", lambda *_a, **_k: None)
-    monkeypatch.setattr("grove.tui.screens.list.fit_window_to_client", lambda _s: None)
+    monkeypatch.setattr(
+        "grove.tui.screens.list.fit_window_to_client", lambda _s, _server=None: None
+    )
 
     app = GroveApp(manager)
     async with app.run_test(size=(140, 40)) as pilot:

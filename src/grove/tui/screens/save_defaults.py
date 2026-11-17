@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import ClassVar
 
@@ -47,11 +47,11 @@ class SaveDefaultsScreen(GroveModal[DefaultsScope | None]):
         self,
         *,
         repo_root: Path | None,
-        shadowed: Sequence[str] = (),
+        shadowed: Mapping[DefaultsScope, Sequence[str]] | None = None,
     ) -> None:
         super().__init__()
         self._repo_root = repo_root
-        self._shadowed = tuple(shadowed)
+        self._shadowed = {scope: tuple(names) for scope, names in (shadowed or {}).items()}
 
     def compose(self) -> ComposeResult:
         user_path = DefaultsScope.USER.path(None)
@@ -80,7 +80,7 @@ class SaveDefaultsScreen(GroveModal[DefaultsScope | None]):
                     disabled=self._repo_root is None,
                 )
             yield Static(
-                self._warning_text(),
+                "",
                 id="shadowed-warning",
                 classes="-hidden",
                 markup=False,
@@ -130,11 +130,15 @@ class SaveDefaultsScreen(GroveModal[DefaultsScope | None]):
 
     def _show_shadowed_warning(self, index: int | None) -> None:
         warning = self.query_one("#shadowed-warning", Static)
-        selected_project_scope = index in (1, 2)
-        warning.set_class(not (selected_project_scope and self._shadowed), "-hidden")
+        fields: tuple[str, ...] = ()
+        if index is not None and 0 <= index < len(self._SCOPES):
+            fields = self._shadowed.get(self._SCOPES[index], ())
+        warning.update(self._warning_text(fields))
+        warning.set_class(not fields, "-hidden")
 
-    def _warning_text(self) -> str:
-        if not self._shadowed:
+    @staticmethod
+    def _warning_text(fields: Sequence[str]) -> str:
+        if not fields:
             return ""
-        fields = ", ".join(self._shadowed)
-        return f"User-level defaults win, so these fields will not take effect: {fields}."
+        names = ", ".join(fields)
+        return f"A project default saved above this one wins, so these stay unchanged: {names}."

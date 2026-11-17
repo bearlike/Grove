@@ -37,14 +37,25 @@ class GenericAdapter:
     # `read_messages` is empty by construction, so there is no tool result to
     # carry a flag — a third distinct reason for `False`, not a degradation.
     reports_tool_errors = False
+    efforts: tuple[str, ...] = ()
+    native_controls: frozenset[str] = frozenset()
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         del session_id, resume
         return []
 
+    def fork_decoration(self, source_session_id: str) -> list[str]:
+        # A bare shell has no conversation to copy.
+        del source_session_id
+        return []
+
     def model_decoration(self, model: str) -> list[str]:
         # A bare shell has no model concept — ignore the request, run as named.
         del model
+        return []
+
+    def effort_decoration(self, effort: str) -> list[str]:
+        del effort
         return []
 
     def offline_decoration(self) -> list[str]:
@@ -65,6 +76,13 @@ class GenericAdapter:
         # flag Grove can assume, and probing an arbitrary binary with
         # ``--version`` is exactly the guessing the provider boundary forbids.
         del command
+        return None
+
+    def transcript_root(self, path: Path) -> Path | None:
+        del path
+        return None
+
+    def transcript_home(self) -> Path | None:
         return None
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:

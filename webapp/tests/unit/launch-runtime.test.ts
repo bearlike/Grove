@@ -9,9 +9,12 @@ const values: LaunchValues = {
   projectCwd: "/repos/grove/webapp",
   selectedProjectCwd: "/repos/grove/webapp",
   agentName: "claude",
+  agentKind: null,
   model: "sonnet",
   customModel: false,
+  effort: null,
   runtime: "container",
+  node: null,
   brief: true,
   native: null,
   branchMode: "auto",
@@ -25,7 +28,7 @@ const values: LaunchValues = {
   ticket: null,
 };
 
-const state: LaunchState = { values, touched: new Set() };
+const state: LaunchState = { values, touched: new Set(), seededRepo: values.repoRoot };
 
 describe("submitLaunch", () => {
   it("builds the sole create request before navigating to the new workspace", async () => {
@@ -50,13 +53,10 @@ describe("submitLaunch", () => {
     expect(create).toHaveBeenCalledWith({
       repo_root: "/repos/grove",
       project_cwd: "/repos/grove/webapp",
-      agent_name: "claude",
-      title: expect.stringMatching(/^t[0-9a-f]{9}$/),
+      // No title: the engine names an untitled workspace, never the prompt.
+      // No agent and no branch plan: untouched pills contribute nothing, and
+      // the engine resolves both from the same cascade the pills displayed.
       initial_prompt: "Create the composer\nwith defaults",
-      // Untouched pills still contribute nothing — except branch_plan, which
-      // must carry what the pill shows because the request's own default does
-      // not consult the defaults cascade.
-      branch_plan: { kind: "auto", base_ref: "main" },
     });
     expect(navigate).toHaveBeenCalledWith("/w/workspace-1");
     expect(restore).not.toHaveBeenCalled();

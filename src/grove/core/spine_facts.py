@@ -36,6 +36,8 @@ class SpineFacts:
     duration: DurationView
     token_classes: TokenClassesView
     generation_latency: GenerationLatencyView
+    #: Main-thread compaction boundaries so far; what the ``compaction`` trigger counts.
+    compactions: int = 0
 
 
 @dataclass(slots=True)
@@ -140,6 +142,7 @@ class SpineFactsCache:
         self._latency_total_ms = 0
         self._latency_calls = 0
         self._tokens = _TokenTotals()
+        self._compactions = 0
         self.processed_messages = 0
         self.rebuilds = 0
         self.incremental_updates = 0
@@ -165,6 +168,7 @@ class SpineFactsCache:
         self._latency_total_ms = 0
         self._latency_calls = 0
         self._tokens = _TokenTotals()
+        self._compactions = 0
         self.processed_messages = 0
         self.rebuilds = 0
         self.incremental_updates = 0
@@ -216,6 +220,7 @@ class SpineFactsCache:
         self._latency_total_ms = 0
         self._latency_calls = 0
         self._tokens = _TokenTotals()
+        self._compactions = 0
         self._facts = None
         self._fold(messages)
         self._messages = messages
@@ -225,6 +230,8 @@ class SpineFactsCache:
         """Advance all reductions through one new suffix of normalized messages."""
         for message in messages:
             self.processed_messages += 1
+            if message.role == "compaction" and message.thread_id is None:
+                self._compactions += 1
             self._tokens.add(message)
             self._fold_generation(message)
             self._fold_tools(message)
@@ -313,6 +320,7 @@ class SpineFactsCache:
             duration=duration,
             token_classes=self._tokens.view(),
             generation_latency=latency,
+            compactions=self._compactions,
         )
         return self._facts
 

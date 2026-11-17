@@ -70,7 +70,7 @@ export const GLOSSARY = {
       "This workspace runs in the repository's own checkout rather than a private worktree, so its changes are visible to everything else using that folder.",
   },
   container_runtime: {
-    label: "Container",
+    label: "Dev Container",
     summary:
       "The agent runs inside a dev container, so what it can reach is limited to that container rather than the whole machine.",
   },
@@ -78,6 +78,11 @@ export const GLOSSARY = {
     label: "Host",
     summary:
       "The agent runs directly on this machine with the same access you have, rather than inside a container.",
+  },
+  remote_runtime: {
+    label: "Remote",
+    summary:
+      "The agent runs in a container on a cloud platform rather than this machine, and connects back to Grove from there.",
   },
   native_session: {
     label: "Native session",

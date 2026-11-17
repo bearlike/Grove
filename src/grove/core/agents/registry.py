@@ -8,8 +8,10 @@ here plus its adapter module; nothing else in the engine changes.
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from grove.core.config import TranscriptCacheConfig
@@ -100,6 +102,45 @@ def _collapse_context_variants(ids: Sequence[str]) -> tuple[str, ...]:
     return tuple(i for i in ids if i + CONTEXT_VARIANT_SUFFIX not in present)
 
 
+class ModelProbeMemo:
+    """Remembers each agent command's discovered model list for a while.
+
+    A probe forks the provider's own CLI (``opencode models``, ``codex debug
+    models``), sometimes behind a credential injector that takes seconds, and
+    every create form and every create asks for every roster entry of a kind,
+    so without this one form visit forked one probe per entry. Keyed by
+    ``(kind, command)`` because the command IS the profile (a wrapped binary,
+    a different config dir). An EMPTY answer is not remembered: an empty catalog
+    reads exactly like a probe that failed, and a transient failure must not
+    pin an empty picker for the whole window.
+    """
+
+    ttl_seconds: ClassVar[float] = 300.0
+    _held: ClassVar[dict[tuple[str, str], tuple[float, tuple[str, ...]]]] = {}
+    _lock: ClassVar[threading.Lock] = threading.Lock()
+
+    @classmethod
+    def probe(cls, kind: str, command: str) -> tuple[str, ...]:
+        """The adapter's live list for ``command``, from memory while it is fresh."""
+        key = (kind, command)
+        now = time.monotonic()
+        with cls._lock:
+            held = cls._held.get(key)
+            if held is not None and now - held[0] < cls.ttl_seconds:
+                return held[1]
+        found = tuple(get_adapter(kind).available_models(command))
+        if found:
+            with cls._lock:
+                cls._held[key] = (now, found)
+        return found
+
+    @classmethod
+    def clear(cls) -> None:
+        """Forget every remembered list (tests, and a config reload that changes a roster)."""
+        with cls._lock:
+            cls._held.clear()
+
+
 def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tuple[str, ...]:
     """The single per-agent model catalog a picker offers: configured override,
     else the adapter's live discovery, de-duped and order-preserving.
@@ -112,7 +153,7 @@ def resolve_models(*, kind: str, command: str, configured: Sequence[str]) -> tup
     TUI, CLI, MCP) shows the same list. Never an allowlist: create still
     forwards any model id verbatim, so an id absent here is valid."""
     curated = bool(configured)
-    raw = tuple(configured) if curated else get_adapter(kind).available_models(command)
+    raw = tuple(configured) if curated else ModelProbeMemo.probe(kind, command)
     seen: dict[str, None] = {}
     for model in raw:
         if model and model not in seen:

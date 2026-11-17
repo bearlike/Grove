@@ -192,10 +192,7 @@ export function Workspace({ id }: { id: string }) {
   // `null` is a deliberate state, not an encoded default: only it follows the
   // transcript rule. A stored or freshly clicked value remains authoritative
   // when the first turn arrives asynchronously.
-  const { view, workTab } = resolvedWorkspaceSelection(
-    hasTranscript,
-    selection,
-  );
+  const { view, workTab } = resolvedWorkspaceSelection(hasTranscript, selection);
   // Never render `view` directly: below the breakpoint `split` is not on offer,
   // and holding it would leave no tab selected. See `visiblePane`.
   const paneView = visiblePane(view, wideEnoughToSplit);

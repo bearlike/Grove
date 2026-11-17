@@ -8,6 +8,7 @@ import { enrichedCatalog, modelOptions } from "@/components/grove/model-option";
 import {
   contextWindowLabel,
   modelIconSlug,
+  modelTier,
   modelLabel,
   modelNamespace,
 } from "@/lib/grove/adapters/model";
@@ -68,6 +69,25 @@ describe("modelLabel", () => {
   });
 });
 
+describe("modelTier", () => {
+  it("recognises a gateway's routing tiers: a bare size word as the whole family", () => {
+    // `anthropic-small[1m]` proxies across providers in one model class; it
+    // has no vendor and must not borrow one. The tier IS its identity.
+    expect(modelTier("anthropic-small[1m]")).toBe("small");
+    expect(modelTier("anthropic-medium[1m]")).toBe("medium");
+    expect(modelTier("anthropic-large[1m]")).toBe("large");
+    expect(modelTier("anthropic-xlarge[1m]")).toBe("xlarge");
+    expect(modelTier("xlarge")).toBe("xlarge");
+  });
+
+  it("does not take a size word that qualifies a REAL vendor model", () => {
+    expect(modelTier("whisper-large-v3-turbo")).toBeNull();
+    expect(modelTier("text-embedding-3-small")).toBeNull();
+    expect(modelTier("anthropic-qwen3.8-max-preview[1m]")).toBeNull();
+    expect(modelTier("anthropic-opus[1m]")).toBeNull();
+  });
+});
+
 describe("modelIconSlug", () => {
   it("resolves the family word inside a gateway id, product before vendor", () => {
     expect(modelIconSlug("anthropic-deepseek-v4-pro")).toBe("logos:deepseek-icon");
@@ -76,6 +96,24 @@ describe("modelIconSlug", () => {
     expect(modelIconSlug("anthropic-qwen3.7-max[1m]")).toBe("logos:qwen-icon");
     expect(modelIconSlug("anthropic-opus-5")).toBe("logos:claude-icon");
     expect(modelIconSlug("fable")).toBe("logos:claude-icon");
+  });
+
+  it("resolves the GPT shorthand aliases as whole words only", () => {
+    for (const id of ["sol", "terra", "luna", "astra", "anthropic-luna", "gpt-6.1-sol-reason-high"]) {
+      expect(modelIconSlug(id)).toBe("simple-icons:openai");
+    }
+    // A family word that merely CONTAINS an alias is not that alias.
+    expect(modelIconSlug("console-9b")).toBeNull();
+    expect(modelIconSlug("solar-pro")).toBeNull();
+  });
+
+  it("resolves the other vendors a gateway publishes", () => {
+    expect(modelIconSlug("whisper-large-v3-turbo")).toBe("simple-icons:openai");
+    expect(modelIconSlug("text-embedding-3-small")).toBe("simple-icons:openai");
+    expect(modelIconSlug("anthropic-nemotron-3.5-lightning")).toBe("selfhst:nvidia");
+    expect(modelIconSlug("selfhosted/parakeet-tdt-0.6b-v3")).toBe("selfhst:nvidia");
+    expect(modelIconSlug("minimax/minimax-m2.7")).toBe("logos:minimax");
+    expect(modelIconSlug("nova-3-multi")).toBe("simple-icons:deepgram");
   });
 
   it("returns null for an id no family matches", () => {
@@ -160,7 +198,10 @@ describe("modelOptions", () => {
     expect(options.every((o) => o.description === undefined)).toBe(true);
   });
 
-  it("never offers an effort control", () => {
+  // Effort is a per-AGENT launch setting with its own pill (`EffortPill`), not a
+  // per-model option: the vendored row inside this selector keys off the
+  // selected model, and "Agent default" selects none.
+  it("never offers an effort control inside the model rows", () => {
     const { options } = modelOptions([
       { id: "anthropic-opus-5", name: "Opus 5", context_window: 1_000_000 },
     ]);

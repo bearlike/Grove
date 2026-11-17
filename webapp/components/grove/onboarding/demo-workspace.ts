@@ -75,6 +75,7 @@ export const DEMO_TICKETS: TicketRef[] = [
 
 export const DEMO_STATE: WorkspaceStateView = {
   id: DEMO_WORKSPACE_ID,
+  project_subpath: "",
   // "Sample" in the TITLE, not only in the docs: the rail, the header and the
   // tab title all print it, and a reader with a real workspace of the same
   // name must never mistake one for the other.

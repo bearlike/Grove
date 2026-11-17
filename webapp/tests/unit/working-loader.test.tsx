@@ -59,7 +59,7 @@ describe("WorkingLoader", () => {
   it("is mounted only while the agent is working, carrying the native step", async () => {
     const transcript = await source(TRANSCRIPT);
 
-    expect(transcript).toContain("{working && <WorkingLoader operation={operation} />}");
+    expect(transcript).toMatch(/\{working && \(\s*<WorkingLoader operation=\{operation\}/);
   });
 
   it("names a native step instead of the bare word, without a live region ticking", () => {
@@ -201,5 +201,21 @@ describe("WorkingLoader", () => {
     // attention and phase marks.
     expect(rail).toContain('agentState === "working" ? (');
     expect(rail).toContain("<WorkingMark");
+  });
+});
+
+describe("WorkingLoader live step", () => {
+  it("opens the live stream only for a native workspace, and only while working", async () => {
+    // The stream's lifetime IS the feature's cost: the first viewer turns the
+    // worker's publishing on. A terminal workspace has nothing to watch, and
+    // the loader only mounts while the agent works.
+    const transcript = await source(TRANSCRIPT);
+    expect(transcript).toMatch(/\{working && \(\s*<WorkingLoader[^>]*liveWorkspaceId=\{native \? workspaceId : null\}/);
+  });
+
+  it("server-renders the plain word, never a step it has not received", () => {
+    const html = renderToStaticMarkup(<WorkingLoader liveWorkspaceId={"a".repeat(32)} />);
+    expect(html).toContain("Working");
+    expect(html).not.toContain("data-step");
   });
 });

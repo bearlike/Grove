@@ -15,17 +15,23 @@ re-exports it for back-compat.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from loguru import logger
+
+from grove.core import paths
 from grove.core.config import GroveConfig
-from grove.core.git import detect_root
+from grove.core.contracts.project_identity import ProjectIdentity
+from grove.core.errors import GroveError, ProjectNotOnNode, WorkspaceNotFound
+from grove.core.git import GitRepo, detect_root
+from grove.core.lifecycle_stages import Stages
 from grove.core.manager import WorkspaceManager
 from grove.core.native import NativeSteerClient
 from grove.core.store import JsonWorkspaceStore
-from grove.core.workspace import ShareToken, WorkspaceRef, WorkspaceState
+from grove.core.workspace import ProvisionStatus, ShareToken, WorkspaceRef, WorkspaceState
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +88,15 @@ class RepoRegistry:
         # safe to vary per repo here: they are consumed only from the global
         # ``cfg`` build_app holds, never off a registry Manager.
         self._config_loader = config_loader
+        # The declared project list is held apart from ``cfg`` so a long-lived
+        # owner can swap it when the user config changes (`reload_projects`)
+        # without rebuilding the registry or dropping its cached Managers.
+        self._projects: tuple[str, ...] = tuple(cfg.projects)
         self._cache: dict[Path, WorkspaceManager] = {}
+        # A repo's identity changes only when its origin or default branch does,
+        # which is rare enough that a process-lifetime memo is right; it costs
+        # two git calls per repo, once.
+        self._identities: dict[Path, ProjectIdentity | None] = {}
         self._manager_subscribers: list[Callable[[Path, WorkspaceManager], None]] = []
 
     def subscribe_managers(
@@ -112,7 +126,11 @@ class RepoRegistry:
         if mgr is None:
             cfg = self._config_loader(key) if self._config_loader is not None else self._cfg
             mgr = WorkspaceManager(
-                repo_root=key, cfg=cfg, store=self._store, native_steer=self._native_steer
+                repo_root=key,
+                cfg=cfg,
+                store=self._store,
+                native_steer=self._native_steer,
+                config_loader=self._config_loader,
             )
             self._cache[key] = mgr
             for callback in tuple(self._manager_subscribers):
@@ -120,6 +138,20 @@ class RepoRegistry:
             if self._on_project_registered is not None:
                 self._on_project_registered(key)
         return mgr
+
+    def reload_projects(self, projects: Iterable[str]) -> bool:
+        """Replace the config-declared project list; ``True`` when it changed.
+
+        The one seam that lets a project added to the user config reach a
+        process that loaded its config long ago (the daemon, an open TUI)
+        without a restart. Only the DECLARED arm moves: cached Managers keep
+        the cascade they resolved, because a new project is a new repo and
+        mints its own Manager — with a fresh cascade — on first access.
+        """
+        new = tuple(projects)
+        changed = new != self._projects
+        self._projects = new
+        return changed
 
     def resolve_workspace(self, ref: str) -> tuple[WorkspaceManager, WorkspaceState]:
         """The workspace ``ref`` names, and a Manager bound to ITS repo.
@@ -204,6 +236,95 @@ class RepoRegistry:
         """
         return self._store.load_all()
 
+    def resolve_interrupted(self) -> list[str]:
+        """Finish every lifecycle verb a dead process left half-done, then stale provisions.
+
+        A create is unwound and a kill completed, each through its workspace's
+        own Manager so the repo's cascade applies. Best-effort per workspace:
+        one that cannot be finished is logged and the rest still run.
+
+        Returns:
+            The workspace ids that were acted on; empty when nothing was left.
+        """
+        acted: list[str] = []
+        for workspace_id, stages in Stages.interrupted():
+            try:
+                state = self._store.get(workspace_id)
+            except WorkspaceNotFound:
+                stages.path.unlink(missing_ok=True)
+                continue
+            try:
+                self.get(Path(state.repo_root)).resume_interrupted(workspace_id, stages)
+            except GroveError as exc:
+                logger.error(
+                    "workspace {}: interrupted {} not finished: {}", workspace_id, stages.verb, exc
+                )
+                continue
+            acted.append(workspace_id)
+        return acted + self.resolve_interrupted_provisions()
+
+    def resolve_interrupted_provisions(self) -> list[str]:
+        """Settle every record a killed provision left claiming it is still building.
+
+        ``PROVISIONING`` is the one status that ends on its own, so a record
+        stuck at it after its process died says "wait" forever about a build
+        nobody is running. A provision holds ``paths.exclusive_lock`` on its log
+        for its whole run, so a free lock here is proof the builder is gone,
+        while a build still running in a CLI or TUI keeps its lock and is left
+        alone. The record moves to ``FAILED``, which reconciles to OFFLINE and
+        offers ``respawn``, the verb that provisions again.
+
+        Returns:
+            The ids of the records that were resolved; empty when none were.
+        """
+        resolved: list[str] = []
+        for state in self._store.load_all():
+            if state.provision_status is not ProvisionStatus.PROVISIONING:
+                continue
+            log_path = paths.provision_log_path(state.id)
+            if paths.lock_is_held(log_path):
+                continue
+            self._store.save(replace(state, provision_status=ProvisionStatus.FAILED))
+            logger.warning(
+                "workspace {}: its provision was interrupted (the process that ran it is "
+                "gone); marked failed, respawn to provision again",
+                state.id,
+            )
+            resolved.append(state.id)
+        return resolved
+
+    def identity(self, repo_root: Path) -> ProjectIdentity | None:
+        """The repo's cross-node name, or ``None`` when it has no remote to be named by."""
+        key = repo_root.resolve()
+        if key not in self._identities:
+            repo = GitRepo(key)
+            remote = repo.origin_url()
+            normalized = ProjectIdentity.normalize_remote(remote) if remote else None
+            self._identities[key] = (
+                ProjectIdentity(remote=normalized, default_branch=repo.default_branch())
+                if normalized
+                else None
+            )
+        return self._identities[key]
+
+    def root_for(self, identity: ProjectIdentity) -> Path:
+        """This node's path for ``identity``: the per-node half of a project's name.
+
+        Matches the remote only. A node's clone may track a different default
+        branch name than the caller assumed, and the branch a workspace starts
+        from is the create request's own business.
+        """
+        for root in sorted(self.known_roots()):
+            found = self.identity(root)
+            if found is not None and found.remote == identity.remote:
+                return root
+        raise ProjectNotOnNode(f"no repository on this node has remote {identity.remote}")
+
+    def known_identities(self) -> list[ProjectIdentity]:
+        """Every project this node can create in, by its cross-node name."""
+        found = (self.identity(root) for root in sorted(self.known_roots()))
+        return [identity for identity in found if identity is not None]
+
     def known_roots(self) -> list[Path]:
         """Repos that exist, by union of two sources.
 
@@ -264,7 +385,7 @@ class RepoRegistry:
         subdirectory surface as a distinct project anchored at the real root.
         """
         projects: list[Project] = []
-        for raw in self._cfg.projects:
+        for raw in self._projects:
             try:
                 resolved = Path(raw).expanduser().resolve()
             except OSError:

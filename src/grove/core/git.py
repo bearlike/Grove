@@ -20,14 +20,15 @@ lazygit, gh, etc.).
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import ClassVar, TypeVar, cast
+from typing import Any, ClassVar, Protocol, TypeVar, cast
 
 from loguru import logger
 
@@ -76,6 +77,21 @@ def _assert_not_flaglike(**values: str | None) -> None:
             )
 
 
+class GitAnswer(Protocol):
+    """What a git command run elsewhere answered: its exit status and its output."""
+
+    @property
+    def returncode(self) -> int: ...
+
+    @property
+    def output(self) -> str: ...
+
+
+#: Runs a git argv in a worktree that is not on this host, within the given
+#: number of seconds. Raises :class:`GitError` when the worktree cannot be reached.
+type GitRunner = Callable[[list[str], float], GitAnswer]
+
+
 class GitRepo:
     """All git operations bound to a single repository root.
 
@@ -104,8 +120,26 @@ class GitRepo:
     #: Bounded per-repository cache of results determined solely by commit OIDs.
     COMPARISON_CACHE_MAX_ENTRIES: ClassVar[int] = 256
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        runner: GitRunner | None = None,
+        runner_timeout: float | None = None,
+    ) -> None:
+        """Bind to one repository.
+
+        Args:
+            root: The repository (or worktree) every read is about.
+            runner: Runs a git argv where the worktree actually lives, for a
+                workspace whose files are not on this host. ``None`` runs git
+                here, which is every workspace but a remote one.
+            runner_timeout: Bound for a runner read when its caller did not
+                supply one. ``None`` preserves :attr:`TIMEOUT_SECONDS`.
+        """
         self._root = root
+        self._runner = runner
+        self._runner_timeout = runner_timeout
         self._comparison_cache: OrderedDict[_Comparison, _ComparisonValue] = OrderedDict()
         self._comparison_lock = RLock()
 
@@ -162,7 +196,7 @@ class GitRepo:
             cmd = ["git", "worktree", "add", "-b", new_branch, str(worktree_path), base]
         else:
             cmd = ["git", "worktree", "add", str(worktree_path), existing_branch or ""]
-        self._run(cmd, cwd=self._root)
+        self._exec(cmd, cwd=self._root)
 
     def worktree_remove(self, worktree_path: Path, *, force: bool = False) -> None:
         """Remove a worktree directory. `force=True` discards uncommitted changes."""
@@ -170,11 +204,11 @@ class GitRepo:
         if force:
             cmd.append("--force")
         cmd.append(str(worktree_path))
-        self._run(cmd, cwd=self._root)
+        self._exec(cmd, cwd=self._root)
 
     def worktree_prune(self) -> None:
         """Drop administrative entries for worktrees that no longer exist on disk."""
-        self._run(["git", "worktree", "prune"], cwd=self._root, check=False)
+        self._exec(["git", "worktree", "prune"], cwd=self._root, check=False)
 
     def worktree_paths(self) -> list[Path]:
         """Every worktree of this repo, **main worktree first** (git's order).
@@ -185,7 +219,7 @@ class GitRepo:
         any of them. Returns ``[root]`` on failure so callers always have at
         least the bound root to scan.
         """
-        result = self._run(
+        result = self._exec(
             ["git", "worktree", "list", "--porcelain"],
             cwd=self._root,
             check=False,
@@ -203,7 +237,7 @@ class GitRepo:
         """Delete a branch. Returns False (no raise) if it was already gone."""
         flag = "-D" if force else "-d"
         _assert_not_flaglike(branch=branch)
-        result = self._run(["git", "branch", flag, branch], cwd=self._root, check=False)
+        result = self._exec(["git", "branch", flag, branch], cwd=self._root, check=False)
         if result.returncode == 0:
             return True
         stderr = result.stderr.lower()
@@ -221,7 +255,7 @@ class GitRepo:
         `TrackRemoteBranch` resolved into a fresh local tracking branch.
         """
         _assert_not_flaglike(branch=branch, upstream=upstream)
-        self._run(
+        self._exec(
             ["git", "branch", "--set-upstream-to", upstream, branch],
             cwd=self._root,
         )
@@ -262,9 +296,9 @@ class GitRepo:
         method did not catch because ``check=False`` swallows the failure into
         a fail-closed ``False``; verified against real git, not assumed.
         """
-        if not worktree_path.is_dir():
+        if self._runner is None and not worktree_path.is_dir():
             return False
-        result = self._run(
+        result = self._exec(
             ["git", "--no-optional-locks", "status", "--porcelain"],
             cwd=worktree_path,
             check=False,
@@ -278,9 +312,9 @@ class GitRepo:
         Runs with ``--no-optional-locks`` for the same reason as `is_clean`,
         and BEFORE the subcommand for the same reason — see that docstring.
         """
-        if not worktree_path.exists():
+        if self._runner is None and not worktree_path.exists():
             return 0
-        result = self._run(
+        result = self._exec(
             ["git", "--no-optional-locks", "status", "--porcelain"],
             cwd=worktree_path,
             check=False,
@@ -320,7 +354,7 @@ class GitRepo:
         cmd = ["git", "diff", "--no-color", "--no-ext-diff", base]
         if path is not None:
             cmd += ["--", path]
-        result = self._run(cmd, cwd=worktree_path, check=False)
+        result = self._exec(cmd, cwd=worktree_path, check=False)
         return result.stdout if result.returncode == 0 else ""
 
     def untracked_files(self, worktree_path: Path) -> tuple[str, ...]:
@@ -332,7 +366,7 @@ class GitRepo:
         reviewer most wants to see. `--exclude-standard` applies the same ignore
         rules `git status` does, so build output never reaches the patch.
         """
-        result = self._run(
+        result = self._exec(
             ["git", "ls-files", "--others", "--exclude-standard", "-z"],
             cwd=worktree_path,
             check=False,
@@ -351,7 +385,7 @@ class GitRepo:
         caller walks ``.grove/attachments`` itself for that reason). Best
         effort — a failure is ``()``.
         """
-        result = self._run(
+        result = self._exec(
             [
                 "git",
                 "ls-files",
@@ -384,7 +418,7 @@ class GitRepo:
         and only a higher code is a failure.
         """
         cmd = ["git", "diff", "--no-color", "--no-ext-diff", "--no-index", "--"]
-        result = self._run([*cmd, "/dev/null", rel_path], cwd=worktree_path, check=False)
+        result = self._exec([*cmd, "/dev/null", rel_path], cwd=worktree_path, check=False)
         return result.stdout if result.returncode in (0, 1) else ""
 
     # ─── branch read helpers (peek + create dropdowns + validation) ────────
@@ -401,7 +435,7 @@ class GitRepo:
 
         def _read(oids: tuple[str, ...]) -> tuple[int, int] | None:
             base_oid, branch_oid = oids
-            result = self._run(
+            result = self._exec(
                 ["git", "rev-list", "--left-right", "--count", f"{base_oid}...{branch_oid}"],
                 cwd=self._root,
                 check=False,
@@ -424,7 +458,7 @@ class GitRepo:
 
         def _read(oids: tuple[str, ...]) -> tuple[int, int] | None:
             base_oid, branch_oid = oids
-            result = self._run(
+            result = self._exec(
                 ["git", "diff", "--shortstat", f"{base_oid}...{branch_oid}"],
                 cwd=self._root,
                 check=False,
@@ -553,7 +587,7 @@ class GitRepo:
         and the engine uses it to raise `BranchAlreadyCheckedOut`.
         """
         locations = self._worktree_branches()
-        result = self._run(
+        result = self._exec(
             [
                 "git",
                 "for-each-ref",
@@ -589,7 +623,7 @@ class GitRepo:
         point at another remote branch already in the list and would be
         misleading in a dropdown.
         """
-        result = self._run(
+        result = self._exec(
             ["git", "for-each-ref", "refs/remotes/", "--format=%(refname:short)"],
             cwd=self._root,
             check=False,
@@ -606,7 +640,7 @@ class GitRepo:
 
     def current_branch(self) -> str | None:
         """The local branch HEAD points to, or `None` if HEAD is detached."""
-        result = self._run(
+        result = self._exec(
             ["git", "symbolic-ref", "--short", "HEAD"],
             cwd=self._root,
             check=False,
@@ -623,7 +657,7 @@ class GitRepo:
         config → literal ``main``. Used by the create-modal as the
         prepopulated default for `base_ref` selectors.
         """
-        result = self._run(
+        result = self._exec(
             ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
             cwd=self._root,
             check=False,
@@ -632,7 +666,7 @@ class GitRepo:
             ref = result.stdout.strip()
             if ref.startswith("origin/"):
                 return ref[len("origin/") :]
-        result = self._run(
+        result = self._exec(
             ["git", "config", "--get", "init.defaultBranch"],
             cwd=self._root,
             check=False,
@@ -671,7 +705,7 @@ class GitRepo:
         branch, tag, or sha) actually exists before issuing a `git
         worktree add` that would fail on it.
         """
-        result = self._run(
+        result = self._exec(
             ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
             cwd=self._root,
             check=False,
@@ -683,7 +717,7 @@ class GitRepo:
 
     def git_dir(self) -> Path | None:
         """Per-worktree metadata containing HEAD/index, distinct from shared refs."""
-        result = self._run(["git", "rev-parse", "--git-dir"], cwd=self._root, check=False)
+        result = self._exec(["git", "rev-parse", "--git-dir"], cwd=self._root, check=False)
         raw = result.stdout.strip()
         return (self._root / raw).resolve() if result.returncode == 0 and raw else None
 
@@ -697,7 +731,7 @@ class GitRepo:
         above all — must carry this directory across too, or every git command
         inside it fails to resolve the repository.
         """
-        result = self._run(["git", "rev-parse", "--git-common-dir"], cwd=self._root, check=False)
+        result = self._exec(["git", "rev-parse", "--git-common-dir"], cwd=self._root, check=False)
         if result.returncode != 0:
             return None
         raw = result.stdout.strip()
@@ -706,6 +740,14 @@ class GitRepo:
         # git answers relatively (`.git`) for the main checkout, absolutely for
         # a linked worktree — resolve against the root so callers get one shape.
         return (self._root / raw).resolve()
+
+    def origin_url(self) -> str | None:
+        """The ``origin`` remote's URL, or the first remote's, or ``None``."""
+        result = self._exec(["git", "remote", "get-url", "origin"], cwd=self._root, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        urls = self.remote_urls()
+        return urls[0] if urls else None
 
     def remote_urls(self) -> tuple[str, ...]:
         """Every configured remote URL, deduped in `git remote -v` order.
@@ -717,7 +759,7 @@ class GitRepo:
         never parsed here: host extraction is pure policy and lives in
         ``core.container_policy``. Best-effort — an unreadable repo yields ``()``.
         """
-        result = self._run(["git", "remote", "-v"], cwd=self._root, check=False)
+        result = self._exec(["git", "remote", "-v"], cwd=self._root, check=False)
         if result.returncode != 0:
             return ()
         seen: dict[str, None] = {}
@@ -827,7 +869,7 @@ class GitRepo:
 
     def _resolve_commits(self, refs: tuple[str, ...]) -> tuple[str, ...] | None:
         """Resolve every ref in one process, or return None without caching a failure."""
-        result = self._run(
+        result = self._exec(
             ["git", "rev-parse", "--quiet", "--revs-only", "--no-flags", *refs],
             cwd=self._root,
             check=False,
@@ -884,7 +926,7 @@ class GitRepo:
     ) -> tuple[CommitSummary, ...] | None:
         """Parse a commit log, preserving command failure for cache admission."""
         fmt = "%h%x09%s%x09%cI"  # short-sha \t subject \t committer-iso-date
-        result = self._run([*cmd, f"--pretty=format:{fmt}", "--"], cwd=self._root, check=False)
+        result = self._exec([*cmd, f"--pretty=format:{fmt}", "--"], cwd=self._root, check=False)
         if result.returncode != 0:
             return None
         return self._commit_summaries(result.stdout, scope=scope)
@@ -919,7 +961,7 @@ class GitRepo:
         produce no entry in the map; only entries with an explicit
         `branch refs/heads/<name>` line are tracked.
         """
-        result = self._run(
+        result = self._exec(
             ["git", "worktree", "list", "--porcelain"],
             cwd=self._root,
             check=False,
@@ -938,6 +980,64 @@ class GitRepo:
                 current_path = None
         return locations
 
+    # ─── repository birth (project onboarding) ─────────────────────────────
+
+    #: A clone is the one git call whose duration scales with somebody else's
+    #: repository, so it gets its own bound rather than `TIMEOUT_SECONDS`.
+    CLONE_TIMEOUT_SECONDS: ClassVar[float] = 1800.0
+
+    @classmethod
+    def init_with_empty_commit(cls, path: Path) -> None:
+        """`git init` *path* and give it one empty commit.
+
+        The commit is what makes the repo usable at once: `worktree add` needs a
+        HEAD to branch from, and a fresh `git init` has none. The author is the
+        user's own git identity — Grove supplies no fallback name.
+        """
+        cls._run(["git", "init", "-q", "--", str(path)])
+        cls._run(
+            ["git", "commit", "-q", "--allow-empty", "--no-verify", "-m", "Initial commit"],
+            cwd=path,
+        )
+
+    @classmethod
+    def clone(cls, url: str, dest: Path) -> None:
+        """`git clone -- <url> <dest>`, never prompting.
+
+        `GIT_TERMINAL_PROMPT=0` turns a credential prompt into a failure: the
+        daemon has no terminal, so a prompt would otherwise hold a pool thread
+        until the timeout. `--` keeps a URL from ever being read as an option.
+        """
+        cls._run(
+            ["git", "clone", "-q", "--", url, str(dest)],
+            timeout=cls.CLONE_TIMEOUT_SECONDS,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+
+    def _exec(
+        self, cmd: list[str], *, check: bool = True, **local: Any
+    ) -> subprocess.CompletedProcess[str]:
+        """Run one instance read here, or through the bound runner where the worktree lives.
+
+        ``local`` (``cwd``, ``timeout``, ``env``) is forwarded to :meth:`_run`
+        exactly as the call site gave it. A runner answers for its own worktree,
+        so this host's paths and settings do not travel; the result keeps the
+        shape and the ``check`` contract :meth:`_run` gives, so no caller can
+        tell the two apart.
+
+        Raises:
+            GitError: ``check`` is set and the command failed, or the runner
+                could not reach the worktree at all.
+        """
+        if self._runner is None:
+            return self._run(cmd, check=check, **local)
+        timeout = local.get("timeout") or self._runner_timeout or self.TIMEOUT_SECONDS
+        answered = self._runner(cmd, timeout)
+        result = subprocess.CompletedProcess(cmd, answered.returncode, answered.output, "")
+        if check and result.returncode != 0:
+            raise GitError(f"`{' '.join(cmd)}` failed remotely: {answered.output.strip()}")
+        return result
+
     @classmethod
     def _run(
         cls,
@@ -945,6 +1045,8 @@ class GitRepo:
         *,
         cwd: Path | None = None,
         check: bool = True,
+        timeout: float | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run a git subprocess; raise `GitError` on non-zero exit when `check=True`.
 
@@ -963,6 +1065,7 @@ class GitRepo:
         convention; nothing branches on it, it just must not be 0.
         """
         logger.debug("git: {} (cwd={})", " ".join(cmd), cwd)
+        bound = timeout if timeout is not None else cls.TIMEOUT_SECONDS
         try:
             result = subprocess.run(
                 cmd,
@@ -971,11 +1074,12 @@ class GitRepo:
                 text=True,
                 check=False,
                 shell=False,
-                timeout=cls.TIMEOUT_SECONDS,
+                timeout=bound,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             message = (
-                f"`{' '.join(cmd)}` timed out after {cls.TIMEOUT_SECONDS:g}s "
+                f"`{' '.join(cmd)}` timed out after {bound:g}s "
                 "and was killed (cwd=" + str(cwd) + ")"
             )
             logger.warning("git: {}", message)

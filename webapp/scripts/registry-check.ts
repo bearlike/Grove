@@ -92,16 +92,30 @@ interface RegistryIndex {
   items: RegistryItem[];
 }
 
-type Source = "assistant-ui" | "shadcn";
+type Source = "assistant-ui" | "shadcn" | "url";
+
+/**
+ * Third-party registry items, keyed by the path they land at. A `url` source's
+ * item IS its URL, because such a registry has no index to resolve a name
+ * against. Listed by hand on purpose: there is no namespace that could derive
+ * it, and a file in `components/ui/` that is not shadcn's would otherwise be
+ * checked against shadcn's registry and read as absent upstream.
+ */
+const THIRD_PARTY: Readonly<Record<string, string>> = {
+  "components/ui/kanban.tsx": "https://shadcn-kanban-board.com/r/kanban.json",
+};
 
 /**
  * The shadcn CLI rewrites the registry's own `@/registry/<style>/…` imports to
  * the project aliases as it writes each file, so raw registry content never
  * matches disk for any component that imports a sibling. Replaying the rewrite
- * is what makes the diff meaningful instead of uniformly red.
+ * is what makes the diff meaningful instead of uniformly red. A third-party
+ * item written against a `~/` alias gets the same rewrite to `@/`.
  */
 function normalizeImports(content: string): string {
-  return content.replace(/@\/(registry\/[^/]+\/[^"'`\s]+)/g, (_, p: string) => `@/${installPath(p)}`);
+  return content
+    .replace(/@\/(registry\/[^/]+\/[^"'`\s]+)/g, (_, p: string) => `@/${installPath(p)}`)
+    .replace(/from '~\//g, "from '@/");
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -227,6 +241,11 @@ async function checkUpstream(root: string, write: boolean): Promise<void> {
   const want = (name: string, source: Source): void => void wanted.set(`${source}:${name}`, { name, source });
   const unverifiable: string[] = [];
   for (const path of onDisk) {
+    const thirdParty = THIRD_PARTY[path];
+    if (thirdParty) {
+      want(thirdParty, "url");
+      continue;
+    }
     // `components/ui/` is shadcn's namespace by definition. assistant-ui
     // templates also vendor copies of those primitives, but the CLI that
     // installed them here was shadcn's, so shadcn is the oracle.
@@ -240,7 +259,7 @@ async function checkUpstream(root: string, write: boolean): Promise<void> {
   }
 
   const fetched = await mapLimit([...wanted.values()], 8, async ({ name, source }) => {
-    const url = source === "assistant-ui" ? AUI_ITEM(name) : SHADCN_ITEM(name);
+    const url = source === "assistant-ui" ? AUI_ITEM(name) : source === "shadcn" ? SHADCN_ITEM(name) : name;
     try {
       return { name, source, item: await fetchJson<RegistryItem>(url) };
     } catch {

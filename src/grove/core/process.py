@@ -149,21 +149,65 @@ class ProcessTree:
         except (OSError, IndexError, ValueError) as exc:
             raise ProcessError(f"cannot verify process identity at {path}") from exc
 
+    @staticmethod
+    def _ps_rows(pid: int | None = None) -> dict[int, tuple[int, str]]:
+        """``pid -> (ppid, start)`` from ``ps``, for a host with no ``/proc``.
+
+        macOS has no procfs, so the identity is ``lstart`` (one-second
+        resolution) instead of ``stat``'s start jiffies -- still enough to tell
+        a recycled pid from the captured incarnation. ``LC_ALL=C`` pins its
+        format. ``ps -p`` exits non-zero with nothing on stdout when the pid is
+        gone, which is an exited process, not an error.
+        """
+        argv = ["ps", "-o", "pid=", "-o", "ppid=", "-o", "stat=", "-o", "lstart="]
+        argv += ["-A"] if pid is None else ["-p", str(pid)]
+        try:
+            result = subprocess.run(
+                argv,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ProcessError("cannot inspect native runtime processes") from exc
+        if result.returncode != 0 and (pid is None or result.stdout.strip()):
+            raise ProcessError("cannot inspect native runtime processes")
+        rows: dict[int, tuple[int, str]] = {}
+        for line in result.stdout.splitlines():
+            fields = line.split(None, 3)
+            if len(fields) < 4 or fields[2].startswith("Z"):
+                continue
+            try:
+                rows[int(fields[0])] = int(fields[1]), " ".join(fields[3].split())
+            except ValueError as exc:
+                raise ProcessError(f"cannot verify process identity: {line!r}") from exc
+        return rows
+
+    def _current(self, pid: int) -> tuple[int, str] | None:
+        if self.proc_root.is_dir():
+            return self._identity(self.proc_root / str(pid))
+        return self._ps_rows(pid).get(pid)
+
     @classmethod
     def capture(
         cls, roots: Sequence[int], *, proc_root: Path = Path("/proc"), include_roots: bool = True
     ) -> ProcessTree:
-        if sys.platform != "linux":
-            raise ProcessError("verified native runtime recovery requires Linux /proc")
-        try:
-            entries = tuple(proc_root.iterdir())
-        except OSError as exc:
-            raise ProcessError("cannot inspect native runtime processes") from exc
-        rows = {
-            int(entry.name): identity
-            for entry in entries
-            if entry.name.isdigit() and (identity := cls._identity(entry)) is not None
-        }
+        # A host without procfs (macOS) answers the same question through `ps`;
+        # `proc_root` doubles as the seam that selects it in tests.
+        if proc_root.is_dir():
+            try:
+                entries = tuple(proc_root.iterdir())
+            except OSError as exc:
+                raise ProcessError("cannot inspect native runtime processes") from exc
+            rows = {
+                int(entry.name): identity
+                for entry in entries
+                if entry.name.isdigit() and (identity := cls._identity(entry)) is not None
+            }
+        else:
+            rows = cls._ps_rows()
         selected = set(roots) & rows.keys()
         ordered = sorted(selected) if include_roots else []
         while descendants := (
@@ -194,7 +238,7 @@ class ProcessTree:
         # Children exit before their ancestors, so a refusal leaves the pane's
         # ancestry available to inspect again rather than orphaning a provider.
         for pid, start in self.identities:
-            identity = self._identity(self.proc_root / str(pid))
+            identity = self._current(pid)
             if identity is None or identity[1] != start:
                 continue
             try:
@@ -204,7 +248,7 @@ class ProcessTree:
             except OSError as exc:
                 raise ProcessError(f"cannot stop native runtime process {pid}") from exc
             while True:
-                identity = self._identity(self.proc_root / str(pid))
+                identity = self._current(pid)
                 if identity is None or identity[1] != start:
                     break
                 if time.monotonic() >= deadline:

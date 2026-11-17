@@ -12,6 +12,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import type { DashboardSnapshotView } from "@/lib/grove/api";
 import { groveKeys } from "@/lib/grove/hooks/keys";
+import { useActivityStream } from "@/lib/grove/hooks";
 import { useSidebarUi } from "@/components/grove/shell/sidebar-state";
 import { installDemoInterceptor } from "./demo-interceptor";
 import { DEMO_WORKSPACE_ID, withDemoWorkspace, withoutDemoWorkspace } from "./demo-workspace";
@@ -111,6 +112,7 @@ function TourBridge(): null {
   const pathname = usePathname();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { reconnect } = useActivityStream();
 
   // THE TOUR WALKS ONE FICTIONAL WORKSPACE, NEVER A REAL ONE. Picking "the most
   // recent workspace" showed every reader a different page — an empty Info
@@ -155,13 +157,20 @@ function TourBridge(): null {
       queryClient.setQueryData<DashboardSnapshotView>(groveKeys.activity, (current) =>
         current ? withDemoWorkspace(current) : current,
       );
+      // THE LIVE STREAM IS RE-SUBSCRIBED THROUGH THE INTERCEPTOR. The splice
+      // only wraps an `EventSource` constructed after install; the one the
+      // shell opened on load is not, and its connect snapshot can still be in
+      // flight when the tour opens (measured: the frame landed ~500 ms after
+      // the tour did). That frame is adopted whole, without the demo, and the
+      // write above is overwritten before the workspace page reads it.
+      reconnect();
       setCollapsed(false);
       setCurrentStep(0);
       markSeen();
       setIsOpen(true);
     }
     if (!open && isOpen) setIsOpen(false);
-  }, [open, isOpen, queryClient, setCollapsed, setCurrentStep, setIsOpen]);
+  }, [open, isOpen, queryClient, reconnect, setCollapsed, setCurrentStep, setIsOpen]);
 
   // reactour → store, so Escape and the close control clear the store too.
   // Only a close reactour PERFORMED is mirrored: on the render that opens the

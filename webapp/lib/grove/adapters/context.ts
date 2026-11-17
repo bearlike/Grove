@@ -89,14 +89,26 @@ function isReportedCount(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function formatCount(value: number): string {
+const COMPACT_TENTHS = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+
+function formatCount(value: number, compact: Intl.NumberFormat = COMPACT): string {
   const unitIndex = UNITS.findIndex(({ divisor }) => value >= divisor);
   if (unitIndex === -1) return EXACT.format(value);
 
   const unit = UNITS[unitIndex]!;
-  const compact = COMPACT.format(value / unit.divisor);
+  const scaled = compact.format(value / unit.divisor);
   const nextUnit = UNITS[unitIndex - 1];
-  return compact === "1,000" && nextUnit
-    ? `${COMPACT.format(value / nextUnit.divisor)}${nextUnit.suffix}`
-    : `${compact}${unit.suffix}`;
+  return scaled === "1,000" && nextUnit
+    ? `${compact.format(value / nextUnit.divisor)}${nextUnit.suffix}`
+    : `${scaled}${unit.suffix}`;
+}
+
+/**
+ * A token count for a line that changes every second: one decimal (`10.1K`).
+ *
+ * The same unit ladder as the context window, at a coarser step, because a
+ * reader glancing at a moving figure wants its magnitude, not its hundredths.
+ */
+export function formatTokenCount(value: number): string {
+  return formatCount(value, COMPACT_TENTHS);
 }

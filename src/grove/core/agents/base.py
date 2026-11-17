@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import ClassVar, Protocol
@@ -43,6 +44,26 @@ from grove.core.agents.model import (
     SessionTurn,
     TodoList,
 )
+
+
+def containing_root(path: Path, roots: Sequence[Path]) -> Path | None:
+    """The first of ``roots`` that is an ancestor of ``path``, else ``None``.
+
+    The one rule behind every filesystem adapter's ``transcript_root``: compare
+    resolved paths, because a config root is routinely reached through a
+    symlinked home while the locate answered the real path.
+    """
+    try:
+        real = path.resolve()
+    except OSError:
+        return None
+    for root in roots:
+        try:
+            real.relative_to(root.resolve())
+        except (OSError, ValueError):
+            continue
+        return root
+    return None
 
 
 class AgentVersionProbe:
@@ -236,6 +257,33 @@ class AgentAdapter(Protocol):
     smaller measurable population than its call count, so dividing by the calls
     deflates every rate by that scope's share of silent calls — and reports the
     deflated number with full confidence.
+
+    ``native_controls`` names the session controls a Grove-owned native
+    session can actually perform over its protocol: ``compact`` (provider-native
+    compaction) and ``command`` (a named slash command). The engine refuses any
+    other before dispatch, because a native control is fire-and-forget across
+    the daemon and a refusal inside the worker would otherwise reach the caller
+    as "delivered". Empty for every kind whose owner has neither.
+
+    ``efforts`` lists the reasoning-effort levels the tool accepts at launch, in
+    the tool's own spelling and ascending order. A native session reuses the
+    same list for a live change over its control channel. Empty means the tool
+    has no effort setting Grove can drive, so a picker should not offer one. It is a
+    declaration for the same reason ``reports_queue`` is: the vocabulary belongs
+    to the tool, and the adapter is the layer closest to it.
+
+    ``transcript_root`` names the config root every :meth:`locate_transcripts`
+    answer sits under, for a tool whose transcript is APPEND-ONLY files. That is
+    the one property byte-offset replication (a remote worker mirroring its
+    transcript to the host) depends on: a file that is only ever appended to can
+    be followed by offset and laid out on the host at the same relative path,
+    and the host's own reader then resolves it unchanged. ``None`` means the
+    files are not replicable that way, and the declaration is what keeps that
+    knowledge with the tool: OpenCode keeps one SQLite database with random
+    writes, a bare shell and a backend-hosted tool keep no transcript here.
+    ``transcript_home`` is the root a NEW transcript is written under, which is
+    where a remote worker seeds the host's copy before it resumes a session; it
+    is ``None`` exactly where ``transcript_root`` is.
     """
 
     kind: str
@@ -243,6 +291,8 @@ class AgentAdapter(Protocol):
     resumable: bool
     reports_queue: bool
     reports_tool_errors: bool
+    efforts: tuple[str, ...]
+    native_controls: frozenset[str]
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """Extra argv tokens appended to the agent command so Grove owns the
@@ -261,6 +311,23 @@ class AgentAdapter(Protocol):
         """
         ...
 
+    def fork_decoration(self, source_session_id: str) -> list[str]:
+        """Extra argv tokens that start this launch from a COPY of another session.
+
+        The source session is left untouched and the launch gets a new id.
+        Claude Code returns ``["--resume", id, "--fork-session"]``, which
+        rides beside ``--session-id <new>``. Codex returns ``["fork", id]``, the
+        subcommand that also tells the native owner to call ``thread/fork``.
+
+        Args:
+            source_session_id: The session whose conversation is copied.
+
+        Returns:
+            The tokens, or ``[]`` when this tool cannot fork. An empty answer is
+            what the engine refuses a fork on.
+        """
+        ...
+
     def model_decoration(self, model: str) -> list[str]:
         """Extra argv tokens that pin the model for this launch (Claude Code /
         Codex → ``["--model", model]``). Empty for tools with no launch-time
@@ -268,6 +335,23 @@ class AgentAdapter(Protocol):
         so they fall back to the tool's own default. The provider-boundary rule:
         Grove forwards the parameter as the tool's flag — it never interprets the
         value.
+        """
+        ...
+
+    def effort_decoration(self, effort: str) -> list[str]:
+        """Return the argv tokens that set the reasoning effort for this launch.
+
+        Claude Code returns ``["--effort", effort]`` and Codex returns its
+        ``-c model_reasoning_effort=<effort>`` override. A tool whose ``efforts``
+        is empty returns ``[]``. Grove forwards the level as the tool's own
+        flag and never translates it; the manager checks it against
+        ``efforts`` before calling this.
+
+        Args:
+            effort: One of this adapter's ``efforts``.
+
+        Returns:
+            The tokens to append to the launch command, or an empty list.
         """
         ...
 
@@ -345,6 +429,30 @@ class AgentAdapter(Protocol):
         ``(cwd, session_id)``-keyed readers below instead. Read-only. Returns
         ``[]`` — never raises — when nothing is on disk yet (the STARTING
         window) or the tool keeps no transcripts.
+        """
+        ...
+
+    def transcript_root(self, path: Path) -> Path | None:
+        """The config root a :meth:`locate_transcripts` answer ``path`` sits under,
+        or ``None`` when this tool's transcript cannot be replicated by append.
+
+        Resolved the way the locate reads it (the scoped override, then the
+        tool's own env var, then its default), so ``path.relative_to(root)`` is
+        the path the host lays the copy out under. ``None`` also for a file
+        outside every root this adapter knows, which it would not know how to
+        place. See the class docstring for why ``None`` is a declaration rather
+        than a degradation.
+        """
+        ...
+
+    def transcript_home(self) -> Path | None:
+        """The config root this tool writes a session's transcript under, in this process.
+
+        The root :meth:`transcript_root` would answer for a file the tool is
+        about to create, so a file laid out at ``home / relative`` is one the
+        tool and :meth:`locate_transcripts` both find. ``None`` for a tool
+        whose transcript is not replicable (the same set as
+        :meth:`transcript_root`).
         """
         ...
 

@@ -109,7 +109,11 @@ export function QueuePanel({
                   own instruction, and clipping it would lose the part it was
                   sent for. */}
               <span className="min-w-0 flex-1 break-words text-sm text-content-secondary">
-                {message.text}
+                {/* Blank when the harness queued it without text and Grove
+                    did not send it (or restarted since). */}
+                {message.text || (
+                  <span className="italic text-content-tertiary">Text not recorded yet</span>
+                )}
               </span>
               <RelativeTime
                 iso={message.sent_at}

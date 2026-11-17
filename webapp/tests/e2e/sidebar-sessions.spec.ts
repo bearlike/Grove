@@ -169,7 +169,7 @@ async function geometry(page: Page, id: string): Promise<RowGeometry> {
     const header = row.querySelector<HTMLElement>("header");
     const metadata = row.querySelector<HTMLElement>('[data-testid="rail-metadata"]');
     const context = row.querySelector<HTMLElement>('[data-testid="rail-context"]');
-    const created = row.querySelector<HTMLElement>('[data-testid="rail-created"]');
+    const created = row.querySelector<HTMLElement>('[data-testid="rail-times"]');
 
     return {
       row: { x: 0, y: 0, width: rowBox.width, height: rowBox.height },
@@ -191,7 +191,7 @@ async function geometry(page: Page, id: string): Promise<RowGeometry> {
       options: at(row.querySelector('button[aria-label="Workspace options"]')),
       contextIcons: [
         ...row.querySelectorAll<SVGSVGElement>(
-          '[data-testid="rail-branch"] svg, [data-testid="fleet-row-attention-mark"] > svg, [data-testid="fleet-row-phase-mark"] > span > svg:first-child',
+          '[data-testid="fleet-row-attention-mark"] > svg, [data-testid="fleet-row-phase-mark"] > span > svg:first-child',
         ),
       ].map((icon) => icon.getBoundingClientRect().width),
     };
@@ -204,9 +204,9 @@ async function geometry(page: Page, id: string): Promise<RowGeometry> {
  */
 async function measurements(page: Page): Promise<readonly MetricMeasurement[]> {
   return page.evaluate(() => {
-    const ids = ["rail-dirty", "rail-added", "rail-removed", "rail-created"];
+    const ids = ["rail-times"];
     return [...document.querySelectorAll('[data-testid="fleet-row"]')].flatMap((row) => {
-      const created = row.querySelector<HTMLElement>('[data-testid="rail-created"]');
+      const created = row.querySelector<HTMLElement>('[data-testid="rail-times"]');
       const ledgerLine = created?.parentElement?.getBoundingClientRect();
       if (!ledgerLine) throw new Error("no ledger line");
       return ids.flatMap((id) => {
@@ -262,76 +262,50 @@ test.describe("the native sidebar row keeps identity, context and figures distin
     expect(first.title).not.toBeNull();
     expect(first.metadata).not.toBeNull();
     expect(first.context).not.toBeNull();
-    expect(first.branch).not.toBeNull();
+    // Two lines only: the branch and the change ledger left the row.
+    expect(first.branch).toBeNull();
     expect(first.attention).toBeNull();
     expect(first.phase).not.toBeNull();
-    expect(first.ledger).not.toBeNull();
-    expect(first.ledgerLine).not.toBeNull();
+    expect(first.ledger).toBeNull();
+    expect(first.dirty).toBeNull();
+    expect(first.added).toBeNull();
+    expect(first.removed).toBeNull();
     expect(first.created).not.toBeNull();
     expect(first.options).not.toBeNull();
 
-    // The row remains compact at normal desktop density without pretending that
-    // text zoom and coarse pointers have the same physical budget.
-    expect(first.row.height).toBeGreaterThan(60);
-    expect(first.row.height).toBeLessThanOrEqual(100);
+    // Tile height plus padding is the floor; a third line would push past it.
+    expect(first.row.height).toBeGreaterThan(50);
+    expect(first.row.height).toBeLessThanOrEqual(72);
 
-    // The agent's tile is a leading column: the title, context and ledger all
+    // The agent's tile is a leading column: the title and the claims line both
     // start on one edge to its right, and the mark is centred in the tile.
     expect(first.tile).not.toBeNull();
     expect(first.title!.x).toBeGreaterThanOrEqual(first.tile!.x + first.tile!.width);
+    expect(first.metadata!.x).toBeCloseTo(first.header!.x, 0);
     expect(first.context!.x).toBeCloseTo(first.header!.x, 0);
-    expect(first.ledgerLine!.x).toBeCloseTo(first.header!.x, 0);
     expect(first.tile!.y).toBeLessThanOrEqual(first.header!.y + 1);
     expect(
       Math.abs(first.agent!.x + first.agent!.width / 2 - (first.tile!.x + first.tile!.width / 2)),
     ).toBeLessThanOrEqual(1);
     expect(first.metadata!.y).toBeGreaterThanOrEqual(first.header!.y + first.header!.height);
-    expect(first.context!.y).toBeGreaterThan(first.title!.y);
-    expect(first.branch!.x).toBeCloseTo(first.context!.x, 0);
-    expect(first.ledger!.y).toBeGreaterThan(first.context!.y);
 
-    // The ledger is a separate row: age owns its far edge while the figures
-    // retain their intrinsic widths to its left.
+    // The claims and the times share ONE line, the times flush right.
+    expect(first.created!.y).toBeLessThan(first.context!.y + first.context!.height);
     expect(first.created!.x + first.created!.width).toBeCloseTo(
-      first.ledgerLine!.x + first.ledgerLine!.width,
+      first.metadata!.x + first.metadata!.width,
       0,
     );
-    expect(first.dirty).not.toBeNull();
-    expect(first.added).not.toBeNull();
-    expect(first.removed).not.toBeNull();
 
-    // The agent is `size-5` in a `size-10` tile; the branch glyph is `size-3.5`
-    // beside body text, and a pill's glyph is the badge's own `size-3`.
+    // The agent is `size-5` in a `size-10` tile; a pill's glyph is the badge's own `size-3`.
     expect(first.agent!.width).toBeCloseTo(dp(20), 0);
     expect(first.agent!.height).toBeCloseTo(dp(20), 0);
     expect(first.tile!.width).toBeCloseTo(dp(40), 0);
-    expect(first.contextIcons).toHaveLength(2);
-    expect(first.contextIcons[0]).toBeCloseTo(dp(14), 0);
-    expect(first.contextIcons[1]).toBeCloseTo(dp(12), 0);
+    expect(first.contextIcons).toHaveLength(1);
+    expect(first.contextIcons[0]).toBeCloseTo(dp(12), 0);
 
-    // A measured-zero workspace keeps its three zeros, so every card in the
-    // column has one anatomy (#876) — a zero is a measurement, not an absence.
     const clean = await geometry(page, ROWS[1].id);
-    expect(clean.dirty).not.toBeNull();
-    expect(clean.added).not.toBeNull();
-    expect(clean.removed).not.toBeNull();
     expect(clean.created).not.toBeNull();
-    expect(clean.ledgerLine!.y).toBeCloseTo(first.ledgerLine!.y, 0);
-
-    // The divider spans the text column only — it starts at the title's left
-    // edge, right of the tile — and sits between context and ledger.
-    const divider = await page.evaluate((workspaceId) => {
-      const row = document.querySelector<HTMLElement>(`[data-workspace-id="${workspaceId}"]`)!;
-      const box = row.getBoundingClientRect();
-      const rule = row.querySelector<HTMLElement>('[data-testid="rail-divider"]')!.getBoundingClientRect();
-      const bars = [...row.querySelectorAll<HTMLElement>('[data-testid="rail-ledger"] [data-orientation="vertical"]')];
-      return { x: rule.x - box.x, y: rule.y - box.y, height: rule.height, bars: bars.length };
-    }, ROWS[0].id);
-    expect(divider.x).toBeCloseTo(first.header!.x, 0);
-    expect(divider.height).toBe(1);
-    expect(divider.y).toBeGreaterThan(first.context!.y + first.context!.height - 1);
-    expect(divider.y).toBeLessThan(first.ledgerLine!.y + 1);
-    expect(divider.bars).toBe(2);
+    expect(clean.row.height).toBeCloseTo(first.row.height, 0);
   });
 
   test("keeps the title's left edge fixed when context marks are absent", async ({ page }) => {
@@ -354,7 +328,7 @@ test.describe("the native sidebar row keeps identity, context and figures distin
     expect(unmarked.title!.x).toBeCloseTo(marked.title!.x, 0);
   });
 
-  test("never clips or animates a figure, whatever the value", async ({ page }) => {
+  test("never clips or animates the times", async ({ page }) => {
     await useFleet(page, ROWS);
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
@@ -362,46 +336,10 @@ test.describe("the native sidebar row keeps identity, context and figures distin
     await page.waitForTimeout(600);
 
     const cells = await measurements(page);
-    // Three figures plus the age on every workspace, clean ones included:
-    // assert the census so an empty selector cannot report a false clean pass.
-    expect(cells).toHaveLength(12);
+    // One times cell on every workspace: assert the census so an empty
+    // selector cannot report a false clean pass.
+    expect(cells).toHaveLength(ROWS.length);
     for (const cell of cells) {
-      expect(cell.clipped, `${cell.id} "${cell.text}" is clipped`).toBe(false);
-      expect(cell.loops, `${cell.id} "${cell.text}" is scrolling`).toBe(false);
-    }
-    expect(cells.map((cell) => cell.text)).toContain("+987.7K");
-    expect(cells.map((cell) => cell.text)).toContain("−654.3K");
-  });
-
-  test("makes the branch yield to a wide figure ledger and loop", async ({ page }) => {
-    await useFleet(page, [
-      {
-        ...ROWS[0],
-        branch: "feat/a-branch-name-nobody-should-have-typed-but-somebody-did",
-        dirty: 123456,
-        added: 987654,
-        removed: 654321,
-      },
-    ]);
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto("/");
-    await expect(page.getByTestId("fleet-row").first()).toBeVisible();
-    await page.waitForTimeout(600);
-
-    const squeezed = await geometry(page, ROWS[0].id);
-    expect(squeezed.branch!.x).toBeCloseTo(squeezed.context!.x, 0);
-    expect(squeezed.created!.x + squeezed.created!.width).toBeCloseTo(
-      squeezed.ledgerLine!.x + squeezed.ledgerLine!.width,
-      0,
-    );
-    expect(squeezed.branch!.width).toBeGreaterThan(dp(16));
-    await expect(
-      page.locator(`[data-workspace-id="${ROWS[0].id}"] [data-testid="rail-branch"] [data-looping="true"]`),
-    ).toBeAttached();
-
-    // This is deliberately the over-constrained row. Repeating it beside
-    // `main` would not exercise flex's choice between the branch and figures.
-    for (const cell of await measurements(page)) {
       expect(cell.clipped, `${cell.id} "${cell.text}" is clipped`).toBe(false);
       expect(cell.loops, `${cell.id} "${cell.text}" is scrolling`).toBe(false);
     }
@@ -737,14 +675,18 @@ test.describe("the row keeps its states, menu and destination", () => {
     const link = row.locator("a").first();
     await expect(row).toBeVisible();
 
+    // The overview is the dense glance of 8c038368: it carries no title (the
+    // row beside it already does), so the tooltip is identified by its body.
+    const overview = page.getByRole("tooltip").filter({ has: page.getByTestId("session-overview") });
     await link.hover();
-    await expect(page.getByRole("tooltip").filter({ hasText: ROWS[0].title })).toBeVisible();
+    await expect(overview).toBeVisible();
+    await expect(overview).toContainText("Branch");
     await expect(page.locator('[role="tooltip"]:not([data-state="closed"])')).toHaveCount(1);
     await page.keyboard.press("Escape");
 
     await focusWithKeyboard(page, link);
     await expect(link).toBeFocused();
-    await expect(page.getByRole("tooltip").filter({ hasText: ROWS[0].title })).toBeVisible();
+    await expect(overview).toBeVisible();
     await expect(page.locator('[role="tooltip"]:not([data-state="closed"])')).toHaveCount(1);
   });
 
@@ -826,6 +768,32 @@ test.describe("the row keeps its states, menu and destination", () => {
     await page.getByTestId("kill-confirm").click();
     await expect.poll(() => killed.length).toBe(1);
     expect(killed[0]).toContain(ROWS[0].id);
+  });
+
+  test("forks a conversation and opens the new workspace", async ({ page }) => {
+    await useFleet(page, ROWS);
+    const forked: string[] = [];
+    // The daemon answers with the NEW workspace; the row stands in for it here.
+    const created = snapshotFor([ROWS[1]]).projects[0]!.workspaces[0]!.state;
+    await page.route(
+      (url) => url.pathname.endsWith("/fork"),
+      async (route) => {
+        forked.push(new URL(route.request().url()).pathname);
+        await route.fulfill({ json: created });
+      },
+    );
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const row = page.locator(`[data-workspace-id="${ROWS[0].id}"]`);
+    await expect(row).toBeVisible();
+
+    await row.click({ button: "right" });
+    await page.getByTestId("fleet-row-fork").click();
+
+    await expect.poll(() => forked.length).toBe(1);
+    expect(forked[0]).toContain(ROWS[0].id);
+    await expect(page).toHaveURL(new RegExp(`/w/${ROWS[1].id}$`));
   });
 
   test("collapses the desktop rail and keeps the mobile sheet usable", async ({ page }) => {

@@ -11,35 +11,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LaunchPill, type LaunchPillOption } from "../control-pill";
-import { LAUNCH_TESTIDS, useLaunchControls } from "../launch-state";
+import { agentTools } from "@/lib/grove/adapters/launch-flow";
+import { LAUNCH_TESTIDS, useLaunchControls, useLaunchProblem } from "../launch-state";
 import { useWorkspaceDefaults } from "@/lib/grove/hooks/launch";
 import { useAgents } from "@/lib/grove/hooks/queries";
 import type { AgentSummaryView } from "@/lib/grove/api";
 
-/** The kinds whose launch has two modes; every other kind has only its terminal. */
-const NATIVE_KINDS: ReadonlySet<AgentSummaryView["kind"]> = new Set([
-  "claude_code",
-  "codex",
-  "opencode",
-]);
-
-/** Which channel Grove drives the agent over, as the row's second line. */
+/** Which channel Grove drives the agent over, as the row's session-mode control says. */
 export function sessionModeLabel(native: boolean): string {
   return native ? "Native session" : "Terminal";
 }
 
-/**
- * The row's second line says which channel the workspace will be driven over
- * BY DEFAULT for that entry — a native session Grove owns (interrupt, model
- * switch and answers ride the provider's protocol) against the interactive
- * terminal typed at. The operator's own description leads when there is one;
- * the mode is stated either way, because two entries for one provider (a
- * gateway profile and a plain one, say) otherwise read as the same thing.
- * The panel below the list is where a create overrides it.
- */
-export function agentDescription(agent: AgentSummaryView): string {
-  const mode = sessionModeLabel(agent.native);
-  return agent.description ? `${agent.description} · ${mode}` : mode;
+/** A tool's menu rows need no repeated transport suffix or long secondary copy. */
+export function agentDescription(agent: AgentSummaryView): string | undefined {
+  const words = agent.description?.trim().split(/\s+/).filter(Boolean) ?? [];
+  return words.length === 0 ? undefined : words.slice(0, 5).join(" ");
 }
 
 /**
@@ -56,21 +42,38 @@ export function agentDescription(agent: AgentSummaryView): string {
  */
 export function AgentPill(): ReactNode {
   const { values, set } = useLaunchControls();
+  const problem = useLaunchProblem("agentName");
   const agents = useAgents(values.repoRoot);
   const defaults = useWorkspaceDefaults(values.repoRoot);
+  const offered = useMemo(() => agents.data ?? [], [agents.data]);
+  // One row per TOOL, grouped from the roster the engine returned; the entry
+  // (profile) within a tool is the ProfilePill's question, and only appears
+  // when a tool has more than one. `agent_name` stays the identity sent.
+  const tools = useMemo(() => agentTools(offered), [offered]);
   const options = useMemo<readonly LaunchPillOption[]>(
     () =>
-      (agents.data ?? []).map((agent) => ({
-        id: agent.name,
-        label: agent.name,
-        description: agentDescription(agent),
-        icon: <AgentMark agentName={agent.name} />,
-      })),
-    [agents.data],
+      tools.map((tool) => {
+        const only = tool.profiles.length === 1 ? tool.profiles[0]! : null;
+        return {
+          id: tool.kind,
+          label: tool.label,
+          description: only
+            ? agentDescription(only)
+            : `${tool.profiles.length} configurations`,
+          icon: <AgentMark agentName={tool.profiles[0]!.name} />,
+        };
+      }),
+    [tools],
   );
-  const selectedAgent = values.agentName ?? defaults.data?.agent ?? agents.data?.[0]?.name ?? null;
+  // NO `?? agents.data?.[0]`: the first roster entry is the engine's answer
+  // only once it says so (#1093 resolves it); until then the seeded saved
+  // agent is the one honest value, and nothing is shown before it arrives.
+  const selectedAgent = values.agentName ?? defaults.data?.agent ?? null;
   const selectedSpec = agents.data?.find((agent) => agent.name === selectedAgent) ?? null;
-  const hasMode = selectedSpec !== null && NATIVE_KINDS.has(selectedSpec.kind);
+  const selectedTool = tools.find((tool) => tool.kind === (values.agentKind ?? selectedSpec?.kind)) ?? null;
+  // The ENTRY's own launch modes (#1093), never a client list of kinds: the
+  // panel exists only where the engine offers both.
+  const hasMode = selectedSpec !== null && selectedSpec.launch_modes.length > 1;
   // The entry's default is the resolved answer for an untouched field; a
   // touched one is the person's. `null` while the catalog has not answered.
   const nativeResolved =
@@ -90,15 +93,18 @@ export function AgentPill(): ReactNode {
     <LaunchPill
       kind="agent"
       ariaLabel="Agent"
-      value={values.agentName}
+      value={selectedTool?.kind ?? null}
       options={options}
       // A host configures a handful of agents, so there is nothing to narrow —
       // and an unsearchable list still gets a keyboard anchor named after THIS
       // control rather than the vendored default's hard-coded "Model".
-      fallbackLabel={selectedAgent ?? "Agent"}
+      fallbackLabel={selectedTool?.label ?? selectedAgent ?? "Agent"}
       disabledReason={disabledReason}
+      error={problem}
       leading={selectedAgent ? <AgentMark agentName={selectedAgent} /> : undefined}
-      onSelect={(agentName) => set({ agentName })}
+      onSelect={(kind) => {
+        if (kind !== values.agentKind) set({ agentKind: kind as NonNullable<typeof values.agentKind> });
+      }}
     >
       {hasMode && nativeResolved !== null ? (
         <div className="flex flex-col gap-2">

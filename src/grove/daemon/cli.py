@@ -17,6 +17,15 @@ from loguru import logger
 
 app = typer.Typer(help="Grove API daemon")
 
+#: How long a SIGTERM waits for open connections before cancelling them.
+#: uvicorn's default is to wait forever, and this daemon always holds
+#: connections that never finish on their own: `/events`, the pane and live
+#: streams, and every native owner's control stream. Those only end in the
+#: lifespan's shutdown, which uvicorn runs AFTER the wait, so an unbounded wait
+#: is a deadlock and every stop became systemd's SIGKILL at 90 s. Short,
+#: because nothing is lost by cutting a stream: each of those clients reconnects.
+_GRACEFUL_SHUTDOWN_SECONDS = 5
+
 
 def _arm_parent_death_signal() -> None:
     """Exit if the process that spawned us is already gone, else die when it dies.
@@ -81,7 +90,9 @@ def _arm_parent_death_signal() -> None:
 
 @app.command("serve")
 def serve(
-    host: str = typer.Option("127.0.0.1", help="Interface to bind"),
+    host: str | None = typer.Option(
+        None, help="Interface to bind (default: the `daemon.host` config value, loopback)"
+    ),
     port: int = typer.Option(7421, help="Port to listen on (0 = auto-pick)"),
     print_port: bool = typer.Option(
         False,
@@ -97,6 +108,10 @@ def serve(
     # the only thing here that needs the package at all.
     import uvicorn  # noqa: PLC0415
 
+    if host is None:
+        from grove.core.config import load_config  # noqa: PLC0415 — off the completion path
+
+        host = load_config(repo_root=None).daemon.host
     if print_port:
         _arm_parent_death_signal()
     config = uvicorn.Config(
@@ -105,6 +120,7 @@ def serve(
         port=port,
         log_config=None,
         lifespan="on",
+        timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_SECONDS,
     )
     server = uvicorn.Server(config)
 

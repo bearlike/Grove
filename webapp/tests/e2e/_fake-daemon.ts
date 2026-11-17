@@ -119,6 +119,7 @@ export function startFakeDaemon(port: number): Promise<Server> {
       res.json({ user: "tester", host: "fake-host" }),
     );
 
+    app.get("/sidebar/pins", (_req, res) => res.json([]));
     app.get("/workspaces", (_req, res) => res.json(FIXTURE_WORKSPACES));
     app.get("/workspaces/:id", (req, res) => {
       // The diagram fixture id has to resolve here too: `/w/[id]`'s
@@ -405,6 +406,16 @@ export function startFakeDaemon(port: number): Promise<Server> {
         agent_cwd: null,
       }),
     );
+    // The runtime pill lists this node's runtimes from here; without it the
+    // pill offers nothing to pick. Host and a Dev Container, both checked.
+    app.get("/launch/options", (_req, res) =>
+      res.json({
+        runtimes: [
+          { id: "host", kind: "host", driver: null, driver_label: null, node: null, workspace_target: true, status: "ready", reason: null, setup: null },
+          { id: "container", kind: "container", driver: null, driver_label: null, node: null, workspace_target: true, status: "ready", reason: null, setup: null },
+        ],
+      }),
+    );
 
     app.get("/usage/summary", (_req, res) => res.json(FIXTURE_USAGE.summary));
     app.get("/usage/activity", (_req, res) => res.json(FIXTURE_USAGE.activity));
@@ -435,9 +446,11 @@ export function startFakeDaemon(port: number): Promise<Server> {
         "cache-control": "no-cache, no-transform",
         connection: "keep-alive",
       });
-      res.write(
-        `event: snapshot\ndata: ${JSON.stringify(FIXTURE_ACTIVITY)}\n\n`,
-      );
+      // The frame is the daemon's DashboardEvent envelope, never the bare
+      // snapshot. A bare one decodes as `refetch`, which reconnects the
+      // stream, so every page looped on connect and never showed a row.
+      const frame = { kind: "snapshot", seq: 1, snapshot: FIXTURE_ACTIVITY };
+      res.write(`id: 1\nevent: snapshot\ndata: ${JSON.stringify(frame)}\n\n`);
     });
 
     // Unmodelled routes answer with the daemon's real typed envelope rather

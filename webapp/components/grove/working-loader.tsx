@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 
 import { GenerationLoader } from "@/components/elements/loading-state";
-import { operationLabel } from "@/lib/grove/adapters";
+import { liveLabel, liveStepName, operationLabel } from "@/lib/grove/adapters";
 import type { NativeOperationView } from "@/lib/grove/api";
+import { useLivePulse } from "@/lib/grove/hooks/live-pulse";
 import { cn } from "@/lib/utils";
 
 /**
@@ -135,8 +136,30 @@ function useWorkingTick(): number {
  * surface. See that rule for why a `size-*` utility here — or an `em` — would
  * be the wrong repair.
  */
-export function WorkingLoader({ operation = null }: { operation?: NativeOperationView | null }) {
-  const now = useSecondClock(operation !== null);
+export function WorkingLoader({
+  operation = null,
+  liveWorkspaceId = null,
+}: {
+  operation?: NativeOperationView | null;
+  /**
+   * A native workspace's id, to follow its live step (thinking, writing, a
+   * tool, a sub-agent). Omit for a terminal workspace: it has no owned stream,
+   * so there is nothing to watch and no connection worth opening.
+   */
+  liveWorkspaceId?: string | null;
+}) {
+  const pulse = useLivePulse(liveWorkspaceId);
+  const step = operation === null && pulse?.step ? pulse : null;
+  const now = useSecondClock(operation !== null || step !== null);
+  // A harness step outranks the live one: a compaction or a retry wait is what
+  // the session is doing even while the stream still names its last tool.
+  const label =
+    now === null
+      ? "Working"
+      : operation
+        ? operationLabel(operation, now)
+        : (step && liveLabel(step, now)) ?? "Working";
+  const name = operation ? OPERATION_NAME[operation.kind] : step ? liveStepName(step) : null;
   return (
     <GenerationLoader
       // `rounded` over the default `dots`: the transcript's own marks — tool
@@ -146,7 +169,7 @@ export function WorkingLoader({ operation = null }: { operation?: NativeOperatio
       // The native step when the harness announced one ("Compacting context ·
       // 41s", "Retrying 2/10 in 8s"), else the plain word. `now` is null until
       // mount, so the server and the first client render agree on the word.
-      label={operation && now !== null ? operationLabel(operation, now) : "Working"}
+      label={label}
       tick={useWorkingTick()}
       // Left, with the footer's siblings, rather than the component's own
       // centred default: it sits in a column with the sending echo, the plan
@@ -161,9 +184,10 @@ export function WorkingLoader({ operation = null }: { operation?: NativeOperatio
       // region is switched off and NAMED instead: a screen reader gets
       // "Compacting context" as the status, not a number per second.
       role="status"
-      aria-live={operation ? "off" : undefined}
-      aria-label={operation ? OPERATION_NAME[operation.kind] : undefined}
+      aria-live={name ? "off" : undefined}
+      aria-label={name ?? undefined}
       data-operation={operation?.kind}
+      data-step={step?.step ?? undefined}
       data-testid="working-loader"
     />
   );

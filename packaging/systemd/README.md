@@ -84,7 +84,7 @@ The webapp unit runs `grove web`, which serves the dashboard that ships in the p
 WITH_WEBAPP=1 make systemd-enable   # refuses first if `grove web --check` fails
 ```
 
-After `uv tool upgrade grove-factory`, restart the unit. From a checkout, `./reinstall.sh` rebuilds the bundle and restarts it, and migrates a unit written for the older `npm run start` layout, restoring it if the migrated one does not serve.
+After `uv tool upgrade grove-factory`, restart the unit. From a checkout, `./tools/reinstall.sh` rebuilds the bundle and restarts it, and migrates a unit written for the older `npm run start` layout, restoring it if the migrated one does not serve.
 
 ## First-time MCP setup
 

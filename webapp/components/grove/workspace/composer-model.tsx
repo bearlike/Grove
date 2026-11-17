@@ -9,6 +9,7 @@ import {
 } from "@/components/assistant-ui/model-selector";
 import { ModelMark, enrichedCatalog, modelOptions } from "@/components/grove/model-option";
 import { modelLabel } from "@/lib/grove/adapters/model";
+import { ControlTip } from "./composer-tip";
 import { useModels, useSessionControls, useSwitchModel, useWorkspace } from "@/lib/grove/hooks";
 
 type RequestedModel = {
@@ -69,6 +70,12 @@ export function ComposerModel({
     ? (catalog.data?.find((option) => option.id === labelId)?.name ?? null)
     : null;
 
+  const stateNote = requested
+    ? "Requested model; waiting for the agent report"
+    : currentModel
+      ? `Reported current model: ${currentModel}`
+      : "The agent has not reported its current model";
+
   useEffect(() => {
     if (requested && currentModel !== requested.reportedModel) setRequested(null);
   }, [currentModel, requested]);
@@ -102,26 +109,22 @@ export function ComposerModel({
       >
         {/* Trigger appends its own chevron, so `asChild` would give Radix two
             children and crash the page. Compose the selector's trigger directly. */}
-        <ModelSelector.Trigger
-          variant="outline"
-          size="sm"
-          disabled={controls.isPending}
-          aria-label="Model"
-          title={
-            requested
-              ? "Requested model; waiting for the agent report"
-              : currentModel
-                ? `Reported current model: ${currentModel}`
-                : "The agent has not reported its current model"
-          }
-          className="min-h-[24px] max-w-[240px]"
-          data-testid="composer-model-trigger"
-        >
-          {labelId && <ModelMark id={labelId} className="size-3.5" />}
-          <span className="truncate">
-            {labelId ? (declaredName ?? modelLabel(labelId, namespace)) : label}
-          </span>
-        </ModelSelector.Trigger>
+        <ControlTip tip={`Model. ${stateNote}`} suppressed={open}>
+          <ModelSelector.Trigger
+            variant="outline"
+            size="sm"
+            disabled={controls.isPending}
+            aria-label="Model"
+            aria-description={stateNote}
+            className="min-h-[24px] max-w-[240px]"
+            data-testid="composer-model-trigger"
+          >
+            {labelId && <ModelMark id={labelId} />}
+            <span className="truncate">
+              {labelId ? (declaredName ?? modelLabel(labelId, namespace)) : label}
+            </span>
+          </ModelSelector.Trigger>
+        </ControlTip>
         {requested && (
           <span
             aria-label="Requested model; waiting for the agent report"

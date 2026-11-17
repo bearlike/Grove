@@ -1,5 +1,6 @@
 import type {
   AgentSummaryView,
+  ArtifactAttachRequest,
   AttachmentView,
   BranchInfo,
   CommitSummaryView,
@@ -27,6 +28,7 @@ import type {
   UsageSeriesView,
   UsageSessionPageView,
   UsageSummaryView,
+  SessionView,
   WhoamiView,
   WorkspaceActivityView,
   WorkspaceDiffView,
@@ -43,6 +45,7 @@ import type {
   TurnFeedbackRequest,
 } from "./types";
 import type { WorkspacePanelView } from "./panels";
+import type { TranscriptionView } from "./types";
 import type { SubagentFleetData } from "./fleet";
 import type {
   DiagramDocumentView,
@@ -79,6 +82,12 @@ export class GroveProtocolError extends Error {
     readonly code: string,
     message: string,
     readonly status: number,
+    /**
+     * The REQUEST field a refusal is about, when the daemon names one (a
+     * launch refusal does). Lets a create's 422 land on the control that owns
+     * it, exactly as a preview problem does.
+     */
+    readonly field: string | null = null,
   ) {
     super(message);
   }
@@ -94,13 +103,21 @@ export function isWorkspaceGone(error: unknown): boolean {
   return error instanceof GroveProtocolError && error.code === "workspace_not_found";
 }
 
-type HttpMethod = "GET" | "POST" | "PUT" | "PATCH";
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type UsageFilters = Record<string, string>;
 type WorkspaceDefaultsView = components["schemas"]["WorkspaceDefaultsView"];
+type LaunchPreviewView = components["schemas"]["LaunchPreviewView"];
+type LaunchOptionsView = components["schemas"]["LaunchOptionsView"];
 type WorkspaceDefaultsSaveView =
   components["schemas"]["WorkspaceDefaultsSaveView"];
 type DefaultsScope = components["schemas"]["DefaultsScope"];
 type SharePolicyView = components["schemas"]["SharePolicyView"];
+type ProjectView = components["schemas"]["ProjectView"];
+type ProjectCandidatesView = components["schemas"]["ProjectCandidatesView"];
+type AddProjectRequest =
+  | components["schemas"]["CreateProject"]
+  | components["schemas"]["CloneProject"]
+  | components["schemas"]["AdoptProject"];
 type SharePolicyUpdateRequest =
   components["schemas"]["SharePolicyUpdateRequest"];
 type SendKey = components["schemas"]["SendKey"];
@@ -112,7 +129,7 @@ type UsageSessionOptions = {
   cursor?: string | null;
 };
 type ErrorEnvelope = { detail?: unknown };
-type DaemonErrorDetail = { error: string; message?: string };
+type DaemonErrorDetail = { error: string; message?: string; field?: string };
 type ValidationDetail = { loc?: unknown[]; msg?: string };
 
 /** The browser-side daemon client; requests use the cookie-authenticated BFF. */
@@ -127,11 +144,23 @@ export class GroveClient {
     return `${GroveClient.basePath}/workspaces/${encodeURIComponent(id)}/pane/stream`;
   }
 
+  /** The working loader's live-step stream; opening it IS the watch. */
+  static liveStreamUrl(id: string): string {
+    return `${GroveClient.basePath}/workspaces/${encodeURIComponent(id)}/live`;
+  }
+
   static fleetStreamUrl(id: string, sessionId: string): string {
     const query = new URLSearchParams({ session_id: sessionId });
     return `${GroveClient.basePath}/workspaces/${encodeURIComponent(id)}/fleet/stream?${query}`;
   }
 
+  /** Sidebar pins in newest-pin-first order, shared by every browser. */
+  async getSidebarPins(signal?: AbortSignal): Promise<string[]> {
+    return this.get("/sidebar/pins", signal);
+  }
+  async setSidebarPin(id: string, pinned: boolean): Promise<string[]> {
+    return this.json(await this.fetch(pinned ? "PUT" : "DELETE", `/sidebar/pins/${encodeURIComponent(id)}`));
+  }
   async listWorkspaces(): Promise<WorkspaceStateView[]> {
     return this.get("/workspaces");
   }
@@ -140,6 +169,10 @@ export class GroveClient {
   }
   async getWhoami(): Promise<WhoamiView> {
     return this.get("/whoami");
+  }
+  /** The caller's own session: its `subject` is who "mine" means. */
+  async getMe(): Promise<SessionView> {
+    return this.get("/auth/sessions/me");
   }
   async getWorkspace(id: string): Promise<WorkspaceStateView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}`);
@@ -281,6 +314,30 @@ export class GroveClient {
     return this.get(`${this.diagramPath(id)}/preview`);
   }
   /**
+   * Artifacts: files and links a workspace hands back. The daemon classifies
+   * and validates `target`, so no rule about paths or schemes lives here.
+   */
+  async attachArtifact(id: string, request: ArtifactAttachRequest): Promise<WorkspaceStateView> {
+    return this.postJson(`/workspaces/${encodeURIComponent(id)}/artifacts`, request);
+  }
+  /** `ref` is the artifact's id or the target it was attached with. */
+  async detachArtifact(id: string, ref: string): Promise<WorkspaceStateView> {
+    return this.json(
+      await this.fetch(
+        "DELETE",
+        `/workspaces/${encodeURIComponent(id)}/artifacts?ref=${encodeURIComponent(ref)}`,
+      ),
+    );
+  }
+  /** One file artifact's current bytes. Always octet-stream: the name picks the renderer. */
+  async getArtifactContent(id: string, artifactId: string): Promise<Blob> {
+    const response = await this.fetch(
+      "GET",
+      `/workspaces/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactId)}/content`,
+    );
+    return response.blob();
+  }
+  /**
    * The host-wide diagram gallery: every `.drawio` in a known repo's worktrees.
    * Items are addressed by an opaque id the daemon minted — never a path.
    */
@@ -416,6 +473,14 @@ export class GroveClient {
   async getProvisionProgress(id: string): Promise<ProvisionProgressView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/provision`);
   }
+  /** One finished recording to text. The daemon holds the provider key; the filename's extension names the container. */
+  async transcribeSpeech(audioBase64: string, filename: string): Promise<TranscriptionView> {
+    return this.postJson("/speech/transcriptions", { audio_base64: audioBase64, filename });
+  }
+  /** Spoken audio for at most 4096 characters; the body is raw bytes in the provider's own format, never JSON. */
+  async synthesizeSpeech(text: string, signal?: AbortSignal): Promise<Blob> {
+    return (await this.fetch("POST", "/speech/synthesis", { text }, signal)).blob();
+  }
   async getPane(id: string): Promise<WorkspacePaneView> {
     return this.get(`/workspaces/${encodeURIComponent(id)}/pane`);
   }
@@ -427,6 +492,11 @@ export class GroveClient {
   async switchModel(id: string, model: string): Promise<void> {
     return this.post(`/workspaces/${encodeURIComponent(id)}/controls/model`, {
       model,
+    });
+  }
+  async switchEffort(id: string, effort: string): Promise<void> {
+    return this.post(`/workspaces/${encodeURIComponent(id)}/controls/effort`, {
+      effort,
     });
   }
   /**
@@ -507,6 +577,26 @@ export class GroveClient {
   ): Promise<WorkspaceStateView> {
     return this.postJson("/workspaces", request);
   }
+  /**
+   * What this exact create request would launch, and why it would be refused,
+   * without creating anything. An empty `problems` means validation passed,
+   * not that provisioning will — the create re-probes live.
+   */
+  async previewLaunch(request: CreateWorkspaceRequest): Promise<LaunchPreviewView> {
+    return this.postJson("/launch/preview", request);
+  }
+  /** Where a create in `repo` could run, configured or not; never a readiness promise. */
+  async getLaunchOptions(repo: string): Promise<LaunchOptionsView> {
+    return this.get(`/launch/options?repo=${encodeURIComponent(repo)}`);
+  }
+  /** Unregistered git repositories under the daemon's configured projects root. */
+  async getProjectCandidates(): Promise<ProjectCandidatesView> {
+    return this.get("/projects/candidates");
+  }
+  /** Create, clone or adopt a repository and add it to Grove's project list. */
+  async addProject(request: AddProjectRequest): Promise<ProjectView> {
+    return this.postJson("/projects", request);
+  }
   async pauseWorkspace(id: string, force = false): Promise<WorkspaceStateView> {
     return this.postJson(`/workspaces/${encodeURIComponent(id)}/pause`, {
       force,
@@ -517,6 +607,10 @@ export class GroveClient {
   }
   async respawnWorkspace(id: string): Promise<WorkspaceStateView> {
     return this.postJson(`/workspaces/${encodeURIComponent(id)}/respawn`);
+  }
+  /** Copy this workspace's conversation into a new workspace; resolves to the new one. */
+  async forkWorkspace(id: string): Promise<WorkspaceStateView> {
+    return this.postJson(`/workspaces/${encodeURIComponent(id)}/fork`);
   }
   async killWorkspace(id: string, deleteBranch: boolean | null): Promise<void> {
     return this.post(`/workspaces/${encodeURIComponent(id)}/kill`, {
@@ -730,12 +824,14 @@ export class GroveClient {
 
   private async protocolError(response: Response): Promise<GroveProtocolError> {
     let code = "grove_error";
+    let field: string | null = null;
     let message = `${response.status} ${response.statusText}`.trim();
     try {
       const body = (await response.json()) as ErrorEnvelope;
       if (this.isDaemonError(body.detail)) {
         code = body.detail.error;
         message = body.detail.message ?? message;
+        field = typeof body.detail.field === "string" ? body.detail.field : null;
       } else if (Array.isArray(body.detail) && body.detail.length > 0) {
         code = "validation_error";
         message = body.detail
@@ -750,7 +846,7 @@ export class GroveClient {
     } catch {
       /* Preserve the HTTP status when an intermediary returned non-JSON. */
     }
-    return new GroveProtocolError(code, message, response.status);
+    return new GroveProtocolError(code, message, response.status, field);
   }
 
   private isDaemonError(value: unknown): value is DaemonErrorDetail {

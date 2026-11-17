@@ -41,6 +41,12 @@ from grove.core.contracts.diagrams import (
     DiagramStopRequest,
     DiagramUpdateRequest,
 )
+from grove.core.contracts.federation import NodeSelfView, NodeView, PingView
+from grove.core.contracts.fleet import (
+    FleetDigestView,
+    MailboxBatchReceipt,
+    MailboxBatchRequest,
+)
 from grove.core.contracts.keys import SendKey, SendKeysRequest
 from grove.core.contracts.mailboxes import (
     MailboxDirectory,
@@ -71,6 +77,8 @@ from grove.core.contracts.views import (
     WorkspaceStateView,
 )
 from grove.core.contracts.watches import (
+    TriggerFireRequest,
+    TriggerFireView,
     WatchList,
     WatchRegistration,
     WatchView,
@@ -190,8 +198,13 @@ class GroveClient:
         if self._config.daemon_socket is not None:
             raise NeedsPairingError("private mailbox socket requires an explicit bound token")
         if self._config.ssh_target is None:
+            from grove.core import paths  # noqa: PLC0415
             from grove.core.auth import SessionStore  # noqa: PLC0415
 
+            # A person who ran `grove auth login` speaks as themselves.
+            login = paths.user_login_path()
+            if login.is_file():
+                return str(json.loads(login.read_text())["token"])
             return SessionStore().mint_local(f"local-{self._config.label}")
         raise NeedsPairingError(
             self._config.label,
@@ -445,6 +458,72 @@ class GroveClient:
         body = await self._post("/mailboxes/messages", json_payload=request.model_dump(mode="json"))
         return MailboxReceipt.model_validate(body)
 
+    async def send_mailbox_batch(self, request: MailboxBatchRequest) -> MailboxBatchReceipt:
+        """Send one message to a frozen list of recipients, one receipt each.
+
+        Safe to retry with the same ``request_id``: the daemon returns the
+        recorded receipts rather than delivering a second time.
+        """
+        body = await self._post("/mailboxes/batch", json_payload=request.model_dump(mode="json"))
+        return MailboxBatchReceipt.model_validate(body)
+
+    # ─── federation ──────────────────────────────────────────────────────────
+
+    async def node_self(self) -> NodeSelfView:
+        """This daemon's federation role and, on a node, its hub link."""
+        return NodeSelfView.model_validate(await self._get("/nodes/self"))
+
+    async def list_nodes(self) -> list[NodeView]:
+        """Every node a hub has admitted, reachable or not."""
+        return [NodeView.model_validate(row) for row in await self._get("/nodes")]
+
+    async def mint_join_token(self) -> dict[str, object]:
+        """A one-time join token from a hub: ``{token, expires_in_seconds}``."""
+        return dict(await self._post("/nodes/token", json_payload={}))
+
+    async def join_hub(self, token: str) -> NodeSelfView:
+        return NodeSelfView.model_validate(
+            await self._post("/nodes/self/join", json_payload={"token": token})
+        )
+
+    async def drain_node(self, draining: bool) -> NodeSelfView:
+        return NodeSelfView.model_validate(
+            await self._post("/nodes/self/drain", json_payload={"draining": draining})
+        )
+
+    async def reconnect_hub(self) -> None:
+        await self._post("/nodes/self/reconnect", json_payload={}, expect_204=True)
+
+    async def ping_hub(self) -> PingView:
+        return PingView.model_validate(await self._post("/nodes/self/ping", json_payload={}))
+
+    async def forget_node(self, node_id: str) -> None:
+        resp = await self._request("DELETE", f"/nodes/{node_id}")
+        if resp.status_code != 204:
+            self._raise_for_status(resp)
+
+    async def get_fleet_digest(
+        self,
+        *,
+        since: str | None = None,
+        page: str | None = None,
+        workspaces: list[str] | None = None,
+    ) -> FleetDigestView:
+        """One bounded page of the fleet.
+
+        ``since`` returns only rows changed after an earlier digest's ``cursor``;
+        ``page`` continues a paged read. ``workspaces`` narrows to explicit ids.
+        """
+        params: dict[str, str] = {}
+        if since is not None:
+            params["since"] = since
+        if page is not None:
+            params["page"] = page
+        if workspaces:
+            params["workspaces"] = ",".join(workspaces)
+        body = await self._get("/fleet/digest", params=params or None)
+        return FleetDigestView.model_validate(body)
+
     async def register_watch(self, request: WatchRegistration) -> WatchView:
         """Ask to be woken when something settles, then stop waiting for it."""
         body = await self._post("/watches", json_payload=request.model_dump(mode="json"))
@@ -454,6 +533,13 @@ class GroveClient:
         """Every watch this host holds, live and recently settled."""
         body = await self._get("/watches")
         return WatchList.model_validate(body)
+
+    async def fire_trigger(self, request: TriggerFireRequest) -> TriggerFireView:
+        """Send one configured trigger rule now, to the workspaces the target picks."""
+        body = await self._post(
+            "/watches/triggers/fire", json_payload=request.model_dump(mode="json")
+        )
+        return TriggerFireView.model_validate(body)
 
     async def cancel_watch(self, watch_id: str) -> WatchView:
         """Withdraw a watch. Already-settled ones come back unchanged."""
@@ -753,6 +839,43 @@ class GroveClient:
         :meth:`attach_ticket_by_ref` is.
         """
         body = await self._delete(f"/workspaces/{ws_id}/tickets", params={"ref": ref})
+        return WorkspaceStateView.model_validate(body)
+
+    async def attach_artifact(
+        self, ws_id: str, target: str, title: str | None = None
+    ) -> WorkspaceStateView:
+        """Attach a file path or an http(s) link to a workspace as an artifact.
+
+        Args:
+            ws_id: The workspace id.
+            target: A URL, or a file path (relative paths resolve against the
+                workspace checkout on the daemon's host).
+            title: Optional label shown instead of the target's name.
+
+        Returns:
+            The updated workspace state, ``artifact_refs`` included.
+
+        Raises:
+            ProtocolError: ``artifact_invalid`` when the daemon refuses the
+                target (not http(s), or outside the allowed directories).
+        """
+        payload: dict[str, object] = {"target": target}
+        if title is not None:
+            payload["title"] = title
+        body = await self._post(f"/workspaces/{ws_id}/artifacts", json_payload=payload)
+        return WorkspaceStateView.model_validate(body)
+
+    async def detach_artifact(self, ws_id: str, ref: str) -> WorkspaceStateView:
+        """Remove an artifact by its id or its original target. Idempotent.
+
+        Args:
+            ws_id: The workspace id.
+            ref: The artifact id, the URL, or the file path it was attached with.
+
+        Returns:
+            The updated workspace state.
+        """
+        body = await self._delete(f"/workspaces/{ws_id}/artifacts", params={"ref": ref})
         return WorkspaceStateView.model_validate(body)
 
     async def open_attach(self, instruction: AttachInstructionView) -> AttachSession:

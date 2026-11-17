@@ -55,18 +55,22 @@ from grove.core.workspace import Runtime
 # so a non-Python client can read this file as a self-contained contract.
 _DARK_HOST: Final = "#96938c"  # muted gray — the ambient default, no boundary
 _DARK_CONTAINER: Final = "#c2dcf7"  # info cyan — noteworthy, never a warning
+_DARK_REMOTE: Final = "#26a69a"  # aqua — the work is elsewhere, still not a warning
 
 DARK_RUNTIME_HEX: Final[dict[Runtime, str]] = {
     Runtime.HOST: _DARK_HOST,
     Runtime.CONTAINER: _DARK_CONTAINER,
+    Runtime.REMOTE: _DARK_REMOTE,
 }
 
 RUNTIME_GLYPH: Final[dict[Runtime, str]] = {
     Runtime.HOST: "■",  # U+25A0 BLACK SQUARE — the work, no boundary drawn
     Runtime.CONTAINER: "▣",  # U+25A3 — the same square, inside a boundary
+    Runtime.REMOTE: "◇",  # U+25C7 — an outline: the work is not on this host
 }
 
 RUNTIME_LABEL: Final[dict[Runtime, str]] = {
     Runtime.HOST: "host",
     Runtime.CONTAINER: "container",
+    Runtime.REMOTE: "remote",
 }

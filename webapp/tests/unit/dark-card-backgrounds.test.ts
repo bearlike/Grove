@@ -29,38 +29,32 @@ function contrast(a: number, b: number): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-/** The fills before the work panel and rail were quietened. The ladder's page
- * rungs sit at 75% of this luminance; the CARD tier — the card body, its header
- * band and the washes inside it — went to 65% of that again, because card
- * structure is meant to recede into the page. `surface-sunken` is absent on
- * purpose: it is held at the 0.05 L floor below `base`, pinned below. */
-const previous = {
-  "surface-base": [0.155, 0.005, 286],
-  "surface-overlay": [0.285, 0.006, 286],
-};
-const CARD_TIER = 0.75 * 0.65;
-const cardTier = {
-  "surface-header-start": [0.303142, 0.006, 286],
-  "surface-header-end": [0.255779, 0.006, 286],
-  "surface-header-highlight": [0.350505, 0.006, 286],
-  "surface-raised": [0.213152, 0.006, 286],
-  muted: [0.274, 0.006, 286.033],
-  accent: [0.274, 0.006, 286.033],
-  secondary: [0.274, 0.006, 286.033],
+/** sRGB → WCAG relative luminance, for the reference's sampled pixels. */
+function srgbLuminance(value: number): number {
+  const s = value / 255;
+  const y = s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  return y;
+}
+
+/** The planes sampled off the ChatGPT reference screenshots (2026-10-17):
+ * rail #000, page #0e0e0e, card and composer bar #212121. The dark ladder IS
+ * these planes — `sunken` the rail, `base` the page, `raised` the card. */
+const reference = {
+  "surface-sunken": 0,
+  "surface-base": 14,
+  "surface-raised": 33,
 };
 
 describe("dark card backgrounds", () => {
-  for (const [name, value] of Object.entries(previous)) {
-    it(`${name} is 25% darker by WCAG relative luminance`, () => {
-      expect(token(name) / luminance(value)).toBeCloseTo(0.75, 2);
+  for (const [name, grey] of Object.entries(reference)) {
+    it(`${name} matches the reference plane #${grey.toString(16).padStart(2, "0").repeat(3)}`, () => {
+      expect(token(name)).toBeCloseTo(srgbLuminance(grey), 3);
     });
   }
 
-  for (const [name, value] of Object.entries(cardTier)) {
-    it(`${name} recedes to the card tier's share of its original luminance`, () => {
-      expect(token(name) / luminance(value)).toBeCloseTo(CARD_TIER, 2);
-    });
-  }
+  it("the rail is the sunken rung, so it is the reference's black", () => {
+    expect(dark).toMatch(/--sidebar: var\(--surface-sunken\);/);
+  });
 
   for (const surface of [
     "surface-sunken",
@@ -81,7 +75,9 @@ describe("dark card backgrounds", () => {
   // AA is the legal floor, not the look. Dark text read dull at tertiary 7.6:1
   // on the page, so each tier now has a CRISPNESS floor on the page itself,
   // and the three stay separated so the lift never flattens reading order.
-  const crisp = { foreground: 19.5, "content-secondary": 14, "muted-foreground": 9.5 };
+  // Pure white on the reference's #0e0e0e page is 18.4:1 — that is the ceiling
+  // the primary tier can reach there, so its floor sits just under it.
+  const crisp = { foreground: 18, "content-secondary": 13, "muted-foreground": 9 };
   for (const [text, floor] of Object.entries(crisp)) {
     it(`${text} reads crisp on the page, not merely legal`, () => {
       expect(contrast(token(text), token("surface-base"))).toBeGreaterThanOrEqual(floor);
@@ -101,20 +97,15 @@ describe("dark card backgrounds", () => {
   const lightness = (name: string) =>
     Number(dark.match(new RegExp(`--${name}: oklch\\(([^)]+)\\)`))?.[1].split(/\s+/)[0]);
 
+  // Every step clears the §4.4 floor now: the reference lifts its cards and
+  // composer plainly off the page, so no rung blends into its neighbour.
   for (const [lower, upper] of [
     ["surface-sunken", "surface-base"],
+    ["surface-base", "surface-raised"],
     ["surface-raised", "surface-overlay"],
   ]) {
     it(`retains the ${lower} to ${upper} lightness floor`, () => {
       expect(lightness(upper) - lightness(lower)).toBeGreaterThanOrEqual(0.05);
     });
   }
-
-  // Under the floor BY DECISION: a card blends toward its page and its edge
-  // carries the boundary. It must still rise, never tie or sink.
-  it("keeps a card above its page without the full floor", () => {
-    const step = lightness("surface-raised") - lightness("surface-base");
-    expect(step).toBeGreaterThan(0.02);
-    expect(step).toBeLessThan(0.05);
-  });
 });

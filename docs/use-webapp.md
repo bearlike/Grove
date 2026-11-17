@@ -89,7 +89,7 @@ Three zones. The rail, the transcript, and a work panel ([`work-panel.tsx`](repo
 | **Terminal** | The agent's live tmux pane. For a native workspace it is **Stream**, the worker's event log, one frame per line. |
 | **Changes** | Divergence from the base branch, working tree churn, commits since the fork point. |
 | **Files** | The per file diffs the agent reported. |
-| **Info** | Task progress, tickets with their phases, activity metrics, identity, timeline, and the lifecycle actions. |
+| **Info** | Task progress, tickets with their phases, [artifacts](features-artifacts.md), activity metrics, identity, timeline, and the lifecycle actions. |
 | **Controls** | The model switch, a copyable attach command, a public share link, and the agent's slash commands, skills and MCP servers. |
 | **Diagram** | One `.drawio` file in draw.io, editable while collaboration is active. See [Diagram collaboration](features-diagrams.md). |
 
@@ -107,6 +107,16 @@ The transcript ([`thread.tsx`](repo:webapp/components/grove/workspace/thread.tsx
 - A **Watches** card beside the queue lists what the workspace is waiting on: CI, timers, commands, and a standing watch for each attached ticket. Each row says whether it is running, fired, expired, cancelled or undeliverable. See [Watches](features-watches.md).
 - Paste a screenshot, annotate it, and the agent is handed the path. See [Attachments and annotation](features-attachments.md).
 - Type `/` for commands. Your [Grove commands](configure-agents.md#grove-commands) are listed there beside `/compact`, and each one runs its steps in order.
+
+## Dictation and read-aloud
+
+Speak a message instead of typing it, and have an answer read back. Both work in every workspace and on the landing composer, and both appear only when the daemon has a speech key. See [Setting up speech](#setting-up-speech).
+
+- The **mic** in the composer starts a recording. Click it, talk, then choose **Done** to keep it or **Cancel** to throw it away.
+- **Cancel** discards the recording and uploads nothing, so changing your mind costs nothing.
+- **Done** uploads the whole recording once, transcribes it, and inserts the text into your draft. Nothing is sent until you send, so you can edit the words first.
+- Transcription is not live. You see the text when you finish, never a half-heard sentence.
+- The **speaker** under each assistant answer plays it aloud. Click it again to stop.
 
 ## The Session Catalog
 
@@ -139,7 +149,7 @@ grove web --host 0.0.0.0        # or reachable from a phone on your LAN
 ```
 
 - Open <http://127.0.0.1:3000>, or `http://<machine-ip>:3000` from a phone once you [pair](use-auth.md) it. `grove web --daemon-url` (or `GROVE_DAEMON_URL`) points it at a remote daemon.
-- From a source checkout, `make webapp-bundle` stages the copy `grove web` runs, built on Grove's own Node. `./reinstall.sh` does that and restarts the service in one step.
+- From a source checkout, `make webapp-bundle` stages the copy `grove web` runs, built on Grove's own Node. `./tools/reinstall.sh` does that and restarts the service in one step.
 - The browser only calls the web app's own origin. Next.js proxies each call to the daemon with the paired session's token, a receptionist carrying each request to the back office. See [Authentication & pairing](use-auth.md) and the [`webapp/` README](https://github.com/bearlike/Grove/tree/current/webapp) for the dev server.
 
 ```mermaid
@@ -159,7 +169,7 @@ WITH_WEBAPP=1 make systemd-enable # reload, enable, start now
 loginctl enable-linger "$USER"    # survive logout (remote hosts)
 ```
 
-The dashboard unit runs `grove web`, so it serves whatever version is installed on the Node that ships with it. A daemon hiccup reports unreachable without taking the dashboard down. After `uv tool upgrade grove-factory`, restart both units. From a checkout, `./reinstall.sh` rebuilds and restarts everything. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
+The dashboard unit runs `grove web`, so it serves whatever version is installed on the Node that ships with it. A daemon hiccup reports unreachable without taking the dashboard down. After `uv tool upgrade grove-factory`, restart both units. From a checkout, `./tools/reinstall.sh` rebuilds and restarts everything. Ports override with `DAEMON_PORT=7777 WEBAPP_PORT=3030`.
 
 ## Reaching it from outside the network
 
@@ -203,6 +213,26 @@ Each pricing source pairs a LiteLLM API base URL with the name of an environment
 
 - Manual prices are USD per million tokens and override fetched entries. Aliases are explicit, and conflicting prices for one model are withheld until you override.
 - `grove usage backfill` refreshes usage and prices from stored counts and never exports a transcript.
+
+## Setting up speech
+
+Everything lives in the `speech` block of your config. `base_url` is any OpenAI-compatible endpoint, and `api_key_env` names the environment variable that holds the key, so the key itself never enters the file. Model and voice ids are passed through unchanged. Restart the daemon after a change, because it reads this once at start.
+
+```json title="~/.config/grove/config.json"
+{
+  "speech": {
+    "base_url": "https://gateway.example/v1",
+    "api_key_env": "GROVE_SPEECH_API_KEY",
+    "stt_model": "whisper-1",
+    "tts_model": "tts-1",
+    "voice": "alloy"
+  }
+}
+```
+
+```bash
+export GROVE_SPEECH_API_KEY=...   # in the daemon's environment
+```
 
 ## See also
 

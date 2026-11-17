@@ -4,11 +4,18 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
+  useState,
   type Dispatch,
   type ReactNode,
 } from "react";
+
+import { inheritedModel, openProblems, previewKey } from "@/lib/grove/adapters/launch";
+import { problemFor } from "@/lib/grove/adapters/launch-flow";
+import type { LaunchPreviewView, LaunchProblemView } from "@/lib/grove/api";
+import { useLaunchPreview, useWorkspaceDefaults } from "@/lib/grove/hooks/launch";
 
 /**
  * Which branch the workspace gets, and — for `root` — whether it gets one at
@@ -17,8 +24,13 @@ import {
  */
 export type BranchMode = "auto" | "new" | "existing" | "remote" | "root";
 
-/** Where the agent runs. `null` means "whatever the cascade resolves". */
-export type RuntimeChoice = "host" | "container";
+/**
+ * Where the agent runs: host, container, or a configured remote runtime by its
+ * `runtimes.<name>` block name. `null` means "whatever the cascade resolves".
+ * The block name is the same string `grove create --runtime` takes, so one
+ * value reads the same on every surface.
+ */
+export type RuntimeChoice = "host" | "container" | (string & {});
 
 /** The minimum a ticket suggestion needs to build a `TicketSelector`. */
 export interface LaunchTicket {
@@ -41,12 +53,25 @@ export interface LaunchValues {
   readonly projectCwd: string | null;
   /** The selected registered project's cwd, used to preserve nested-project identity. */
   readonly selectedProjectCwd: string | null;
+  /** An explicitly chosen roster profile, or the engine's currently resolved one. */
   readonly agentName: string | null;
+  /**
+   * A tool selected before its profile. The engine chooses the profile after it
+   * resolves the runtime, so this is deliberately distinct from `agentName`.
+   */
+  readonly agentKind: NonNullable<import("@/lib/grove/api").CreateWorkspaceRequest["agent_kind"]> | null;
   /** The opaque provider model id, including an explicitly typed custom id. */
   readonly model: string | null;
   /** Whether the Model picker is on Custom rather than its resolved catalog entry. */
   readonly customModel: boolean;
+  /**
+   * The reasoning-effort level, or `null` for the agent tool's own default.
+   * Reset with the agent, like `model`, because the levels belong to the kind.
+   */
+  readonly effort: string | null;
   readonly runtime: RuntimeChoice | null;
+  /** On a federation hub, the node to create on; `null` lets the hub pick. */
+  readonly node: string | null;
   readonly brief: boolean | null;
   /**
    * Whether this create runs the agent as a Grove-owned native session. `null`
@@ -86,6 +111,43 @@ export interface LaunchState {
    * what is in here.
    */
   readonly touched: ReadonlySet<LaunchField>;
+  /**
+   * The project whose `GET /defaults` answer has been seeded, or `null`.
+   *
+   * Until it equals `values.repoRoot`, every untouched pill is showing a
+   * placeholder rather than the cascade's answer.
+   */
+  readonly seededRepo: string | null;
+  /**
+   * Why that answer would be refused, from the same response, keyed by request
+   * field. Held here rather than read beside the builder so ONE builder refuses
+   * for every surface; `openProblems` drops the ones a touched field overrode.
+   */
+  readonly problems?: readonly LaunchProblemView[];
+  /**
+   * The engine's verdict on THIS draft (`POST /launch/preview`), with the
+   * serialized launch request it describes. It outranks the seed's problems
+   * only while that request is still the current one: a preview of an older
+   * draft says nothing about the newer one, so it must neither refuse nor
+   * clear it. `openProblems` (adapters) is the one place that decides.
+   */
+  readonly preview?: LaunchPreview;
+  /** The explicit placement displaced by a remote runtime, if it can be restored. */
+  readonly runtimePlacementUndo?: BranchMode | null;
+  /** The profile shown before the engine selected one for a tool/runtime pair. */
+  readonly profileUndo?: string | null;
+  /**
+   * A create the daemon refused (422) naming a field, against the launch
+   * request it refused. Live while that request is unchanged, so it lands on
+   * the owning control like a preview problem and clears once the person
+   * changes anything the create would send.
+   */
+  readonly refusal?: { readonly request: string; readonly problem: LaunchProblemView };
+}
+
+export interface LaunchPreview {
+  readonly request: string;
+  readonly view: LaunchPreviewView;
 }
 
 export const LAUNCH_INITIAL_VALUES: LaunchValues = {
@@ -93,9 +155,12 @@ export const LAUNCH_INITIAL_VALUES: LaunchValues = {
   projectCwd: null,
   selectedProjectCwd: null,
   agentName: null,
+  agentKind: null,
   model: null,
   customModel: false,
+  effort: null,
   runtime: null,
+  node: null,
   brief: null,
   native: null,
   branchMode: "auto",
@@ -112,17 +177,39 @@ export const LAUNCH_INITIAL_VALUES: LaunchValues = {
 export const LAUNCH_INITIAL_STATE: LaunchState = {
   values: LAUNCH_INITIAL_VALUES,
   touched: new Set<LaunchField>(),
+  seededRepo: null,
+  problems: [],
+  runtimePlacementUndo: null,
+  profileUndo: null,
 };
 
 export type LaunchAction =
   /** Fill in the cascade's answers. Never marks a field touched. */
-  | { readonly type: "seed"; readonly values: Partial<LaunchValues> }
+  | {
+      readonly type: "seed";
+      readonly values: Partial<LaunchValues>;
+      /** The project these answers were resolved for. */
+      readonly repo?: string;
+      /** The engine's refusals of those answers; replaces the previous set. */
+      readonly problems?: readonly LaunchProblemView[];
+    }
+  /** The engine previewed a draft; replaces any earlier preview. */
+  | { readonly type: "preview"; readonly preview: LaunchPreview }
+  /** A create was refused for one field; recorded against what it sent. */
+  | { readonly type: "refused"; readonly request: string; readonly problem: LaunchProblemView }
   /** The user changed a control. Marks it touched and applies the two rules below. */
   | {
       readonly type: "set";
       readonly values: Partial<LaunchValues>;
     }
   | { readonly type: "reset" };
+
+function sameProblems(a: readonly LaunchProblemView[], b: readonly LaunchProblemView[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((problem, at) => problem.field === b[at]!.field && problem.error === b[at]!.error)
+  );
+}
 
 function withTouched(
   touched: ReadonlySet<LaunchField>,
@@ -180,34 +267,97 @@ export function launchReducer(state: LaunchState, action: LaunchAction): LaunchS
       // priority than the loop and so never got to commit — every client-side
       // navigation away from this surface silently did nothing, with the
       // target route's payload already fetched and waiting.
-      if (!changed) return state;
-      return { values, touched: state.touched };
+      const seededRepo = action.repo ?? state.seededRepo;
+      // Compared by CONTENT: the response is re-parsed on every refetch, so an
+      // identity check would report a change every time and loop the effect.
+      const problems =
+        action.problems !== undefined && !sameProblems(action.problems, state.problems ?? [])
+          ? action.problems
+          : state.problems;
+      if (!changed && seededRepo === state.seededRepo && problems === state.problems) return state;
+      return { ...state, values, touched: state.touched, seededRepo, problems };
     }
+
+    case "preview":
+      // The same answer for the same request is no change: a fresh state here
+      // re-renders every consumer for nothing (the seed case's rule).
+      if (
+        state.preview?.request === action.preview.request &&
+        state.preview.view === action.preview.view
+      ) {
+        return state;
+      }
+      return { ...state, preview: action.preview };
+
+    case "refused":
+      return { ...state, refusal: { request: action.request, problem: action.problem } };
 
     case "set": {
       const changed = Object.keys(action.values) as LaunchField[];
       let values: LaunchValues = { ...state.values, ...action.values };
       let touched = withTouched(state.touched, changed);
+      let runtimePlacementUndo = state.runtimePlacementUndo;
+      let profileUndo = state.profileUndo;
+
+      // A tool is an intent, not its current profile. Keep the value the engine
+      // resolves visible, but omit it from the request until a Profile pick.
+      if (changed.includes("agentKind") && !changed.includes("agentName")) {
+        profileUndo = state.values.agentName;
+        values = { ...values, agentName: null };
+        touched = withoutTouched(touched, "agentName");
+      }
+      if (changed.includes("agentName")) {
+        values = { ...values, agentKind: null };
+        touched = withoutTouched(touched, "agentKind");
+        profileUndo = null;
+      }
 
       // RULE 1 — the model catalog belongs to the agent.
       // `resolve_models` returns a per-agent list, so a model chosen for one
       // agent is very often not offered by the next. Clearing it AND forgetting
       // that it was touched is what lets the new agent's own default seed in;
       // clearing the value alone would leave an empty pill nobody filled.
-      if (changed.includes("agentName") && !changed.includes("model")) {
+      if ((changed.includes("agentName") || changed.includes("agentKind")) && !changed.includes("model")) {
         values = { ...values, model: null, customModel: false };
         touched = withoutTouched(withoutTouched(touched, "model"), "customModel");
+      }
+      // RULE 1c — so does the effort ladder. Claude Code's levels are not
+      // Codex's, and an agent with none would refuse any value at create.
+      if ((changed.includes("agentName") || changed.includes("agentKind")) && !changed.includes("effort")) {
+        values = { ...values, effort: null };
+        touched = withoutTouched(touched, "effort");
       }
       // RULE 1b — the launch mode belongs to the agent too. Its default is
       // the roster entry's `native`, so a choice made against one entry is
       // not an answer about the next; forgetting it lets the new entry's own
       // default show, and an untouched pill says what will actually happen.
-      if (changed.includes("agentName") && !changed.includes("native")) {
+      if ((changed.includes("agentName") || changed.includes("agentKind")) && !changed.includes("native")) {
         values = { ...values, native: null };
         touched = withoutTouched(touched, "native");
       }
 
-      // RULE 2 — root placement carries `skip_init`, visibly.
+      // RULE 2 — a remote runtime needs an isolated branch. The draft moves the
+      // current checkout to a new branch and remembers it did, so leaving the
+      // remote runtime puts the person's own checkout back: the switch was the
+      // runtime's requirement, not their choice, and must not outlive it.
+      if (changed.includes("runtime")) {
+        const remote = action.values.runtime !== null && action.values.runtime !== "host" && action.values.runtime !== "container";
+        if (remote && state.values.branchMode === "root") {
+          runtimePlacementUndo = "root";
+          values = { ...values, branchMode: "auto" };
+          touched = withTouched(touched, ["branchMode"]);
+        } else if (!remote && state.runtimePlacementUndo != null) {
+          values = { ...values, branchMode: state.runtimePlacementUndo };
+          runtimePlacementUndo = null;
+        }
+        if (!touched.has("agentName")) {
+          profileUndo = state.values.agentName;
+          values = { ...values, agentName: null };
+        }
+      }
+      if (changed.includes("branchMode")) runtimePlacementUndo = null;
+
+      // RULE 3 — root placement carries `skip_init`, visibly.
       // The TUI does this too (`tui/screens/create.py:676-680`): an init script
       // written for a fresh worktree can be unsafe in the live repo root. Set it
       // and mark it touched so the request actually carries it — but the
@@ -224,15 +374,21 @@ export function launchReducer(state: LaunchState, action: LaunchAction): LaunchS
         }
       }
 
-      return { values, touched };
+      return { ...state, values, touched, runtimePlacementUndo, profileUndo };
     }
   }
 }
 
 export interface LaunchControls extends LaunchState {
-  readonly seed: (values: Partial<LaunchValues>) => void;
+  readonly seed: (
+    values: Partial<LaunchValues>,
+    repo?: string,
+    problems?: readonly LaunchProblemView[],
+  ) => void;
   readonly set: (values: Partial<LaunchValues>) => void;
   readonly reset: () => void;
+  /** Record a create refusal that names its field, for the owning control. */
+  readonly refused: (request: string, problem: LaunchProblemView) => void;
 }
 
 const LaunchStateContext = createContext<LaunchControls | null>(null);
@@ -252,20 +408,109 @@ export function LaunchStateProvider({ children }: { readonly children: ReactNode
   // effect re-running every time the state it seeds changes. Building them
   // inline in the memo below made their identity track the state, which is the
   // other half of the loop the reducer's `seed` case describes.
-  const seed = useCallback((values: Partial<LaunchValues>) => dispatch({ type: "seed", values }), []);
+  const seed = useCallback(
+    (values: Partial<LaunchValues>, repo?: string, problems?: readonly LaunchProblemView[]) =>
+      dispatch({ type: "seed", values, repo, problems }),
+    [],
+  );
   const set = useCallback((values: Partial<LaunchValues>) => dispatch({ type: "set", values }), []);
   const reset = useCallback(() => dispatch({ type: "reset" }), []);
-  const value = useMemo<LaunchControls>(
-    () => ({ values: state.values, touched: state.touched, seed, set, reset }),
-    [state, seed, set, reset],
+  const refused = useCallback(
+    (request: string, problem: LaunchProblemView) => dispatch({ type: "refused", request, problem }),
+    [],
   );
-  return <LaunchStateContext.Provider value={value}>{children}</LaunchStateContext.Provider>;
+  const value = useMemo<LaunchControls>(
+    () => ({ ...state, seed, set, reset, refused }),
+    [state, seed, set, reset, refused],
+  );
+  return (
+    <LaunchStateContext.Provider value={value}>
+      <LaunchDefaultsSeed />
+      <LaunchPreviewer dispatch={dispatch} />
+      {children}
+    </LaunchStateContext.Provider>
+  );
+}
+
+/**
+ * Seeds the cascade's answers for the selected project and agent.
+ *
+ * It lives with the state rather than in one surface's control row because
+ * BOTH creation surfaces need it: the landing composer and the More options
+ * dialog opened from the fleet, which mounts no landing page. Its dependency
+ * list is the fix for the render loop `launchReducer` documents.
+ */
+function LaunchDefaultsSeed(): null {
+  const { values, seed, touched, profileUndo } = useLaunchControls();
+  const defaults = useWorkspaceDefaults(values.repoRoot);
+  const agentName = values.agentName;
+  const repo = values.repoRoot;
+  const engineProfilePending = touched.has("agentKind") || profileUndo != null;
+
+  useEffect(() => {
+    const resolved = defaults.data;
+    if (!resolved || repo === null) return;
+    // Seeded for the agent actually selected and re-seeded when it changes (an
+    // agent switch clears an untouched model), so another agent never shows
+    // the saved agent's model.
+    seed(
+      {
+        agentName: engineProfilePending ? undefined : resolved.agent,
+        runtime: resolved.runtime,
+        brief: resolved.brief,
+        model: engineProfilePending ? undefined : inheritedModel(resolved, agentName ?? resolved.agent ?? null),
+        branchMode: resolved.branch_mode,
+        baseRef: resolved.base_ref,
+        skipInit: resolved.skip_init,
+      },
+      repo,
+      resolved.problems,
+    );
+  }, [defaults.data, seed, agentName, repo, engineProfilePending]);
+  return null;
+}
+
+/** How long the draft must sit still before the engine is asked about it. */
+const PREVIEW_DEBOUNCE_MS = 250;
+
+/**
+ * Asks the engine what the current draft would launch, and records the answer
+ * against the exact request it describes.
+ *
+ * Debounced so a typed branch name is one question, not one per keystroke;
+ * the daemon side does no git, tmux or Docker, so the debounce is about
+ * chatter, not cost. The answer is a VALIDATION — an empty problem list means
+ * the engine would accept the request, never that provisioning will succeed.
+ */
+function LaunchPreviewer({ dispatch }: { readonly dispatch: Dispatch<LaunchAction> }): null {
+  const state = useLaunchControls();
+  const key = previewKey(state);
+  const [settled, setSettled] = useState<string | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(key), PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [key]);
+  const preview = useLaunchPreview(settled);
+  useEffect(() => {
+    if (preview.data && settled !== null) {
+      dispatch({ type: "preview", preview: { request: settled, view: preview.data } });
+    }
+  }, [dispatch, preview.data, settled]);
+  return null;
 }
 
 export function useLaunchControls(): LaunchControls {
   const ctx = useContext(LaunchStateContext);
   if (!ctx) throw new Error("useLaunchControls must be used inside <LaunchStateProvider>");
   return ctx;
+}
+
+/**
+ * The engine's refusal owned by one control, while that control is untouched.
+ * Every pill reads its problem here so none can decide differently.
+ */
+export function useLaunchProblem(field: LaunchField): string | null {
+  return problemFor(openProblems(useLaunchControls()), field);
 }
 
 export type LaunchDispatch = Dispatch<LaunchAction>;
@@ -288,7 +533,6 @@ export const LAUNCH_TESTIDS = {
   overflow: "launch-overflow",
   expand: "launch-expand",
   expanded: "launch-expanded",
-  derivedTitle: "launch-derived-title",
   suggestions: "launch-suggestions",
   footerLinks: "launch-footer-links",
   error: "launch-error",

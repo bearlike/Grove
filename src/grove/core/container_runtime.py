@@ -105,7 +105,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -1069,6 +1069,21 @@ exit 0
         self._require_full_id("stop")
         return [docker_bin, "stop", "-t", timeout, self.container_id]
 
+    def freeze_argv(
+        self, verb: Literal["pause", "unpause"], *, docker_bin: str = "docker"
+    ) -> list[str]:
+        """Suspend or resume every process of the container (or stack) in place.
+
+        A cgroup freeze, not a stop: memory and the agent's state stay where
+        they are, CPU drops to zero, and nothing re-runs on the way back, so the
+        egress firewall ``postStartCommand`` applied is still the one in force.
+        """
+        if self.compose_project is not None:
+            self._require_owned_project()
+            return [docker_bin, "compose", "-p", self.compose_project, verb]
+        self._require_full_id(verb)
+        return [docker_bin, verb, self.container_id]
+
     def volume_argv(self, volume: str, *, docker_bin: str = "docker") -> list[str]:
         """Remove one volume Grove itself created (never a project-declared one)."""
         if volume not in self.owned_volumes:
@@ -1400,6 +1415,13 @@ class ContainerLifecycle:
         self._docker.run(
             self._state.stop_argv(docker_bin=self._docker_bin),
             action=f"stop container {self._state.short_id or self._state.compose_project}",
+        )
+
+    def freeze(self, verb: Literal["pause", "unpause"]) -> None:
+        """``docker pause`` / ``unpause`` this container for idle suspension (#970)."""
+        self._docker.run(
+            self._state.freeze_argv(verb, docker_bin=self._docker_bin),
+            action=f"{verb} container {self._state.short_id or self._state.compose_project}",
         )
 
     def teardown(self) -> None:

@@ -25,6 +25,10 @@ _CLEARED_BY_NONE: Final = frozenset({"context_state", "operation", "compact_erro
 #: debugging a session needs to see.
 FrameTrace = Callable[[Literal["send", "recv"], Mapping[str, Any]], None]
 
+#: Where a remote worker's spool drops go instead of a directory: one
+#: ``(suffix, payload)`` per drop, in the order they were made.
+SpoolSink = Callable[[str, dict[str, Any]], None]
+
 
 @dataclass(frozen=True, slots=True)
 class NativeSubmission:
@@ -68,6 +72,16 @@ class NativeOwner(Protocol):
     async def interrupt(self) -> bool: ...
 
     async def set_model(self, model: str) -> bool: ...
+
+    async def set_effort(self, effort: str) -> bool:
+        """Change the reasoning effort of every later turn, or refuse.
+
+        ``True`` means the provider's control channel accepted the request.
+        Claude acknowledges any string (measured 2.1.289: even ``bogus``), so
+        the caller validates the level against the adapter's list first; an
+        acknowledgement is delivery, never proof the level took effect.
+        """
+        ...
 
     async def compact(self) -> bool:
         """Request provider-native context compaction, or refuse when unsupported."""
@@ -114,13 +128,37 @@ class AskRecorder:
     container worker: the spool is bind-mounted at its own host path, so the
     worker never needs the sidecar directory or the daemon. The session id is
     bound after ``start`` because that is when the provider reports it.
+
+    A REMOTE worker has no path into that spool, so it is built with a
+    ``sink`` that carries each drop to the daemon instead, and only then does
+    the recorder also state turn edges (:meth:`turn`): a host or container
+    session's transcript is on this disk, where the poll already reads its turns.
     """
 
     SUFFIX = ".ask.json"
     FACTS_SUFFIX = ".facts.json"
+    #: A hook-shaped turn edge (``UserPromptSubmit`` / ``Stop``), folded through
+    #: the ordinary hook-event arm because its suffix names no other arm.
+    TURN_SUFFIX = ".turn.json"
+    #: The only events a turn drop may carry: a turn began, a turn ended.
+    TURN_EVENTS: Final = frozenset({"UserPromptSubmit", "Stop"})
 
-    def __init__(self, spool_dir: Path) -> None:
+    def __init__(self, spool_dir: Path | None = None, *, sink: SpoolSink | None = None) -> None:
+        """Publish into a local spool, or through a sink; exactly one is given.
+
+        Args:
+            spool_dir: the host hook spool, for a worker that shares this host's
+                (or a bind-mounted) filesystem.
+            sink: receives ``(suffix, payload)`` per drop, for a worker that
+                cannot reach the spool; it must keep the drops in order.
+
+        Raises:
+            ValueError: neither or both were given.
+        """
+        if (spool_dir is None) == (sink is None):
+            raise ValueError("an AskRecorder needs exactly one of spool_dir or sink")
         self._spool_dir = spool_dir
+        self._sink = sink
         self._session_id: str | None = None
 
     def bind(self, session_id: str) -> None:
@@ -159,19 +197,47 @@ class AskRecorder:
             suffix=self.FACTS_SUFFIX,
         )
 
+    def turn(self, event: str) -> None:
+        """State that a root turn began or ended; a no-op where the transcript is local.
+
+        Args:
+            event: ``UserPromptSubmit`` for a turn that began, ``Stop`` for one
+                that ended, mapped to WORKING / WAITING by the hook's own table.
+        """
+        if self._sink is None or self._session_id is None or event not in self.TURN_EVENTS:
+            return
+        self._publish(self.TURN_SUFFIX, {"hook_event_name": event, "session_id": self._session_id})
+
     def _drop(self, body: dict[str, Any] | None, *, suffix: str | None = None) -> None:
         if self._session_id is None:
             return
         key = "facts" if suffix == self.FACTS_SUFFIX else "question"
-        payload = {"session_id": self._session_id, key: body}
+        self._publish(suffix or self.SUFFIX, {"session_id": self._session_id, key: body})
+
+    def _publish(self, suffix: str, payload: dict[str, Any]) -> None:
+        if self._sink is not None:
+            self._sink(suffix, payload)
+        elif self._spool_dir is not None:
+            self.write_spool(self._spool_dir, suffix, payload)
+
+    @staticmethod
+    def write_spool(spool_dir: Path, suffix: str, payload: dict[str, Any]) -> None:
+        """Write one drop into ``spool_dir`` under a write-ordered name, best-effort.
+
+        Args:
+            spool_dir: the host hook spool the sidecar reader drains.
+            suffix: which fold arm reads it (``SUFFIX``, ``FACTS_SUFFIX``,
+                ``TURN_SUFFIX``).
+            payload: the drop's JSON body, carrying its ``session_id``.
+        """
         try:
-            self._spool_dir.mkdir(parents=True, exist_ok=True)
+            spool_dir.mkdir(parents=True, exist_ok=True)
             # The drain folds in (mtime, name) order, and mtimes COLLIDE: six
             # drops written back to back measured two distinct mtimes. A random
             # name then orders a step's start and its end by chance, and folding
             # them reversed leaves the step standing forever. A time-ordered
             # prefix makes the tie-break the write order.
-            target = self._spool_dir / f"{time.time_ns():020d}-{uuid4().hex}{suffix or self.SUFFIX}"
+            target = spool_dir / f"{time.time_ns():020d}-{uuid4().hex}{suffix}"
             tmp = target.with_suffix(".tmp")
             tmp.write_text(json.dumps(payload), encoding="utf-8")
             tmp.replace(target)

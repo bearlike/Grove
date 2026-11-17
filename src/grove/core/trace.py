@@ -741,11 +741,13 @@ class _AcknowledgingSpanProcessor:
         self._sleeper = sleeper
         self._pending: deque[tuple[ReadableSpan, int]] = deque()
         self._pending_bytes = 0
-        # Bound identity tracking at the admission capacity. Once it fills, a
-        # conservative poison flag is enough: force_flush must stay false until
-        # its replay owner constructs a fresh processor for a fresh replay.
-        self._rejected_spans: set[tuple[int, int]] = set()
-        self._rejection_overflowed = False
+        # Refusals since the last flush, reported to THAT flush and then forgotten.
+        # The daemon shares one processor for its whole life, so a refusal that
+        # outlived its flush made every later flush, of every session, report
+        # failure: each session re-sent its oldest turn forever and nothing newer
+        # was ever exported (measured 2026-10-02, ~20 h dark). The span's owner
+        # has already been told by the flush that followed it, and re-offers it.
+        self._refused = 0
         self._retry_at = 0.0
         self._unhealthy = False
         self._lock = Lock()
@@ -777,16 +779,10 @@ class _AcknowledgingSpanProcessor:
                 or estimated_bytes > self._max_pending_bytes
                 or self._pending_bytes + estimated_bytes > self._max_pending_bytes
             ):
-                key = self._span_key(span)
-                if key not in self._rejected_spans:
-                    if len(self._rejected_spans) == self._max_pending_items:
-                        self._rejection_overflowed = True
-                    else:
-                        self._rejected_spans.add(key)
+                self._refused += 1
                 return
             self._pending.append((span, estimated_bytes))
             self._pending_bytes += estimated_bytes
-            self._rejected_spans.discard(self._span_key(span))
 
     def shutdown(self) -> None:
         """Make one bounded acknowledgement attempt before closing the exporter."""
@@ -807,22 +803,26 @@ class _AcknowledgingSpanProcessor:
         """
         deadline = self._clock() + max(timeout_millis, 0) / 1_000
         with self._flush_lock:
-            while True:
-                # WHAT THERE IS TO DO IS ASKED BEFORE HOW LONG IS LEFT. A caller
-                # passing `timeout_millis=0` is asking whether anything is
-                # outstanding, not granting time to find out — and answering
-                # "ran out of time" for an empty queue reports data loss that
-                # never happened, which a shutdown path acts on.
-                batch = self._peek_batch()
-                if not batch:
-                    return not self._has_rejections()
-                if self._clock() >= deadline:
-                    return False
-                if self._clock() < self._retry_at:
-                    return False
-                if not self._export_batch(batch, deadline):
-                    return False
-                self._acknowledge(len(batch))
+            refused = self._take_refusals()
+            return self._drain(deadline) and not refused
+
+    def _drain(self, deadline: float) -> bool:
+        while True:
+            # WHAT THERE IS TO DO IS ASKED BEFORE HOW LONG IS LEFT. A caller
+            # passing `timeout_millis=0` is asking whether anything is
+            # outstanding, not granting time to find out — and answering
+            # "ran out of time" for an empty queue reports data loss that
+            # never happened, which a shutdown path acts on.
+            batch = self._peek_batch()
+            if not batch:
+                return True
+            if self._clock() >= deadline:
+                return False
+            if self._clock() < self._retry_at:
+                return False
+            if not self._export_batch(batch, deadline):
+                return False
+            self._acknowledge(len(batch))
 
     def _export_batch(self, batch: Sequence[ReadableSpan], deadline: float) -> bool:
         """Try one batch a finite number of times inside its caller's deadline."""
@@ -884,16 +884,10 @@ class _AcknowledgingSpanProcessor:
                 _span, size = self._pending.popleft()
                 self._pending_bytes -= size
 
-    def _has_rejections(self) -> bool:
+    def _take_refusals(self) -> int:
         with self._lock:
-            return self._rejection_overflowed or bool(self._rejected_spans)
-
-    @staticmethod
-    def _span_key(span: ReadableSpan) -> tuple[int, int]:
-        context = getattr(span, "context", None)
-        if context is None:
-            return id(span), 0
-        return context.trace_id, context.span_id
+            refused, self._refused = self._refused, 0
+            return refused
 
     @classmethod
     def _estimated_span_bytes(cls, span: ReadableSpan) -> int:
@@ -1559,6 +1553,21 @@ def _message_identity(message: AgentMessage) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()[:24]
 
 
+class AcknowledgedTraces(Protocol):
+    """A durable record of turn traces the collector has already accepted.
+
+    The live replay's in-memory gate is reset by every daemon restart, which then
+    re-sent every completed turn of every live session (#905). This is what
+    survives the restart; the in-memory set stays the per-tick cache in front of it.
+    """
+
+    def accepted(self, trace_ids: frozenset[int]) -> frozenset[int]:
+        """The subset of ``trace_ids`` already accepted at this destination."""
+
+    def accept(self, manifest: TraceManifest) -> None:
+        """Record that the collector acknowledged every span of ``manifest``."""
+
+
 class TraceInstrumentor:
     """Plan and emit immutable turn traces over the normalized message spine.
 
@@ -1568,6 +1577,11 @@ class TraceInstrumentor:
     backfill; ``replay`` is the best-effort live convenience wrapper.
     """
 
+    REPLAY_CHUNK = 128
+    """Spans per acknowledged flush. Well under the default admission bounds
+    (2,048 items, 8 MB) at the ~10 KB a real span measures, so one turn of any
+    size is delivered as a sequence of batches that each fit."""
+
     def __init__(
         self,
         cfg: TelemetryConfig,
@@ -1575,9 +1589,13 @@ class TraceInstrumentor:
         sink: SpanSink | None = None,
         env: Mapping[str, str] | None = None,
         cost_estimator: CostEstimator | None = None,
+        acknowledged: AcknowledgedTraces | None = None,
     ) -> None:
         """``sink`` is the test/live-proxy injection seam (skips cfg/env entirely
         when supplied); otherwise built from ``cfg`` via :func:`build_span_sink`.
+
+        ``acknowledged`` makes the live replay's once-only gate survive a
+        restart; without it the gate is in-memory, as it always was.
 
         ``cost_estimator`` is the ONLY source of ``cost_details`` — this module
         still carries no pricing config of its own. Grove's model-pricing
@@ -1606,6 +1624,11 @@ class TraceInstrumentor:
         # This is an id set, never a positional cursor: insertion before a
         # recorded turn cannot make later completed turns look acknowledged.
         self._emitted: set[int] = set()
+        # Spans of a partly-delivered turn already acknowledged, by trace id.
+        # In-memory on purpose: after a restart the turn is re-sent whole once,
+        # which is bounded, where re-sending it every tick was not.
+        self._progress: dict[int, int] = {}
+        self._acknowledged = acknowledged
 
     @property
     def enabled(self) -> bool:
@@ -1622,11 +1645,12 @@ class TraceInstrumentor:
         session_group_id: str | None = None,
         identity: TraceIdentity | None = None,
     ) -> None:
-        """Emit newly completed turns once per live instrumentor instance.
+        """Emit each newly completed turn once, across restarts when ``acknowledged`` is set.
 
-        Never raises. This in-memory gate prevents poll-loop export storms; a
-        historical/cold replay must go through the durable coordinator because
-        OTLP ingestion itself is not an idempotency boundary.
+        Never raises. The gate prevents poll-loop export storms, because OTLP
+        ingestion itself is not an idempotency boundary; a historical/cold
+        replay still goes through the durable coordinator, which reconciles
+        against what the backend already holds.
         """
         if not self.enabled:
             return
@@ -1641,6 +1665,12 @@ class TraceInstrumentor:
                 for item in _completed_turns(main_thread, session_id)
                 if item.trace_id not in self._emitted
             )
+            if pending and self._acknowledged is not None:
+                # Paid once per turn per process: what the store knows joins the
+                # in-memory set, so a quiet session's tick never reaches it again.
+                known = self._acknowledged.accepted(pending)
+                self._emitted.update(known)
+                pending -= known
             for manifest in self._plan_messages(
                 messages,
                 cwd,
@@ -1652,11 +1682,22 @@ class TraceInstrumentor:
                 identity=identity,
                 trace_ids=pending,
             ):
-                for record in manifest.spans:
-                    sink(record)
-                if not sink.flush():
-                    raise RuntimeError("OpenTelemetry span sink did not acknowledge the replay")
+                # Chunked so no turn has to fit the processor's admission bounds
+                # at once: a turn over them (one measured at 1,275 spans and
+                # 8.4 MB) was refused in part on EVERY tick, so it was never
+                # acknowledged and its admitted prefix was re-sent forever. A
+                # retry resumes at the first unacknowledged chunk (#905).
+                done = self._progress.get(manifest.trace_id, 0)
+                for start in range(done, len(manifest.spans), self.REPLAY_CHUNK):
+                    for record in manifest.spans[start : start + self.REPLAY_CHUNK]:
+                        sink(record)
+                    if not sink.flush():
+                        raise RuntimeError("OpenTelemetry span sink did not acknowledge the replay")
+                    self._progress[manifest.trace_id] = start + self.REPLAY_CHUNK
+                self._progress.pop(manifest.trace_id, None)
                 self._emitted.add(manifest.trace_id)
+                if self._acknowledged is not None:
+                    self._acknowledged.accept(manifest)
         except Exception as exc:  # best-effort — mirrors peek()'s discipline
             logger.debug("trace replay failed for session {}: {}", session_id, exc)
 

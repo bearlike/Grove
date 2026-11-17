@@ -93,15 +93,6 @@ if TYPE_CHECKING:
 ProviderResolver = Callable[[str, TicketProviderName], "TicketProvider | None"]
 TodoResolver = Callable[[str, str], "TodoList | None"]
 PhaseResolver = Callable[[str, str], "PhaseReport | None"]
-# ``TaskResolver`` is the UNCAPPED task text. ``WorkspaceActivity`` already
-# carries ``current_task``, but every adapter truncates that field to 500
-# characters because it rides the ~1 Hz activity delta for every workspace on
-# the host — correct there, a pure loss here, where the comment renders it once
-# per flush behind a fold. So the wire field stays capped and this per-request
-# seam answers whole, the same split the todo axis already makes (counts on the
-# tick, the full list behind a per-request read). ``None`` means "no task text
-# yet", a real answer; the capped field is the fallback.
-TaskResolver = Callable[[str, str], "str | None"]
 # Is ANY live workspace still holding one of these refs? Asked only when a
 # workspace ends, so the finale can say whether the ticket has been dropped
 # rather than only that this workspace stopped — a fact the publisher cannot
@@ -256,7 +247,7 @@ readability decision the render owns, not a bound on the text: nothing is cut.""
 _TAG_MARKUP = re.compile(r"</?[A-Za-z][^<>]*>")
 """Tag-shaped constructs in agent-written task text.
 
-``current_task`` is a transcript excerpt, so it carries whatever harness-internal
+Agent-written text (a phase note, a ticket title) carries whatever harness-internal
 markup the agent's own protocol uses (``<teammate-message teammate_id=… >``).
 Stripping is not cosmetic: both forges' HTML sanitizers drop an unknown tag
 anyway, so the rendered comment ALREADY loses it — leaving it in only makes the
@@ -371,7 +362,6 @@ class PublishSnapshot:
     agent_name: str
     agent_kind: str | None
     state: AgentActivityState
-    current_task: str | None
     todo: TodoList | None
     phase: PhaseReport | None
     latest_commit: CommitSummary | None
@@ -493,7 +483,6 @@ class TicketStatusPublisher:
         provider_resolver: ProviderResolver,
         todo_resolver: TodoResolver,
         phase_resolver: PhaseResolver,
-        task_resolver: TaskResolver | None = None,
         holder_resolver: HolderResolver | None = None,
         transcript_probe: TranscriptProbe | None = None,
         assigner: TicketAssigner | None = None,
@@ -504,7 +493,6 @@ class TicketStatusPublisher:
         self._provider_resolver = provider_resolver
         self._todo_resolver = todo_resolver
         self._phase_resolver = phase_resolver
-        self._task_resolver = task_resolver
         self._holder_resolver = holder_resolver
         self._transcript_probe = transcript_probe
         self._assigner = assigner
@@ -574,12 +562,6 @@ class TicketStatusPublisher:
             except GroveError:
                 return None
 
-        def task_resolver(repo_root: str, workspace_id: str) -> str | None:
-            try:
-                return registry.get(Path(repo_root)).latest_task(workspace_id)
-            except GroveError:
-                return None
-
         def holder_resolver(repo_root: str, refs: Sequence[TicketRef]) -> bool:
             """Is any LIVE workspace still tracking one of these refs?
 
@@ -598,7 +580,6 @@ class TicketStatusPublisher:
             provider_resolver=provider_resolver,
             todo_resolver=todo_resolver,
             phase_resolver=phase_resolver,
-            task_resolver=task_resolver,
             holder_resolver=holder_resolver,
             transcript_probe=transcript_probe,
             assigner=assigner,
@@ -849,13 +830,11 @@ class TicketStatusPublisher:
             return  # no target can carry the mirror for this workspace → skip silently
         todo = self._todo(ws.repo_root, ws.id)
         phase = self._phase(ws.repo_root, ws.id)
-        task = self._task(ws.repo_root, ws.id)
         tickets = tuple(self._enrich(ws.repo_root, ref) for ref in ws.ticket_refs)
         snapshot = self._snapshot(
             job.row,
             todo=todo,
             phase=phase,
-            task=task,
             tickets=tickets,
             # Repo-level links come from the first eligible target's provider:
             # every target is a tracker for THIS repo and the branch is the same
@@ -952,7 +931,11 @@ class TicketStatusPublisher:
         context = target.provider.context
         if not (root and context and comment_id):
             return None
-        segment = "pulls" if target.kind == "pull_request" else "issues"
+        segment = "issues"
+        if target.kind == "pull_request":
+            # GitHub serves a PR at /pull/<n>; its /pulls/<n> is a different page.
+            # Gitea uses /pulls/<n>.
+            segment = "pull" if target.provider.name == "github" else "pulls"
         authority = root.split("//", 1)[-1]  # already protocol-relative, or has no scheme at all
         return f"//{authority}/{context}/{segment}/{target.ticket_id}#issuecomment-{comment_id}"
 
@@ -1027,16 +1010,6 @@ class TicketStatusPublisher:
             return self._phase_resolver(repo_root, workspace_id)
         except Exception as exc:  # best-effort: a phase read miss never blocks the update
             logger.debug("issueops phase read failed for {}: {}", workspace_id, exc)
-            return None
-
-    def _task(self, repo_root: str, workspace_id: str) -> str | None:
-        """The uncapped task text, or ``None`` to fall back to the capped field."""
-        if self._task_resolver is None:
-            return None
-        try:
-            return self._task_resolver(repo_root, workspace_id)
-        except Exception as exc:  # best-effort: a task read miss never blocks the update
-            logger.debug("issueops task read failed for {}: {}", workspace_id, exc)
             return None
 
     def _enrich(self, repo_root: str, ref: TicketRef) -> TicketRef:
@@ -1190,7 +1163,7 @@ class TicketStatusPublisher:
         # in the comment should be stated once.
         lines += cls._summary_table(s, claim, stamp="Updated")
         lines += cls._progress_section(claim)
-        lines += cls._activity_section(s)
+        lines += cls._activity_section(s, claim)
         lines += cls._checklist_section(s)
         lines += cls._sessions_section(s)
         lines += cls._tracking_section(s)
@@ -1386,8 +1359,12 @@ class TicketStatusPublisher:
         return cls._section(_ICON_PHASE, "Progress", body, open_=True)
 
     @classmethod
-    def _activity_section(cls, s: PublishSnapshot) -> list[str]:
-        """What the agent is doing right now — whole, wrapped, and out of the way.
+    def _activity_section(cls, s: PublishSnapshot, claim: PhaseClaim | None) -> list[str]:
+        """What the agent says it is doing — its phase note, wrapped, out of the way.
+
+        The text is the agent's own phase note, NEVER the transcript excerpt
+        (``current_task``): that excerpt is often the user's last prompt, and a
+        forge comment would publish it to everyone who can read the ticket.
 
         The title says only "Latest activity". It used to carry a cut-down
         preview of the text, which was the worst of both: a reader who wanted
@@ -1401,7 +1378,7 @@ class TicketStatusPublisher:
         ``[updated …]`` line gives the excerpt the timestamp it otherwise lacks
         once it is behind a fold.
         """
-        text = cls._plain_task(s.current_task)
+        text = cls._plain_task(claim.note) if claim is not None else None
         if not text:
             return []
         wrapped = textwrap.wrap(text, width=_TASK_WRAP_WIDTH) or [text]
@@ -1721,7 +1698,6 @@ class TicketStatusPublisher:
         *,
         todo: TodoList | None,
         phase: PhaseReport | None,
-        task: str | None,
         tickets: tuple[TicketRef, ...],
         links: TicketProvider,
         terminal: bool,
@@ -1740,9 +1716,6 @@ class TicketStatusPublisher:
             agent_name=ws.agent_name,
             agent_kind=ws.agent_kind,
             state=primary.state if primary is not None else AgentActivityState.UNKNOWN,
-            # The uncapped read wins; the delta's own 500-char field is the
-            # fallback for a workspace whose session cannot be resolved.
-            current_task=task or (primary.current_task if primary is not None else None),
             todo=todo,
             phase=phase,
             latest_commit=commit,
@@ -1816,7 +1789,6 @@ class TicketStatusPublisher:
         phase = row.phase
         return (
             primary.state if primary is not None else None,
-            primary.current_task if primary is not None else None,
             primary.tool_calls if primary is not None else 0,
             primary.assistant_replies if primary is not None else 0,
             # The LIVE branch, not the recorded one: a create-time snapshot never

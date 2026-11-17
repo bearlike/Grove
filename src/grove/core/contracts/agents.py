@@ -11,8 +11,9 @@ paths and secrets, and a picker needs neither.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from grove.core.config import AgentKind, AgentSpec
 
@@ -81,18 +82,53 @@ class AgentSummaryView(BaseModel):
     bare shell, or discovery found none), in which case the picker offers only a
     free-text field."""
 
+    efforts: tuple[str, ...] = Field(default_factory=tuple)
+    """Reasoning-effort levels this agent accepts as ``CreateWorkspaceRequest.effort``,
+    lowest first, in the tool's own spelling. Unlike ``models`` this IS the allowlist,
+    because each level becomes a launch flag the tool validates. Empty when the agent
+    has no launch-time effort setting, in which case a picker offers none."""
+
+    launch_modes: tuple[Literal["native", "terminal"], ...] = ("terminal",)
+    """Which launch modes ``CreateWorkspaceRequest.native`` may pick for this entry.
+    ``("native",)`` has no terminal launch, ``("terminal",)`` no native protocol."""
+
+    runtimes: tuple[Literal["host", "container", "remote"], ...] = ("host", "container")
+    """Where this entry can run. ``remote`` only for an entry that can launch
+    natively, because a remote workload is reached only through a native worker
+    dialling back."""
+
     @classmethod
-    def from_spec(cls, spec: AgentSpec, *, models: Sequence[str] = ()) -> AgentSummaryView:
-        """Serialize one ``AgentSpec``. ``models`` is the per-agent catalog the
-        daemon already resolved (kept out of this pure view so it never runs the
-        Codex subprocess itself); defaults to empty for callers that don't
-        surface models."""
+    def from_spec(
+        cls,
+        spec: AgentSpec,
+        *,
+        models: Sequence[str] = (),
+        efforts: Sequence[str] = (),
+    ) -> AgentSummaryView:
+        """Serialize one ``AgentSpec``.
+
+        Args:
+            spec: The configured agent.
+            models: The per-agent catalog the daemon already resolved, kept out
+                of this pure view so it never runs the Codex subprocess itself.
+            efforts: The agent kind's effort levels, read off its adapter.
+
+        Returns:
+            The wire summary. Both lists default to empty.
+        """
+        modes = spec.launch_modes
+        runtimes: tuple[Literal["host", "container", "remote"], ...] = (
+            ("host", "container", "remote") if "native" in modes else ("host", "container")
+        )
         return cls(
             name=spec.name,
             kind=spec.kind,
             description=spec.description,
             native=spec.owns_native_session,
             models=tuple(models),
+            efforts=tuple(efforts),
+            launch_modes=modes,
+            runtimes=runtimes,
         )
 
 

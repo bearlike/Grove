@@ -184,6 +184,9 @@
  *      thumbs; still no Reload, More or branch picker. A thumbs-down opens the
  *      vendored feedback dialog under it. See `./turn-actions`.
  *
+ *  18. TEXT RENDERS THROUGH THE MARKDOWN PORT, so a Mermaid fence draws as a
+ *      diagram with a toggle back to its source. See `./markdown-text`.
+ *
  * `components/assistant-ui/thread.tsx` stays in place, unmodified: it is the
  * oracle this file is diffed against. Nothing renders it any more — the
  * archived-session route switched to THIS file precisely so a transcript is
@@ -191,7 +194,7 @@
  */
 
 import { ThreadFollowupSuggestions } from "@/components/assistant-ui/follow-up-suggestions";
-import { MarkdownText } from "@/components/assistant-ui/markdown-text";
+import { MarkdownText } from "./markdown-text";
 import {
   Reasoning,
   ReasoningContent,
@@ -416,16 +419,10 @@ const ThreadRoot: FC<{
             inset,
           )}
         >
-          {/* The fade ends at the composer, not above the generating status.
-              Let this region size it so loader/queue changes need no measurement. */}
-          <div className="relative isolate flex flex-col gap-4 pb-4">
-            <AuiIf condition={(s) => !s.thread.isDisabled}>
-              <div
-                aria-hidden
-                data-testid="scroll-edge-bottom"
-                className="scroll-edge-bottom pointer-events-none absolute left-1/2 -top-6 bottom-0 -z-10 w-[100cqw] -translate-x-1/2"
-              />
-            </AuiIf>
+          {/* No lower fade: the footer is opaque and nothing scrolls under it,
+              so a gradient here only darkened the status region down to the
+              composer's top edge and left the composer row as a lighter band. */}
+          <div className="flex flex-col gap-4 pb-4">
             <ThreadFollowupSuggestions />
             {footer}
           </div>

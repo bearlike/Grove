@@ -219,8 +219,10 @@ registers a repo you are not currently standing in.
 | `grove show [<ref>]` | One workspace's git, agent, transcript and live pane state |
 | `grove fleet` | Every workspace on the host, as JSON |
 | `grove message <ref> <text>` | Steer a running agent |
+| `grove control run <name> -w <ref>` | Trigger a session control: `compact`, a slash command, a skill, `grove:<name>` (`ls` lists them, `model <id>` switches model) |
 | `grove phase [<ref>] [<phase>] [--ticket <ticket-ref>] [--blocked] [--note <text>]` | Read a phase, or set one — the workspace's own or one ticket's — from outside |
 | `grove tickets attach\|list\|detach <ref> [--workspace <id>]` | Issue and pull request links |
+| `grove artifacts attach <path-or-url> [--title <text>]`, `grove artifacts list`, `grove artifacts detach <ref>` | Files and links a workspace hands back, opened from its Info tab |
 | `grove tickets handover <ref>`, `grove tickets owned`, `grove tickets handback <ref>` | Hand an issue to the fleet by assigning it, list what the fleet holds, give one back |
 | `grove pause\|resume\|respawn\|kill <ref>` | Lifecycle |
 | `grove attach <ref>` | Drop into the workspace's live tmux session yourself |
@@ -260,7 +262,7 @@ from here.
 | Lifecycle | `grove_create_workspace`, `grove_pause_workspace`, `grove_resume_workspace`, `grove_respawn_workspace`, `grove_kill_workspace` |
 | Workspace metadata | `grove_update_workspace` |
 | Steering | `grove_send_workspace_message`, `grove_set_workspace_phase` |
-| Links and sessions | `grove_attach_ticket`, `grove_detach_ticket`, `grove_remap_workspace_session` |
+| Links and sessions | `grove_attach_ticket`, `grove_detach_ticket`, `grove_attach_artifact`, `grove_detach_artifact`, `grove_remap_workspace_session` |
 
 `grove_list_projects` takes no arguments and returns the repo roots every other
 tool wants, so start there.
@@ -292,13 +294,13 @@ Attach the pull request the agent opens from outside when the agent cannot reach
 the relevant CLI or MCP tool.
 
 You do not have to restate the reporting contract in your prompt. By default
-Grove hands every new workspace a one-paragraph brief on its first turn
+Grove hands every new workspace a short brief once its agent starts working,
 pointing it at the companion `working-in-grove` skill, and `--no-brief` turns
-that off per workspace. How it arrives differs, and the difference bites in a
-container: a host `claude_code` agent gets it from Grove's status hook whether
-or not you gave it a task, while an agent with no such hook gets it prepended to
-the initial prompt — so a container workspace created with no `--prompt` is
-never briefed at all.
+that off per workspace. It arrives the same way for every agent kind and
+runtime, as a Grove-fenced message. Leave the title out and Grove names the
+workspace `wk-` plus random hex, then asks the agent (at most twice) to rename
+it. To send any configured instruction now, use
+`grove trigger fire <rule>` with `-w <id>`, `--all`, or a filter.
 
 ## Native sessions and peer mail
 
@@ -340,8 +342,11 @@ schema before supplying flags.
 ## The other Grove skills
 
 - **`leading-in-grove`** — the judgement on top of these verbs when you lead a
-  fleet toward one deliverable: splitting the work, onboarding and check-ins,
-  answering teammates, verifying what lands, and teardown.
+  fleet toward one deliverable: whether a piece of work is a teammate's concern
+  or a native subagent's task (a workspace owns a concern and runs subagents
+  inside it; it is never a substitute for one), splitting by ownership,
+  onboarding and check-ins, answering teammates, verifying what lands, and
+  teardown.
 - **`working-in-grove`** — the same fleet seen from the inside, including a
   mailbox worker's peer-message workflow. Point a workspace agent at it rather
   than restating the phase or mailbox contract in every prompt.

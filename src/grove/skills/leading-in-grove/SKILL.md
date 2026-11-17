@@ -1,6 +1,6 @@
 ---
 name: leading-in-grove
-description: Use when you lead a fleet of Grove teammates toward one deliverable, including deciding how many to spawn and how to split the work, writing their onboarding prompt, getting acknowledgment, running scheduled check-ins, answering their mailbox questions, keeping tickets and your own status compaction-proof, reviewing and deploying what lands on main, and tearing the fleet down. Also use when a teammate stalls, overbuilds, goes quiet, or when the user asks where everything stands. For the Grove verbs themselves use using-grove. For the teammate's side use working-in-grove.
+description: Use when you lead a fleet of Grove teammates toward one deliverable, including deciding whether a piece of work is a teammate's concern or a native subagent's task, how many teammates to spawn and how to split by ownership, writing their onboarding prompt, getting acknowledgment, running scheduled check-ins, answering their mailbox questions, keeping tickets and your own status compaction-proof, reviewing and deploying what lands on main, and tearing the fleet down. Also use when a teammate stalls, overbuilds, goes quiet, or when the user asks where everything stands. A Grove teammate owns a concern with its own worktree, tickets and context boundary and runs native subagents inside it; a bounded task that needs an answer rather than an owner is a native subagent, never a workspace. For the Grove verbs themselves use using-grove. For the teammate's side use working-in-grove.
 ---
 
 # Leading in Grove
@@ -32,6 +32,42 @@ to follow up, what to verify, and what to write down.
 - **Be a colleague, not a form.** Teammates write to you like colleagues write
   email. Give them examples, not templates; decisions, not bureaucracy. Over-
   structured check-ins produce over-structured, empty replies.
+
+## A teammate is not a subagent
+
+Your harness gives you native subagents (an `Agent`/`Task` tool, a sub-session
+that shares your model and inherits your context). Grove gives you teammates
+(a workspace: its own worktree, its own tmux server, its own provider boot, its
+own tickets and mailbox address). They are not two sizes of the same thing,
+and the most common leadership mistake is to reach for a teammate where a
+subagent was the unit of work.
+
+- **A teammate owns a concern.** It exists when a slice of the deliverable needs
+  its own context boundary and its own accountable owner: a branch that will
+  take hours and several commits, a ticket that publishes its own phase and
+  checklist, work that should survive your compaction and your session ending.
+  A teammate runs its own subagents inside its workspace for the micro-tasks
+  under its concern. Two or three teammates is a normal fleet; ten is a sign
+  you split by task instead of by ownership.
+- **A subagent does a task.** A bounded, read-only or single-file piece of work
+  whose result you consume: a census, a search, a draft, a review of one diff, a
+  lookup across many files. It needs no ticket, no branch, no mailbox and no
+  provider boot of its own, and it is done in minutes.
+- **Native subagents are used inside Grove workspaces, never instead of them,
+  and teammates are never used instead of subagents.** Ask of every piece of
+  work: does it need an owner, or does it need an answer? An owner is a
+  teammate. An answer is a subagent.
+- **The cost is not symmetric.** A teammate is a full agent session booting
+  through whatever gateway the host uses, holding a tmux server and a worktree
+  for as long as it lives, and reporting on a ticket people read. Six of them
+  spawned at once for one afternoon's work is six boots, six worktrees, six
+  tickets and a leader who cannot keep up. Spawn one per concern, and only once
+  that concern is real.
+
+"You orchestrate; you do not implement" above does not mean every edit belongs
+to a teammate. A one-file fix the fleet is blocked on is yours to make, in your
+own worktree, landed through the same gates. Delegating it costs a boot and a
+ticket; doing it costs five minutes.
 
 ## Before you spawn anyone
 

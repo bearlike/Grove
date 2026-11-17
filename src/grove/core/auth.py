@@ -34,12 +34,12 @@ import hmac
 import json
 import secrets
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar, TypedDict
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from loguru import logger
@@ -54,21 +54,11 @@ from grove.core.errors import (
     PairingNotFound,
     SessionNotFound,
 )
+from grove.core.record_file import RecordCodec, RecordFile, RecordFileUnreadable
 
 _TOKEN_PREFIX = "grove_v1_"
 _TOKEN_BYTES = 32  # 256 bits — well above any practical bearer-token entropy bar
-_FILE_VERSION = 1
-
-
-class _StoreData(TypedDict):
-    """Typed mirror of the on-disk JSON shape, post-decode.
-
-    Used internally by ``SessionStore._load`` / ``_save`` so mypy can narrow
-    ``data["sessions"]`` to ``list[Session]`` without ``# type: ignore``.
-    """
-
-    challenges: list[PairingChallenge]
-    sessions: list[Session]
+_FILE_VERSION = 2
 
 
 # Crockford-ish: no 0/O, 1/I/L, U (sounds like V). 28 distinct characters; an
@@ -99,7 +89,7 @@ _TERMINAL_CHALLENGE_STATES: frozenset[ChallengeState] = frozenset(
 )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PairingChallenge:
     """A single pairing attempt — id + label + code + state, no token data.
 
@@ -130,7 +120,13 @@ class PairingChallenge:
         )
 
 
-@dataclass(slots=True)
+#: The subject a session with no OIDC identity stands for: this host's own
+#: user, reached by pairing or a same-UID mint. Also what a workspace created
+#: before identity existed, or by an in-process caller, records as its creator.
+LOCAL_SUBJECT = "local"
+
+
+@dataclass(frozen=True, slots=True)
 class Session:
     """A long-lived authenticated session — bearer-token hash + metadata."""
 
@@ -141,6 +137,11 @@ class Session:
     expires_at: datetime
     last_seen_at: datetime
     revoked_at: datetime | None
+    # The person an OIDC sign-in minted this bearer for. Empty is the local
+    # host user a pairing or same-UID mint stands for, so every session written
+    # before OIDC existed decodes as exactly what it was.
+    subject: str = ""
+    issuer: str = ""
 
     def is_active(self, *, now: datetime) -> bool:
         """Whether this bearer is still valid."""
@@ -186,24 +187,26 @@ def _hash_token(token: str) -> str:
 class SessionStore:
     """Atomic owner of pairing challenges and sessions.
 
-    Single class, methods on the state. Methods that mutate persist their
-    result before returning. Read methods garbage-collect expired
-    challenges + sessions on the way out so the on-disk file stays bounded.
+    Single class, methods on the state. Every mutation persists its result
+    before returning, and expired or revoked records are dropped on the way so
+    the file stays bounded.
 
-    Concurrency: daemon and TUI/CLI run in different processes but share
-    the same JSON file, and "the daemon slides a session TTL while the user
-    approves a pairing" is ordinary use, not an exotic race. Each operation is
-    a read-modify-write published by `paths.write_atomic`, whose private temp
-    name is what makes a concurrent write fail *safely* — the accepted residual
-    is last-writer-wins (a lost transition the user can retry), never the
-    interleaved file a shared temp name produced, which no verb can repair and
-    which costs every paired device its session. A process-local `RLock`
-    guards the in-memory mutation; a cross-process advisory lock would
-    be needed to close the lost update too, and is deliberately still absent.
+    Concurrency: daemon and TUI/CLI run in different processes but share one
+    file, and "the daemon slides a session TTL while the user approves a
+    pairing" is ordinary use. Persistence is a :class:`RecordFile`, so every
+    mutation is a read-modify-write under the cross-process file lock and a
+    read is one ``stat`` against a frozen snapshot. ``validate`` runs on every
+    authenticated request, which is why that matters: it used to re-read and
+    re-decode the whole file per call (measured 62.5 ms on a 4.3 MB file).
     """
 
     _PAIR_INIT_WINDOW: ClassVar[timedelta] = timedelta(minutes=1)
     _PAIR_POLL_WINDOW: ClassVar[timedelta] = timedelta(minutes=1)
+    #: How long a REVOKED session stays listed. A revoked bearer can never
+    #: validate again, so it is kept only so the device list can show a recent
+    #: revocation; retaining it for its whole 30-day TTL let `local-mailbox`
+    #: retirements (one per mail send) reach 9,953 dead rows on one host.
+    REVOKED_RETENTION: ClassVar[timedelta] = timedelta(days=1)
 
     def __init__(
         self,
@@ -228,6 +231,17 @@ class SessionStore:
         # ``source`` is the requester address (or "<local>" for in-process
         # callers). Bounded by the GC step inside ``_check_rate``.
         self._rate_log: dict[tuple[str, str], list[datetime]] = {}
+        # Losing this file signs out every paired device, so a file with no
+        # trustworthy header stays a loud error rather than an empty store.
+        self._file: RecordFile[_Record] = RecordFile(
+            self._path,
+            store="auth",
+            version=_FILE_VERSION,
+            codec=RecordCodec(key=_record_key, encode=_encode_record, decode=_decode_record),
+            legacy=_legacy_records,
+            on_unreadable="raise",
+            mode=0o600,
+        )
 
     @property
     def path(self) -> Path:
@@ -256,15 +270,13 @@ class SessionStore:
         with self._lock:
             now = self._clock()
             self._check_rate("init", requester_addr, now, self._pair_init_limit)
-            data = self._load(now)
             challenge = PairingChallenge.fresh(
                 label=cleaned,
                 code=_generate_code(self._rng),
                 now=now,
                 ttl=self._pairing_ttl,
             )
-            data["challenges"].append(challenge)
-            self._save(data)
+            self._put(now, challenge)
             logger.info(
                 "pairing.init label={!r} code={} expires_at={}",
                 challenge.label,
@@ -283,37 +295,11 @@ class SessionStore:
         signal approval; the browser's polling endpoint is what actually
         receives the token.
         """
-        with self._lock:
-            now = self._clock()
-            data = self._load(now)
-            challenge = self._find_challenge(data["challenges"], challenge_id)
-            if challenge.state == ChallengeState.APPROVED:
-                return challenge
-            if challenge.state in _TERMINAL_CHALLENGE_STATES:
-                raise PairingAlreadyResolved(
-                    f"pairing {challenge_id} is already {challenge.state.value}"
-                )
-            challenge.state = ChallengeState.APPROVED
-            self._save(data)
-            logger.info("pairing.approve challenge_id={} label={!r}", challenge_id, challenge.label)
-            return challenge
+        return self._resolve(challenge_id, ChallengeState.APPROVED, "pairing.approve")
 
     def pair_deny(self, challenge_id: UUID) -> PairingChallenge:
         """Flip a pending challenge to ``DENIED``. Terminal."""
-        with self._lock:
-            now = self._clock()
-            data = self._load(now)
-            challenge = self._find_challenge(data["challenges"], challenge_id)
-            if challenge.state == ChallengeState.DENIED:
-                return challenge
-            if challenge.state in _TERMINAL_CHALLENGE_STATES:
-                raise PairingAlreadyResolved(
-                    f"pairing {challenge_id} is already {challenge.state.value}"
-                )
-            challenge.state = ChallengeState.DENIED
-            self._save(data)
-            logger.info("pairing.deny challenge_id={} label={!r}", challenge_id, challenge.label)
-            return challenge
+        return self._resolve(challenge_id, ChallengeState.DENIED, "pairing.deny")
 
     def pair_poll(
         self,
@@ -331,31 +317,26 @@ class SessionStore:
         with self._lock:
             now = self._clock()
             self._check_rate("poll", requester_addr, now, self._pair_poll_limit)
-            data = self._load(now)
-            challenge = self._find_challenge(data["challenges"], challenge_id)
-            if challenge.state != ChallengeState.APPROVED:
-                # Pending / denied / consumed / expired → nothing to mint.
-                return challenge, None
-            # Mint and return the token, transition to consumed, persist.
-            token = _generate_token(self._rng)
-            session = Session(
-                session_id=uuid4(),
-                label=challenge.label,
-                token_hash=_hash_token(token),
-                created_at=now,
-                expires_at=now + self._session_ttl,
-                last_seen_at=now,
-                revoked_at=None,
-            )
-            data["sessions"].append(session)
-            challenge.state = ChallengeState.CONSUMED
-            self._save(data)
-            logger.info(
-                "pairing.consume challenge_id={} session_id={} label={!r}",
-                challenge_id,
-                session.session_id,
-                session.label,
-            )
+            outcome: list[tuple[PairingChallenge, str | None]] = []
+
+            def change(records: Mapping[str, _Record]) -> dict[str, _Record] | None:
+                challenge = self._find_challenge(records, challenge_id, now=now)
+                if challenge.state != ChallengeState.APPROVED:
+                    # Pending / denied / consumed / expired → nothing to mint.
+                    outcome.append((challenge, None))
+                    return None
+                token = _generate_token(self._rng)
+                session = self._new_session(challenge.label, token, now)
+                consumed = replace(challenge, state=ChallengeState.CONSUMED)
+                outcome.append((consumed, token))
+                return {**records, _record_key(consumed): consumed, _record_key(session): session}
+
+            self._mutate(now, change)
+            challenge, token = outcome[0]
+            if token is not None:
+                logger.info(
+                    "pairing.consume challenge_id={} label={!r}", challenge_id, challenge.label
+                )
             return challenge, token
 
     # ─── local self-approved sessions ──────────────────────────────────────
@@ -380,30 +361,40 @@ class SessionStore:
         """
         with self._lock:
             now = self._clock()
-            data = self._load(now)
-            retired = 0
-            for session in data["sessions"]:
-                if (
-                    session.label == label
-                    and session.revoked_at is None
-                    and now - session.last_seen_at > self.LOCAL_IDLE_REVOKE_AFTER
-                ):
-                    session.revoked_at = now
-                    retired += 1
             token = _generate_token(self._rng)
-            data["sessions"].append(
-                Session(
-                    session_id=uuid4(),
-                    label=label,
-                    token_hash=_hash_token(token),
-                    created_at=now,
-                    expires_at=now + self._session_ttl,
-                    last_seen_at=now,
-                    revoked_at=None,
-                )
-            )
-            self._save(data)
-            logger.info("session.mint_local label={!r} retired_idle={}", label, retired)
+            session = self._new_session(label, token, now)
+            retired: list[int] = [0]
+
+            def change(records: Mapping[str, _Record]) -> dict[str, _Record]:
+                updated = dict(records)
+                for key, record in records.items():
+                    if (
+                        isinstance(record, Session)
+                        and record.label == label
+                        and record.revoked_at is None
+                        and now - record.last_seen_at > self.LOCAL_IDLE_REVOKE_AFTER
+                    ):
+                        updated[key] = replace(record, revoked_at=now)
+                        retired[0] += 1
+                updated[_record_key(session)] = session
+                return updated
+
+            self._mutate(now, change)
+            logger.info("session.mint_local label={!r} retired_idle={}", label, retired[0])
+            return token
+
+    def mint_human(self, label: str, *, subject: str, issuer: str) -> str:
+        """Mint a bearer for a person whose OIDC ID token the caller has already verified.
+
+        The session lives as long as any other, so a signed-in user does not
+        re-present an ID token on every request; revoking it signs them out.
+        """
+        with self._lock:
+            now = self._clock()
+            token = _generate_token(self._rng)
+            session = replace(self._new_session(label, token, now), subject=subject, issuer=issuer)
+            self._mutate(now, lambda records: {**records, _record_key(session): session})
+            logger.info("session.mint_human label={!r} issuer={}", label, issuer)
             return token
 
     # ─── session lifecycle ─────────────────────────────────────────────────
@@ -413,71 +404,203 @@ class SessionStore:
 
         Raises ``AuthInvalidToken`` for missing / malformed / unrecognized /
         revoked / expired tokens. Constant-time compares the candidate hash
-        against every stored hash (O(N), but N is small in practice).
+        against every stored hash (O(N), but N is small in practice). Reads the
+        snapshot, so an unchanged file costs one ``stat``; it writes only when
+        the TTL slides, which is throttled per session.
         """
         if not token or not token.startswith(_TOKEN_PREFIX):
             raise AuthInvalidToken("malformed token")
         candidate = _hash_token(token)
         with self._lock:
             now = self._clock()
-            data = self._load(now)
-            for session in data["sessions"]:
+            for session in self._sessions():
                 if not hmac.compare_digest(session.token_hash, candidate):
                     continue
                 if not session.is_active(now=now):
                     raise AuthInvalidToken("token revoked or expired")
                 if now - session.last_seen_at > _LAST_SEEN_WRITE_THROTTLE:
-                    session.last_seen_at = now
-                    session.expires_at = now + self._session_ttl
-                    self._save(data)
+                    slid = replace(session, last_seen_at=now, expires_at=now + self._session_ttl)
+                    self._put(now, slid)
+                    return slid
                 return session
             raise AuthInvalidToken("token not recognized")
 
     def revoke(self, session_id: UUID) -> None:
         with self._lock:
             now = self._clock()
-            data = self._load(now)
-            for session in data["sessions"]:
-                if session.session_id == session_id:
-                    if session.revoked_at is not None:
-                        return
-                    session.revoked_at = now
-                    self._save(data)
-                    logger.info("session.revoke session_id={}", session_id)
-                    return
-            raise SessionNotFound(f"no session with id {session_id}")
+            key = f"s:{session_id}"
+            found: list[bool] = [False]
+
+            def change(records: Mapping[str, _Record]) -> dict[str, _Record] | None:
+                session = records.get(key)
+                if not isinstance(session, Session):
+                    return None
+                found[0] = True
+                if session.revoked_at is not None:
+                    return None
+                return {**records, key: replace(session, revoked_at=now)}
+
+            self._mutate(now, change)
+            if not found[0]:
+                raise SessionNotFound(f"no session with id {session_id}")
+            logger.info("session.revoke session_id={}", session_id)
+
+    def revoke_label(self, label: str) -> int:
+        """Revoke every live session carrying ``label``; return how many.
+
+        For a credential minted for one subject (a workspace's container
+        worker), where the subject ending is the revocation edge and nobody
+        holds the session id.
+        """
+        with self._lock:
+            now = self._clock()
+            revoked: list[int] = [0]
+
+            def change(records: Mapping[str, _Record]) -> dict[str, _Record] | None:
+                updated = dict(records)
+                for key, record in records.items():
+                    if (
+                        isinstance(record, Session)
+                        and record.label == label
+                        and record.revoked_at is None
+                    ):
+                        updated[key] = replace(record, revoked_at=now)
+                        revoked[0] += 1
+                return updated if revoked[0] else None
+
+            self._mutate(now, change)
+            if revoked[0]:
+                logger.info("session.revoke_label label={!r} revoked={}", label, revoked[0])
+            return revoked[0]
 
     def list_sessions(self, *, include_revoked: bool = False) -> list[Session]:
         """All sessions; revoked sessions hidden by default."""
         with self._lock:
-            now = self._clock()
-            data = self._load(now)
-            out = list(data["sessions"])
+            sessions = self._sessions()
             if not include_revoked:
-                out = [s for s in out if s.revoked_at is None]
-            return out
+                sessions = [s for s in sessions if s.revoked_at is None]
+            return sessions
 
     def list_pending_challenges(self) -> list[PairingChallenge]:
         """Pending + approved challenges (the TUI's modal-worthy set)."""
         with self._lock:
             now = self._clock()
-            data = self._load(now)
             return [
                 c
-                for c in data["challenges"]
+                for c in self._challenges(now)
                 if c.state in {ChallengeState.PENDING, ChallengeState.APPROVED}
             ]
 
     def get_challenge(self, challenge_id: UUID) -> PairingChallenge:
         with self._lock:
             now = self._clock()
-            data = self._load(now)
-            return self._find_challenge(data["challenges"], challenge_id)
+            return self._find_challenge(self._file.records(), challenge_id, now=now)
 
     # ─── internal: persistence + rate + gc ─────────────────────────────────
 
+    def _snapshot(self) -> Mapping[str, _Record]:
+        try:
+            return self._file.records()
+        except RecordFileUnreadable as exc:
+            raise self._unreadable(str(exc)) from exc
+
+    def _sessions(self) -> list[Session]:
+        """Live sessions in creation order. Expired ones are invisible before any prune."""
+        now = self._clock()
+        sessions = [
+            r for r in self._snapshot().values() if isinstance(r, Session) and self._keeps(r, now)
+        ]
+        sessions.sort(key=lambda s: s.created_at)
+        return sessions
+
+    def _challenges(self, now: datetime) -> list[PairingChallenge]:
+        challenges = [
+            self._maybe_expire(r, now=now)
+            for r in self._snapshot().values()
+            if isinstance(r, PairingChallenge) and self._keeps(r, now)
+        ]
+        challenges.sort(key=lambda c: c.created_at)
+        return challenges
+
+    def _keeps(self, record: _Record, now: datetime) -> bool:
+        """The retention rule, applied identically on read and on every write.
+
+        A terminal challenge survives one TTL window past its expiry, so a poll
+        inside the window still sees a meaningful state. A session survives
+        until its TTL, and a revoked one only :attr:`REVOKED_RETENTION` past its
+        revocation. A registration bearer reconnects a worker that outlives a
+        daemon restart, so it lives until lifecycle revocation; its TTL is set
+        accordingly at mint, which is why TTL alone decides the unrevoked case.
+        """
+        if isinstance(record, PairingChallenge):
+            return not (
+                record.state in _TERMINAL_CHALLENGE_STATES
+                and record.expires_at < now - self._pairing_ttl
+            )
+        if record.expires_at <= now:
+            return False
+        return record.revoked_at is None or now - record.revoked_at < self.REVOKED_RETENTION
+
+    def _mutate(
+        self, now: datetime, change: Callable[[Mapping[str, _Record]], Mapping[str, _Record] | None]
+    ) -> None:
+        """Apply ``change`` under the file lock, pruning what retention drops.
+
+        The prune rides every write, never a read, so a read stays a read. A
+        ``change`` returning ``None`` still prunes, because stale records are
+        what a no-op write would otherwise carry forward.
+        """
+
+        def apply(records: Mapping[str, _Record]) -> Mapping[str, _Record] | None:
+            proposed = change(records)
+            base = records if proposed is None else proposed
+            kept = {key: record for key, record in base.items() if self._keeps(record, now)}
+            return None if proposed is None and len(kept) == len(records) else kept
+
+        try:
+            self._file.mutate(apply)
+        except RecordFileUnreadable as exc:
+            raise self._unreadable(str(exc)) from exc
+
+    def _put(self, now: datetime, record: _Record) -> None:
+        self._mutate(now, lambda records: {**records, _record_key(record): record})
+
+    def _resolve(self, challenge_id: UUID, state: ChallengeState, event: str) -> PairingChallenge:
+        """Move a pending challenge to ``state``; idempotent when already there."""
+        with self._lock:
+            now = self._clock()
+            result: list[PairingChallenge] = []
+
+            def change(records: Mapping[str, _Record]) -> dict[str, _Record] | None:
+                challenge = self._find_challenge(records, challenge_id, now=now)
+                if challenge.state == state:
+                    result.append(challenge)
+                    return None
+                if challenge.state in _TERMINAL_CHALLENGE_STATES:
+                    raise PairingAlreadyResolved(
+                        f"pairing {challenge_id} is already {challenge.state.value}"
+                    )
+                resolved = replace(challenge, state=state)
+                result.append(resolved)
+                return {**records, _record_key(resolved): resolved}
+
+            self._mutate(now, change)
+            logger.info("{} challenge_id={} label={!r}", event, challenge_id, result[0].label)
+            return result[0]
+
+    def _new_session(self, label: str, token: str, now: datetime) -> Session:
+        return Session(
+            session_id=uuid4(),
+            label=label,
+            token_hash=_hash_token(token),
+            created_at=now,
+            expires_at=now + self._session_ttl,
+            last_seen_at=now,
+            revoked_at=None,
+        )
+
     def _unreadable(self, reason: str) -> AuthStoreUnreadable:
-        """One typed storage fault for the four ways `auth.json` can be unusable.
+        """One typed storage fault for every way the auth file can be unusable.
 
         The PATH goes to the log and never into the exception: the daemon puts
         this message on the wire from `POST /auth/pair`, which is
@@ -485,80 +608,19 @@ class SessionStore:
         of the daemon log anyway.
         """
         logger.error("auth store at {} is unusable: {}", self._path, reason)
-        return AuthStoreUnreadable(f"auth store is unusable: {reason}")
+        return AuthStoreUnreadable("auth store is unusable: its file is damaged or unreadable")
 
-    def _load(self, now: datetime) -> _StoreData:
-        """Read the file, GC expired records, return the working set.
-
-        Returned dict has keys ``challenges`` and ``sessions``; values are
-        lists of in-memory `PairingChallenge` / `Session` objects. The
-        caller mutates the lists in place and calls ``_save`` to persist.
-        """
-        if not self._path.exists():
-            return {"challenges": [], "sessions": []}
-        try:
-            with self._path.open(encoding="utf-8") as fh:
-                raw = json.load(fh)
-        except json.JSONDecodeError as exc:
-            raise self._unreadable(f"invalid JSON ({exc})") from exc
-        except OSError as exc:
-            raise self._unreadable(f"cannot be read ({exc})") from exc
-        if not isinstance(raw, dict):
-            raise self._unreadable("unexpected shape (not an object)")
-        if raw.get("version") != _FILE_VERSION:
-            raise self._unreadable(
-                f"version {raw.get('version')!r} is not supported (expected {_FILE_VERSION})"
-            )
-        challenges = [self._decode_challenge(c) for c in raw.get("challenges", [])]
-        sessions = [self._decode_session(s) for s in raw.get("sessions", [])]
-        # Garbage-collect on the way in: drop terminal challenges older than
-        # one TTL window (so polls within the window still see a meaningful
-        # state) and prune sessions whose TTL has passed.
-        gc_cutoff = now - self._pairing_ttl
-        challenges = [
-            self._maybe_expire(c, now=now)
-            for c in challenges
-            if not (c.state in _TERMINAL_CHALLENGE_STATES and c.expires_at < gc_cutoff)
-        ]
-        # TTL alone decides ordinary-session retention: the
-        # `or s.revoked_at is None` this replaced kept every expired session
-        # that was never explicitly revoked — i.e. all of them, since expiry is
-        # the normal end of a session — so the file only ever grew and
-        # `validate`'s O(N) constant-time scan paid for it on every
-        # authenticated request. A registration bearer is the exception: it
-        # reconnects a worker that survives a daemon restart, so it lasts until
-        # lifecycle revocation. Revoked registrations are prunable because they
-        # cannot reconnect. Pruning reaches disk on the next mutating call
-        # (`_save` writes this working set); reads stay reads.
-        sessions = [s for s in sessions if s.expires_at > now]
-        return {"challenges": challenges, "sessions": sessions}
-
-    def _save(self, data: _StoreData) -> None:
-        paths.ensure_dir(self._path.parent)
-        payload = {
-            "version": _FILE_VERSION,
-            "challenges": [self._encode_challenge(c) for c in data["challenges"]],
-            "sessions": [self._encode_session(s) for s in data["sessions"]],
-        }
-        text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        # 0600 is applied to the staged file BEFORE it is renamed into place —
-        # the config directory is world-traversable under a default umask, so
-        # this mode is the ONLY thing protecting the file, not defence in depth
-        # over a restrictive umask. `write_atomic`'s private temp name is what
-        # keeps a concurrent daemon TTL-refresh and a TUI approve from
-        # publishing an interleaved file.
-        paths.write_atomic(self._path, text, mode=0o600)
-
-    @staticmethod
-    def _find_challenge(challenges: list[PairingChallenge], challenge_id: UUID) -> PairingChallenge:
-        for c in challenges:
-            if c.challenge_id == challenge_id:
-                return c
+    def _find_challenge(
+        self, records: Mapping[str, _Record], challenge_id: UUID, *, now: datetime
+    ) -> PairingChallenge:
+        record = records.get(f"c:{challenge_id}")
+        if isinstance(record, PairingChallenge) and self._keeps(record, now):
+            return self._maybe_expire(record, now=now)
         raise PairingNotFound(f"no pairing challenge with id {challenge_id}")
 
     @staticmethod
     def _maybe_expire(c: PairingChallenge, *, now: datetime) -> PairingChallenge:
-        """Promote a stale PENDING / APPROVED to EXPIRED in-place."""
+        """A stale PENDING / APPROVED reads as EXPIRED."""
         if c.state in _TERMINAL_CHALLENGE_STATES:
             return c
         if c.is_expired(now=now):
@@ -593,21 +655,47 @@ class SessionStore:
         if len(self._rate_log) > 1024:
             self._rate_log = {k: v for k, v in self._rate_log.items() if v and v[-1] >= cutoff}
 
-    # ─── (de)serialization ─────────────────────────────────────────────────
 
-    @staticmethod
-    def _encode_challenge(c: PairingChallenge) -> dict[str, Any]:
+# ─── persistence: one record per line ──────────────────────────────────────
+
+_Record = PairingChallenge | Session
+
+
+def _record_key(record: _Record) -> str:
+    """Challenges and sessions share one file, so the key carries the kind."""
+    if isinstance(record, PairingChallenge):
+        return f"c:{record.challenge_id}"
+    return f"s:{record.session_id}"
+
+
+def _encode_record(record: _Record) -> dict[str, Any]:
+    if isinstance(record, PairingChallenge):
         return {
-            "challenge_id": str(c.challenge_id),
-            "label": c.label,
-            "code": c.code,
-            "created_at": c.created_at.isoformat(),
-            "expires_at": c.expires_at.isoformat(),
-            "state": c.state.value,
+            "kind": "challenge",
+            "challenge_id": str(record.challenge_id),
+            "label": record.label,
+            "code": record.code,
+            "created_at": record.created_at.isoformat(),
+            "expires_at": record.expires_at.isoformat(),
+            "state": record.state.value,
         }
+    return {
+        "kind": "session",
+        "session_id": str(record.session_id),
+        "label": record.label,
+        "token_hash": record.token_hash,
+        "created_at": record.created_at.isoformat(),
+        "expires_at": record.expires_at.isoformat(),
+        "last_seen_at": record.last_seen_at.isoformat(),
+        "revoked_at": record.revoked_at.isoformat() if record.revoked_at else None,
+        "subject": record.subject,
+        "issuer": record.issuer,
+    }
 
-    @staticmethod
-    def _decode_challenge(data: dict[str, Any]) -> PairingChallenge:
+
+def _decode_record(data: dict[str, Any]) -> _Record:
+    kind = data.get("kind")
+    if kind == "challenge":
         return PairingChallenge(
             challenge_id=UUID(data["challenge_id"]),
             label=data["label"],
@@ -616,22 +704,7 @@ class SessionStore:
             expires_at=datetime.fromisoformat(data["expires_at"]),
             state=ChallengeState(data["state"]),
         )
-
-    @staticmethod
-    def _encode_session(s: Session) -> dict[str, Any]:
-        return {
-            "session_id": str(s.session_id),
-            "label": s.label,
-            "token_hash": s.token_hash,
-            "created_at": s.created_at.isoformat(),
-            "expires_at": s.expires_at.isoformat(),
-            "last_seen_at": s.last_seen_at.isoformat(),
-            "revoked_at": s.revoked_at.isoformat() if s.revoked_at else None,
-        }
-
-    @staticmethod
-    def _decode_session(data: dict[str, Any]) -> Session:
-        # contracts.__init__ exposes auth views and imports this module.
+    if kind == "session":
         revoked = data.get("revoked_at")
         return Session(
             session_id=UUID(data["session_id"]),
@@ -641,7 +714,25 @@ class SessionStore:
             expires_at=datetime.fromisoformat(data["expires_at"]),
             last_seen_at=datetime.fromisoformat(data["last_seen_at"]),
             revoked_at=datetime.fromisoformat(revoked) if revoked else None,
+            subject=data.get("subject", ""),
+            issuer=data.get("issuer", ""),
         )
+    raise ValueError(f"unknown auth record kind {kind!r}")
+
+
+def _legacy_records(raw: bytes) -> list[dict[str, Any]]:
+    """The version-1 single-document file as record dicts, kind-tagged for the codec.
+
+    Refuses an unsupported version the same way the old reader did, so a file a
+    different Grove wrote is never migrated as if it were empty.
+    """
+    data = json.loads(raw)
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise ValueError(f"version {data.get('version') if isinstance(data, dict) else None!r}")
+    return [
+        *({**row, "kind": "challenge"} for row in data.get("challenges", [])),
+        *({**row, "kind": "session"} for row in data.get("sessions", [])),
+    ]
 
 
 # Module-level constants the daemon + tests reach for to compose error envelopes.
@@ -650,6 +741,7 @@ TOKEN_PREFIX = _TOKEN_PREFIX
 
 # Exported for tests that need to hand-craft a token shape.
 __all__ = [
+    "LOCAL_SUBJECT",
     "TOKEN_PREFIX",
     "ChallengeState",
     "PairingChallenge",

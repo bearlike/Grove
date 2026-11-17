@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from grove.core.agents.hook import (
 )
 from grove.core.agents.model import AgentActivityState
 from grove.core.agents.native_owner import AskRecorder
-from grove.core.workspace import WorkspaceState, WorkspaceStatus
+from grove.core.workspace import Placement, WorkspaceState, WorkspaceStatus
 
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -524,6 +525,60 @@ def test_adoption_still_works_on_birth_without_a_pane(tmp_path: Path) -> None:
         candidate=_sidecar(cwd, ts=created + timedelta(minutes=5), tmux_pane=None),
         reference_pane=None,
         cwd=cwd,
+    )
+
+
+def _root_workspace(tmp_path: Path, *, created_at: datetime, minted: str | None) -> WorkspaceState:
+    return replace(
+        _workspace(tmp_path, created_at=created_at),
+        placement=Placement.ROOT,
+        worktree_path=str(tmp_path),
+        agent_session_id=minted,
+    )
+
+
+def test_root_workspace_does_not_adopt_a_later_siblings_session_by_birth(
+    tmp_path: Path,
+) -> None:
+    """The 2026-10-04 incident: two ROOT workspaces on one repo. The later one's
+    minted session is born after the earlier one was created, in the same cwd,
+    and with no pane to verify (a native worker). Birth used to adopt it, so the
+    earlier card ranked by, and asked attention for, a stranger's session."""
+    created = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
+    older = _root_workspace(tmp_path, created_at=created, minted="mine")
+
+    assert not ClaudeHook.adopts(
+        older,
+        created + timedelta(days=2),
+        candidate=_sidecar(tmp_path, ts=created + timedelta(days=2), tmux_pane=None),
+        reference_pane=None,
+        cwd=tmp_path,
+    )
+
+
+def test_root_workspace_still_adopts_a_session_live_in_its_own_pane(tmp_path: Path) -> None:
+    """The arm that survives: a session the user started or resumed in this
+    workspace's own pane is attributed by the pane, not the shared cwd."""
+    created = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
+    state = _root_workspace(tmp_path, created_at=created, minted="mine")
+
+    assert ClaudeHook.adopts(
+        state,
+        created + timedelta(minutes=1),
+        candidate=_sidecar(tmp_path, ts=created + timedelta(minutes=5), tmux_pane="%7"),
+        reference_pane="%7",
+        cwd=tmp_path,
+    )
+
+
+def test_root_workspace_without_a_minted_id_keeps_birth_adoption(tmp_path: Path) -> None:
+    """A root workspace whose agent mints nothing (codex) has no session of its
+    own except by discovery, so birth stays its evidence."""
+    created = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
+    state = _root_workspace(tmp_path, created_at=created, minted=None)
+
+    assert ClaudeHook.adopts(
+        state, created + timedelta(minutes=1), candidate=None, reference_pane=None, cwd=tmp_path
     )
 
 

@@ -12,6 +12,7 @@ from grove.core.config import GroveConfig
 from grove.core.contracts.activity import DashboardEvent
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
+from grove.daemon import _sse
 from grove.daemon._audience import _PollAudience
 from grove.daemon._sse import _SseHub
 
@@ -92,3 +93,40 @@ def test_unsubscribe_and_close_release_each_client_once(tmp_path: Path) -> None:
     hub.unregister(second)
     assert len(audience) == 0
     service.close()
+
+
+def test_replay_ring_is_bounded_by_bytes_as_well_as_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A count alone is no bound: one row measured 2.67 MB (2026-10-29), so a
+    512-deep ring of those retains over a gigabyte for a replay nobody asks
+    for. Under a byte budget the ring drops its OLDEST events first and
+    ``can_replay`` answers honestly for what it dropped."""
+    hub, service, _ = _hub(tmp_path)
+    payload = {"filler": "x" * 2_000}
+    one = len(
+        DashboardEvent.from_delta(
+            DashboardDelta(kind="workspace_changed", seq=0, workspace_id="w", detail=payload)
+        )
+        .model_dump_json()
+        .encode()
+    )
+    # Room for exactly three events; the ring's count bound (8) is not reached.
+    monkeypatch.setattr(_sse, "_RING_MAX_BYTES", one * 3)
+    try:
+        for index in range(6):
+            hub._publish(
+                DashboardEvent.from_delta(
+                    DashboardDelta(
+                        kind="workspace_changed", seq=index, workspace_id="w", detail=payload
+                    )
+                )
+            )
+        assert [event.seq for event in hub._ring] == [3, 4, 5]
+        assert hub._ring_bytes == one * 3
+        assert hub.can_replay(3)
+        assert not hub.can_replay(1)
+        hub._clear_ring()
+        assert hub._ring_bytes == 0 and not hub._ring
+    finally:
+        service.close()

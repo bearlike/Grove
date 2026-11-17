@@ -17,7 +17,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LaunchPill, type LaunchPillOption } from "../control-pill";
-import { type BranchMode, useLaunchControls } from "../launch-state";
+import { type BranchMode, useLaunchControls, useLaunchProblem } from "../launch-state";
+import { currentPreview } from "@/lib/grove/adapters/launch";
+import { runtimeKindOf } from "@/lib/grove/adapters/launch-flow";
 import { useBranches } from "@/lib/grove/hooks";
 
 const BRANCH_NAME_PATTERN = /^[A-Za-z0-9._/][A-Za-z0-9._/\-]*$/;
@@ -68,13 +70,23 @@ function BranchField({
 }
 
 /**
- * The five answers are one vocabulary, and every glyph in it is git-family.
+ * Every answer is one vocabulary, and every glyph in it is git-family.
  *
  * That is the rule, not an aesthetic: this row sits beside a project control and
  * a working-directory control, both of which are legitimately about folders, so
- * a folder mark HERE reads as one of them rather than as a branch choice.
+ * a folder mark HERE reads as one of them rather than as a placement choice.
+ *
+ * `root` leads because it is the built-in answer: work in the checkout you
+ * already have. The rest are the ways to get an isolated worktree, grouped
+ * under their own heading so the two kinds of answer never read as one list.
  */
-const BRANCH_MODES: Readonly<Record<BranchMode, BranchModeDefinition>> = {
+const PLACEMENTS: Readonly<Record<BranchMode, BranchModeDefinition & { readonly group: string }>> = {
+  root: {
+    label: "Current checkout",
+    glyph: GitCommitHorizontalIcon,
+    description: "no new branch or worktree",
+    group: "Work in place",
+  },
   // "Auto" named the mechanism, not the outcome — it told you Grove would
   // decide without telling you what it would decide. Every other option here
   // says what you get, so this one does too.
@@ -82,33 +94,26 @@ const BRANCH_MODES: Readonly<Record<BranchMode, BranchModeDefinition>> = {
     label: "New branch",
     glyph: GitBranchIcon,
     description: "named after your task",
+    group: "Isolated worktree",
   },
   new: {
     label: "New branch…",
     glyph: GitBranchIcon,
     description: "you choose the name",
     opensPanel: true,
+    group: "Isolated worktree",
   },
-  existing: { label: "Existing local branch", glyph: GitBranchIcon, opensPanel: true },
-  remote: { label: "Track a remote branch", glyph: GitForkIcon, opensPanel: true },
-  // NOT "Repo root", and NOT a folder glyph — both collided with a neighbour in
-  // the same row. The label collided with the working-directory pill's
-  // "Repository root", which is a genuinely different question (WHERE the agent
-  // starts, versus WHETHER Grove cuts a worktree at all), and the two read as
-  // the same setting stated twice. `FolderRootIcon` collided with the project
-  // mark (`FolderGit2Icon`), so the one folder in an otherwise git-family list
-  // was the one that looked like the control above it.
-  //
-  // "Work in place" is `RootBranch`'s own words for itself, so the engine, the
-  // docs and the pill now say the same thing. The glyph is a commit on an
-  // unbranched line, which is literally the outcome. Deliberately not the fork:
-  // `remote` already owns it, and reusing it would trade a collision with
-  // another control for a collision inside this one.
-  root: {
-    label: "Work in place",
-    glyph: GitCommitHorizontalIcon,
-    description: "no worktree · no isolation · no pause/resume",
+  existing: {
+    label: "Existing local branch",
+    glyph: GitBranchIcon,
     opensPanel: true,
+    group: "Isolated worktree",
+  },
+  remote: {
+    label: "Track a remote branch",
+    glyph: GitForkIcon,
+    opensPanel: true,
+    group: "Isolated worktree",
   },
 };
 
@@ -130,9 +135,19 @@ function localAvailabilityReason(
   return undefined;
 }
 
-/** The branch source and placement control in the launch row. */
+/**
+ * Where the work lands inside the project: the current checkout, or an
+ * isolated worktree on a branch this pill also chooses.
+ *
+ * It owns the init-script choice too, because that question only exists for
+ * the current checkout: the script is written for a fresh worktree. The
+ * Project menu used to carry both, which buried its own list under two forms.
+ */
 export function BranchPill(): ReactNode {
-  const { values, set } = useLaunchControls();
+  const state = useLaunchControls();
+  const { values, set } = state;
+  const preview = currentPreview(state);
+  const problem = useLaunchProblem("branchMode");
   const localBranches = useBranches(values.repoRoot, "local");
   const remoteBranches = useBranches(values.repoRoot, "remote");
   const availableLocalBranches = useMemo(
@@ -148,63 +163,73 @@ export function BranchPill(): ReactNode {
     localBranches.isError,
     availableLocalBranches.length,
   );
+  const remote =
+    preview?.runtime === "remote" ||
+    (values.runtime !== null && runtimeKindOf(values.runtime) === "remote");
+  const adjustedPlacement = preview?.adjustments.some((adjustment) => adjustment.field === "branch_plan") === true;
+  const effectiveBranchMode: BranchMode =
+    adjustedPlacement && !state.touched.has("branchMode") && preview?.branch_plan?.kind === "auto"
+      ? "auto"
+      : values.branchMode;
   const options = useMemo<readonly LaunchPillOption[]>(
     () =>
       (
-        Object.entries(BRANCH_MODES) as readonly [
+        Object.entries(PLACEMENTS) as readonly [
           BranchMode,
-          BranchModeDefinition,
+          (typeof PLACEMENTS)[BranchMode],
         ][]
       ).map(([id, definition]) => {
         const Glyph = definition.glyph;
         return {
           id,
           label: definition.label,
+          group: definition.group,
           icon: <Glyph aria-hidden />,
           opensPanel: definition.opensPanel,
           ...(definition.description === undefined
             ? {}
             : { description: definition.description }),
-          ...(id === "existing" && existingReason !== undefined
-            ? { disabled: true, description: existingReason }
-            : {}),
+          ...(id === "root" && remote
+            ? { disabled: true, description: "Remote runs need branches" }
+            : id === "existing" && existingReason !== undefined
+              ? { disabled: true, description: existingReason }
+              : {}),
         };
       }),
-    [existingReason],
+    [existingReason, remote],
   );
-  const ActiveGlyph = BRANCH_MODES[values.branchMode].glyph;
+  const ActiveGlyph = PLACEMENTS[effectiveBranchMode].glyph;
   const newNameError =
-    values.branchMode === "new" ? branchNameError(values.branchName) : null;
+    effectiveBranchMode === "new" ? branchNameError(values.branchName) : null;
   const localNameError =
-    values.branchMode === "remote" && values.localName !== ""
+    effectiveBranchMode === "remote" && values.localName !== ""
       ? branchNameError(values.localName)
       : null;
 
   return (
     <LaunchPill
       kind="branch"
-      ariaLabel="Branch and placement"
-      value={values.branchMode}
+      ariaLabel="Placement"
+      value={effectiveBranchMode}
       options={options}
       onSelect={(branchMode) => set({ branchMode: branchMode as BranchMode })}
-      searchNoun="branch choices"
+      searchNoun="placements"
       leading={<ActiveGlyph aria-hidden />}
       disabledReason={values.repoRoot === null ? "Choose a project first" : undefined}
       // The name is typed inside the popover, so its error goes with it when
       // the menu closes — and Send is disabled for a reason the user can no
       // longer see. The trigger keeps the sentence.
-      error={newNameError ?? localNameError}
+      error={newNameError ?? localNameError ?? problem}
     >
-      {values.branchMode === "root" ? (
-        // The overflow control used to carry this checkbox. With the overflow
-        // gone the decision still has to be DISCLOSED where it is made —
-        // setting skip-init silently would be Grove making a choice it never
-        // told anyone about, and the init script is written for a fresh
-        // worktree, so running it in the live root can be destructive.
+      {effectiveBranchMode === "root" ? (
+        // The decision has to be DISCLOSED where it is made: setting skip-init
+        // silently would be Grove making a choice it never told anyone about,
+        // and the script is written for a fresh worktree, so running it in the
+        // live checkout can be destructive.
         <BranchField
           label="Init script"
           htmlFor="launch-root-init"
-          help="The init script is written for a fresh worktree, so it may not be safe to run in the checkout you are already using."
+          help="It is written for a fresh worktree, so it may not be safe in the checkout you are already using."
         >
           <Select
             value={values.skipInit ? "skip" : "run"}
@@ -214,13 +239,13 @@ export function BranchPill(): ReactNode {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="skip">Skip it (recommended for the root)</SelectItem>
+              <SelectItem value="skip">Skip it (recommended here)</SelectItem>
               <SelectItem value="run">Run it anyway</SelectItem>
             </SelectContent>
           </Select>
         </BranchField>
       ) : null}
-      {values.branchMode === "new" ? (
+      {effectiveBranchMode === "new" ? (
         <BranchField
           label="Branch name"
           htmlFor="launch-new-branch"
@@ -235,7 +260,7 @@ export function BranchPill(): ReactNode {
           />
         </BranchField>
       ) : null}
-      {values.branchMode === "existing" ? (
+      {effectiveBranchMode === "existing" ? (
         <BranchField label="Local branch" htmlFor="launch-existing-branch">
           <Select
             value={values.existingBranch}
@@ -262,7 +287,7 @@ export function BranchPill(): ReactNode {
           </Select>
         </BranchField>
       ) : null}
-      {values.branchMode === "remote" ? (
+      {effectiveBranchMode === "remote" ? (
         // No wrapper of its own: `LaunchPill` supplies the panel's frame and
         // stacking for every pill, so a second one here was the extra padding
         // that made this the one mode whose fields sat lower than the rest.

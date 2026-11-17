@@ -129,9 +129,8 @@ export function SubagentFleetPanel({
   }
 
   const rows = fleetRows(fleet, parentWorking);
-  if (rows.length === 0) {
-    return <FleetState icon={<BotIcon />} label="No subagents yet" testId="subagent-fleet-empty" />;
-  }
+  // Nothing to roster, nothing drawn: an absence needs no card narrating it.
+  if (rows.length === 0) return null;
 
   return (
     <CardShell data-testid="subagent-fleet-card">

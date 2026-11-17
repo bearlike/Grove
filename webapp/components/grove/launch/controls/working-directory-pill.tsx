@@ -3,7 +3,7 @@
 import { useMemo, type ReactNode } from "react";
 
 import { LaunchPill, type LaunchPillOption } from "../control-pill";
-import { useLaunchControls } from "../launch-state";
+import { useLaunchControls, useLaunchProblem } from "../launch-state";
 import { useWorkspaceDefaults } from "@/lib/grove/hooks/launch";
 
 /**
@@ -20,6 +20,7 @@ const REPOSITORY_ROOT = ".";
 /** The directory within the new worktree where the selected agent starts. */
 export function WorkingDirectoryPill(): ReactNode {
   const { values, set } = useLaunchControls();
+  const problem = useLaunchProblem("projectCwd");
   const defaults = useWorkspaceDefaults(values.repoRoot);
   const configured = defaults.data?.agent_cwds ?? [];
   const nestedProjectCwd =
@@ -61,6 +62,7 @@ export function WorkingDirectoryPill(): ReactNode {
           : options.find((option) => option.id === selectedPath)?.label ?? selectedPath
       }
       disabledReason={values.repoRoot === null ? "Choose a project first" : undefined}
+      error={problem}
       // The label is presentation only; path is the stable wire value, so a
       // project may rename a label without changing an existing workspace.
       onSelect={(path) => set({ projectCwd: path })}

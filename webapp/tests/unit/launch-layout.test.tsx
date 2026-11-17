@@ -22,8 +22,12 @@ import { LAUNCH_TESTIDS } from "@/components/grove/launch/launch-state";
 const read = (path: string): string => readFileSync(path, "utf8");
 
 const SURFACE = "components/grove/launch/launch-surface.tsx";
+/** The composer body moved into its own file so More options can mount it. */
+const COMPOSER = "components/grove/launch/launch-composer.tsx";
+const DRAFT = "components/grove/launch/launch-draft.tsx";
 const FILES = "components/grove/launch/composer-files.tsx";
 const ROW = "components/grove/launch/controls/control-row.tsx";
+const SUMMARY = "components/grove/launch/launch-summary.tsx";
 
 /** Source position of a needle, failing loudly rather than returning -1. */
 function at(source: string, needle: string): number {
@@ -32,83 +36,26 @@ function at(source: string, needle: string): number {
   return index;
 }
 
-describe("the welcome block", () => {
+
+describe("the greeting", () => {
   const surface = read(SURFACE);
 
-  it("greets, then asks — two tiers, not one heading doing both jobs", () => {
-    // A single line carrying both the greeting and the question is the shape
-    // this replaced: it made the question compete with the greeting for the
-    // one emphasis the page has. The tiers are the design system's own
-    // (§ heading `text-2xl`, supporting sentence `text-base` secondary), so
-    // this pins the PAIRING rather than inventing a scale.
-    expect(surface).toContain("Welcome back.");
-    expect(surface).toContain("What would you like to build and improve today?");
-    expect(at(surface, "Welcome back.")).toBeLessThan(
-      at(surface, "What would you like to build and improve today?"),
-    );
+  it("is one row: the small logo beside the question, with no field or grid", () => {
+    expect(surface).toContain("What should we work on?");
+    expect(surface).not.toContain("Welcome back.");
+    expect(surface).not.toContain("launch-brand-field");
+    const row = surface.slice(at(surface, "launch-greeting"), at(surface, "What should we work on?"));
+    expect(at(row, "<AppLogo")).toBeLessThan(at(row, "<h1"));
+    expect(row).toContain("size-9");
   });
 
-  it("keeps the greeting at text-2xl and its question at text-base secondary", () => {
-    // The greeting's classes are authored BEFORE its testid, so the window is
-    // the whole `<h1>` rather than the gap between the two.
-    const greeting = surface.slice(at(surface, "<h1"), at(surface, "Welcome back."));
-    expect(greeting).toContain("text-2xl");
-    const question = surface.slice(
-      at(surface, "Welcome back."),
-      at(surface, "What would you like to build and improve today?"),
-    );
-    expect(question).toContain("text-base");
-    expect(question).toContain("text-content-secondary");
-  });
-
-  it("puts the decorative field BEHIND the mark, and hides it from the a11y tree", () => {
-    // The field is texture: it says nothing a screen reader could use, and it
-    // must never take a pointer event away from the controls layered over it.
-    // Announcing it would put a nameless region between the brand and the
-    // heading, which is the one place a landing page cannot afford noise.
-    // `aria-hidden` precedes the class on the same element, so the window
-    // opens at the span rather than at the class name.
-    const field = surface.slice(at(surface, "<span aria-hidden"), at(surface, "<AppLogo"));
-    expect(field).toContain("launch-brand-field");
-    expect(at(surface, "launch-brand-field")).toBeLessThan(at(surface, "<AppLogo"));
-
-    // The field covers the brand AND the headline, so it must swallow no
-    // clicks. That is asserted in the THEME rather than here on purpose:
-    // `pointer-events` is not a per-caller variant of this decoration, it is
-    // what the decoration IS, and a utility class at one call site would let
-    // the next call site omit it.
-    const theme = read("app/globals.css");
-    const rule = theme.slice(at(theme, ".launch-brand-field {"));
-    expect(rule.slice(0, rule.indexOf("}"))).toContain("pointer-events: none");
-  });
-
-  it("gives the field a BOX, because the theme deliberately gives it none", () => {
-    // The seam between this file and the theme, and the one that actually
-    // broke: `.launch-brand-field` is `position`-less and sized only by its
-    // `closest-side` mask, so an absolutely-positioned span with no offsets
-    // collapses to 0×0 and paints nothing. Every gate stays green — the class
-    // is present, the CSS is valid, the a11y tree is correct — and the texture
-    // is simply invisible. Neither side can see this alone: the theme cannot
-    // know the caller's measure, and the caller reads a class that looks
-    // complete.
-    const field = surface.slice(at(surface, "<span aria-hidden"), at(surface, "<AppLogo"));
-    expect(field).toMatch(/\b(?:-?inset|-?top|-?bottom|-?left|-?right|w-|h-|size-)/);
-    const theme = read("app/globals.css");
-    const rule = theme.slice(at(theme, ".launch-brand-field {"));
-    expect(rule.slice(0, rule.indexOf("}"))).not.toMatch(/\bwidth:|\bheight:/);
-  });
-
-  it("leaves the CSS to the theme — the surface names the class and stops", () => {
-    // `launch-brand-field` is a hook, not a look. If this file ever grows the
-    // gradient itself, the field and every other decorative surface drift
-    // apart, which is the drift `lint:styling` exists to prevent.
-    const field = surface.slice(at(surface, "launch-brand-field"), at(surface, "<AppLogo"));
-    expect(field).not.toMatch(/bg-gradient|mask-image|linear-gradient/);
+  it("leaves the look to the theme: no gradient or mask in the surface", () => {
+    expect(surface).not.toMatch(/bg-gradient|mask-image|linear-gradient/);
   });
 });
 
 describe("the composer body", () => {
-  const surface = read(SURFACE);
+  const surface = read(COMPOSER);
 
   it("writes the brief in the vendored Textarea, not a hand-styled one", () => {
     // The previous answer was a raw `<textarea>` carrying its own padding,
@@ -149,26 +96,61 @@ describe("the composer body", () => {
 });
 
 describe("the main toolbar", () => {
-  const surface = read(SURFACE);
+  const surface = read(COMPOSER);
 
-  it("puts attach on the left and model, expand and send on the right", () => {
-    // The split is by KIND: attaching is an input to the message, the three on
-    // the right act on it. `ComposerActions` is the vendored right-hand group,
-    // so everything inside it lands in the corner the send button already owns.
-    const toolbar = surface.slice(at(surface, "<ComposerToolbar"));
-    const attach = at(toolbar, "<LaunchAttachFiles");
-    const actions = at(toolbar, "<ComposerActions");
-    const model = at(toolbar, "<ModelPill");
-    // The expand button is the shared dialog's own control, handed down as
-    // `expandControl` and already carrying `launch-expand`. This surface
-    // decides only WHERE it sits — between the model pill and send — which is
-    // the half of the arrangement it still owns.
-    const expand = at(toolbar, "{expandControl}");
-    const send = at(toolbar, "<ComposerSend");
-    expect(attach).toBeLessThan(actions);
-    expect(actions).toBeLessThan(model);
-    expect(model).toBeLessThan(expand);
-    expect(expand).toBeLessThan(send);
+  const toolbarOf = (): string =>
+    surface.slice(at(surface, "<ComposerToolbar>"), at(surface, "</ComposerBar>"));
+
+  it("puts attach, model and effort left and dictate and send right", () => {
+    const toolbar = toolbarOf();
+    const order = [
+      "<LaunchAttachFiles",
+      "<ModelPill",
+      "<EffortPill",
+      "<LaunchDictateButton",
+      "<ComposerSend",
+    ].map((needle) => at(toolbar, needle));
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it("never narrates the workspace name under the composer", () => {
+    // "The agent names this workspace once it starts." appeared the moment a
+    // brief was typed — prose where the reader wanted nothing.
+    expect(surface).not.toContain("LaunchDerivedTitle");
+    expect(surface).not.toContain("names this workspace");
+  });
+
+  it("keeps expand out of the toolbar and in the shelf, withheld while dictating", () => {
+    expect(toolbarOf()).not.toContain("expandControl");
+    // Expanding remounts the composer. The dictation hook lives ABOVE that
+    // boundary so the recording survives, and the control is still withheld
+    // for its span so the editor cannot vanish mid-sentence.
+    expect(surface.slice(at(surface, "composer-shelf"))).toContain("{voice ? null : expandControl}");
+    // Above BOTH moves now: the shell-level draft owns it, so neither the
+    // expand dialog nor More options can drop a recording.
+    expect(read(DRAFT)).toContain("useLaunchDictation(launch.setPrompt, launch.submit)");
+    expect(surface).not.toContain("useLaunchDictation(");
+  });
+
+  it("gives every control a hover tip wrapped AROUND it, never merged into it", () => {
+    const toolbar = toolbarOf();
+    expect(toolbar).toContain(`<LaunchTip label="Attach files">`);
+    // A pill's tip is withheld while its own menu is open, or the two stack.
+    expect(toolbar).toContain(`<LaunchTip label="Model" suppressed={openKind === "model"}>`);
+    expect(toolbar).toContain(`<LaunchTip label="Reasoning effort" suppressed={openKind === "effort"}>`);
+    expect(toolbar).toContain("<LaunchTip label={launch.isPending");
+    // `TooltipTrigger asChild` overwrites the child's `data-slot`, which the
+    // composer theme keys on, so the trigger is a wrapper span.
+    const tip = read("components/grove/launch/launch-tip.tsx");
+    expect(tip).toContain("<span className=");
+  });
+
+  it("swaps editor AND toolbar for the voice view, keeping the bar and chips", () => {
+    const bar = surface.slice(at(surface, "<ComposerBar"), at(surface, "</ComposerBar>"));
+    const voice = at(bar, "<LaunchVoiceView");
+    expect(at(bar, "<LaunchAttachmentChips")).toBeLessThan(voice);
+    expect(voice).toBeLessThan(at(bar, "<Textarea"));
+    expect(voice).toBeLessThan(at(bar, "<ComposerToolbar>"));
   });
 
   it("sizes nothing itself — the vendored bar and the theme own the geometry", () => {
@@ -180,7 +162,7 @@ describe("the main toolbar", () => {
 });
 
 describe("the configuration shelf", () => {
-  const surface = read(SURFACE);
+  const surface = read(COMPOSER);
   const row = read(ROW);
 
   it("sits OUTSIDE the writing surface, after the body", () => {
@@ -192,23 +174,28 @@ describe("the configuration shelf", () => {
     expect(bar).toBeLessThan(shelf);
   });
 
-  it("insets the shelf from the body's edges rather than spanning them", () => {
-    // `mx-3` reads the shelf as subordinate to the bar above it. Flush edges
-    // would make it a second bar of equal weight.
+  it("connects to the bar: the composer column carries no gap or shelf margin", () => {
+    const column = surface.slice(at(surface, "<Composer\n"), at(surface, "<ComposerBar"));
+    expect(column).not.toMatch(/\bgap-\d/);
     const shelf = surface.slice(at(surface, "composer-shelf"));
-    expect(shelf.slice(0, 200)).toContain("mx-3");
+    expect(shelf.slice(0, 80)).not.toMatch(/\bm[xytb]?-\d/);
   });
 
-  it("orders the shelf WHERE the work happens, then leaves runtime on the right", () => {
-    const project = at(row, "<ProjectPill");
-    const directory = at(row, "<WorkingDirectoryPill");
-    const agent = at(row, "<AgentPill");
-    const branch = at(row, "<BranchPill");
-    const runtime = at(row, "<RuntimePill");
-    expect(project).toBeLessThan(directory);
-    expect(directory).toBeLessThan(agent);
-    expect(agent).toBeLessThan(branch);
-    expect(branch).toBeLessThan(runtime);
+
+
+  it("orders the shelf as project/location, runtime, then agent/profile", () => {
+    // Each group narrows the next: where the work lands, where it runs, then
+    // which tool and profile execute it.
+    const order = [
+      "<ProjectPill",
+      "<WorkingDirectoryPill",
+      "<BranchPill",
+      "<NodePill",
+      "<RuntimePill",
+      "<AgentPill",
+      "<ProfilePill",
+    ].map((needle) => at(row, needle));
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
   it("keeps the working directory REACHABLE beside the project it belongs to", () => {
@@ -248,7 +235,7 @@ describe("one pill group around the whole composer", () => {
     expect(close).toBeGreaterThan(at(surface, "</ExpandedComposer>"));
     // And the composer that callback builds carries both halves, so one group
     // spans the model pill and the shelf however the tree is nested.
-    const composer = surface.slice(at(surface, "function LaunchComposer"));
+    const composer = read(COMPOSER);
     expect(at(composer, "<ModelPill")).toBeGreaterThan(-1);
     expect(at(composer, "composer-shelf")).toBeGreaterThan(-1);
   });
@@ -258,16 +245,22 @@ describe("one pill group around the whole composer", () => {
   });
 });
 
-describe("the control row's seed effect", () => {
-  const row = read(ROW);
+describe("the draft's seed effect", () => {
+  const row = read("components/grove/launch/launch-state.tsx");
 
   it("still seeds the cascade's answers, exactly once", () => {
-    // The row shrank; the effect did not move. It is the only caller of
-    // `seed`, and its dependency list is the fix for the render loop the
+    // It moved from the control row into the draft's provider, because More
+    // options composes the same state without that row. It is the only caller
+    // of `seed`, and its dependency list is the fix for the render loop the
     // reducer documents — a second `useEffect` here is the bug returning.
-    expect(row.match(/useEffect\(/g) ?? []).toHaveLength(1);
+    // Scoped to the seed component: the previewer beside it has effects of its
+    // own, and what this pins is ONE effect calling `seed`.
+    const seeder = row.slice(row.indexOf("function LaunchDefaultsSeed"), row.indexOf("const PREVIEW_DEBOUNCE_MS"));
+    expect(seeder.match(/useEffect\(/g) ?? []).toHaveLength(1);
+    expect(row.match(/\bseed\(\s*\{/g) ?? []).toHaveLength(1);
     expect(row).toContain("useWorkspaceDefaults(values.repoRoot)");
-    expect(row).toContain("[defaults.data, seed]");
+    // `agentName` re-seeds the inherited model for the agent now selected.
+    expect(row).toContain("[defaults.data, seed, agentName, repo, engineProfilePending]");
     for (const field of [
       "agentName",
       "runtime",
@@ -286,11 +279,11 @@ describe("the control row's seed effect", () => {
     // and that answer is what the model pill displays wherever it renders; a
     // seed trimmed to "the fields this file still draws" would leave the
     // toolbar's pill permanently unfilled.
-    expect(row).toContain("model: resolved.model");
+    expect(row).toContain("model: engineProfilePending ? undefined : inheritedModel(resolved, ");
   });
 
   it("still names the region the e2e suite and the pickers address", () => {
-    expect(row).toContain("LAUNCH_TESTIDS.controls");
+    expect(read(ROW)).toContain("LAUNCH_TESTIDS.controls");
   });
 });
 
@@ -325,7 +318,8 @@ describe("the expanded brief", () => {
     // only obligation is to attach it to the editor. An unattached ref fails
     // silently: the dialog closes, the focus call finds `null`, and only a
     // keyboard user ever notices.
-    const editor = surface.slice(at(surface, "<Textarea"));
+    const composer = read(COMPOSER);
+    const editor = composer.slice(at(composer, "<Textarea"));
     expect(editor.slice(0, 200)).toContain("ref={inputRef}");
   });
 });
@@ -378,12 +372,11 @@ describe("what must not change", () => {
       "LAUNCH_TESTIDS.headline",
       "LAUNCH_TESTIDS.composer",
       "LAUNCH_TESTIDS.input",
-      "LAUNCH_TESTIDS.derivedTitle",
       "LAUNCH_TESTIDS.footerLinks",
       "LAUNCH_TESTIDS.error",
       "LAUNCH_TESTIDS.refusal",
     ]) {
-      expect(surface, `${id} lost its region`).toContain(id);
+      expect(surface + read(COMPOSER) + read(SUMMARY), `${id} lost its region`).toContain(id);
     }
   });
 
@@ -401,13 +394,15 @@ describe("what must not change", () => {
     expect(shared).toContain("`${testId}-expanded`");
   });
 
-  it("keeps the create request's refusal and error slots distinct", () => {
+  it("keeps refusal and error distinct inside the shelf note", () => {
     // A refusal is "nothing was attempted"; an error is "the create failed".
-    // Collapsing them would put "Couldn't create workspace" in front of a
-    // decision the user has not made yet.
-    expect(surface).toContain("launch.refusal");
-    expect(surface).toContain("launch.error");
-    expect(surface).toContain("Couldn’t create workspace.");
+    // The note owns both, so no bare error paragraph can compete beneath it.
+    const summary = read(SUMMARY);
+    expect(summary).toContain("launch.refusal");
+    expect(summary).toContain("launch.error");
+    expect(summary).toContain("Couldn’t create workspace.");
+    expect(surface).not.toContain("launch.refusal");
+    expect(surface).not.toContain("launch.error");
   });
 
   it("still opens the full form for everything the shelf does not carry", () => {
@@ -415,7 +410,7 @@ describe("what must not change", () => {
     // supposed to get one. `More options` is where they live and it is the
     // reason the shelf can stay short.
     expect(surface).toContain("More options");
-    expect(surface).toContain("openCreate(values.repoRoot ?? \"\")");
+    expect(surface).toContain("openMoreOptions(true)");
   });
 
   it("adds no runtime and no backend call to this route", () => {

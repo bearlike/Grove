@@ -31,6 +31,8 @@ them is pointed at a body.
 
 from __future__ import annotations
 
+import re
+
 FOOTER_BEGIN = "<!-- grove:issue-ops:footer -->"
 """Opens the region Grove owns inside somebody else's description.
 
@@ -114,8 +116,40 @@ def splice_footer(body: str, footer: str) -> str:
     guessed at.
     """
     head, tail = _outside(body)
+    if not tail:
+        # Fresh body (or a region already at the end): keep a closing trailer LAST.
+        head, tail = _split_trailer(head)
     block = f"{FOOTER_BEGIN}\n\n{footer.strip()}\n\n{FOOTER_END}" if footer.strip() else ""
     return "\n\n".join(part for part in (head, block, tail) if part)
+
+
+#: One issue-closing reference on a line of its own, in the keyword set Gitea and
+#: GitHub both honour (``close``/``closes``/``closed``, ``fix``/``fixes``/``fixed``,
+#: ``resolve``/``resolves``/``resolved``), optionally ``owner/repo#n``.
+_TRAILER_LINE = re.compile(
+    r"^(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:[\w.-]+/[\w.-]+)?#\d+\s*$",
+    re.IGNORECASE,
+)
+
+
+def _split_trailer(text: str) -> tuple[str, str]:
+    """``text`` split before its trailing block of closing-keyword lines, if it has one.
+
+    The repo's contract is that a PR body ENDS with its ``Closes #n`` lines, and a
+    trailer is the one place every forge's keyword scan is sure to look. So the
+    footer goes ABOVE that block rather than after it: a description Grove
+    decorates must still end the way its author ended it. Only a block of nothing
+    but closing lines (blank lines allowed between them) counts; prose that merely
+    mentions an issue does not.
+    """
+    lines = text.split("\n")
+    cut = len(lines)
+    while cut > 0 and (not lines[cut - 1].strip() or _TRAILER_LINE.match(lines[cut - 1].strip())):
+        cut -= 1
+    trailer = "\n".join(lines[cut:]).strip()
+    if not trailer:
+        return text, ""
+    return "\n".join(lines[:cut]).rstrip(), trailer
 
 
 def footer_needs_update(body: str, footer: str) -> bool:

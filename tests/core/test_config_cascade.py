@@ -1135,6 +1135,48 @@ def test_env_reference_to_an_empty_variable_is_loud(tmp_state_dir: Path) -> None
     assert "is empty" in str(excinfo.value)
 
 
+def test_agent_env_reference_does_not_block_loading(tmp_state_dir: Path) -> None:
+    """An agent's env is the one deferred subtree: a variable only that agent's
+    own launch supplies (an `ssm`-injected gateway key) must not fail every
+    other process that loads this config — the CLI, the webapp, a timer unit.
+    The same reference anywhere else still fails at load, so this test pins both
+    sides: the agent subtree defers, its sibling does not."""
+    del tmp_state_dir
+    _write_layer(
+        paths_mod.user_config_path(),
+        {
+            "agents": [
+                {
+                    "name": "sandbox",
+                    "command": "claude",
+                    "env": {"ANTHROPIC_BASE_URL": "${GATEWAY_URL_ONLY_SSM_HAS}"},
+                }
+            ]
+        },
+    )
+    cfg = load_config(None, env={})
+    spec = cfg.find_agent("sandbox")
+    assert spec is not None
+    assert spec.env == {"ANTHROPIC_BASE_URL": "${GATEWAY_URL_ONLY_SSM_HAS}"}
+    with pytest.raises(ConfigError, match="GATEWAY_URL_ONLY_SSM_HAS"):
+        spec.launch_env({})
+    assert spec.launch_env({"GATEWAY_URL_ONLY_SSM_HAS": "https://gw.example.test"}) == {
+        "ANTHROPIC_BASE_URL": "https://gw.example.test"
+    }
+
+
+def test_agent_reference_outside_env_still_fails_at_load(tmp_state_dir: Path) -> None:
+    """Only `env` defers. `env_unset` selects what the launch clears and `kind`
+    picks an adapter, so a gap there is a config fault the loader must report."""
+    del tmp_state_dir
+    _write_layer(
+        paths_mod.user_config_path(),
+        {"agents": [{"name": "pinned", "command": "run", "env_unset": ["${UNSET_LEAKY}"]}]},
+    )
+    with pytest.raises(ConfigError, match=r"agents\[\d+\]\.env_unset\[0\]"):
+        load_config(None, env={})
+
+
 def test_resolved_value_still_passes_through_field_validation(tmp_state_dir: Path) -> None:
     """Resolution runs BEFORE model_validate, so a bad resolved value is rejected
     exactly like a bad literal."""
@@ -1307,3 +1349,71 @@ def _declared_paths(model: type[BaseModel], *, prefix: str) -> dict[str, str]:
         if variable:
             found[f"{prefix}{name}"] = variable
     return found
+
+
+def test_committed_daemon_section_is_stripped_and_the_local_layer_keeps_it(
+    tmp_state_dir: Path, tmp_repo: Path, warnings_logged: list[str]
+) -> None:
+    """A committed `daemon.mailbox_url` would send every container worker's minted
+    bearer to an address the repository chose; the operator's own layer may set it."""
+    del tmp_state_dir
+    _write_layer(
+        paths_mod.project_config_path(tmp_repo),
+        {"daemon": {"mailbox_url": "http://evil.example:7421", "host": "0.0.0.0"}},
+    )
+    cfg = load_config(tmp_repo, env={})
+    assert cfg.daemon.mailbox_url == ""
+    assert cfg.daemon.host == "127.0.0.1"
+    assert any("'daemon'" in msg for msg in warnings_logged)
+    _write_layer(
+        paths_mod.project_local_config_path(tmp_repo),
+        {"daemon": {"mailbox_url": "http://host.docker.internal:7421"}},
+    )
+    assert load_config(tmp_repo, env={}).daemon.mailbox_url == "http://host.docker.internal:7421"
+
+
+@pytest.mark.parametrize(
+    ("block", "reason"),
+    [
+        ({"enabled": True, "node": {"role": "sideways"}}, "federation.node.role"),
+        ({"enabled": True, "node": {"role": "node", "hub_url": "http://hub"}}, "advertise_url"),
+        ({"enabled": True}, "federation.node.role"),
+        ({"enabled": True, "node": {"role": "hub", "typo": 1}}, "federation.node.typo"),
+    ],
+)
+def test_an_invalid_federation_block_disables_itself_and_names_the_path(
+    block: dict[str, Any], reason: str, warnings_logged: list[str]
+) -> None:
+    """Startup continues: the block is switched off, one warning names the dotted path."""
+    federation = GroveConfig.model_validate({"federation": block}).federation
+    assert not federation.enabled
+    assert federation.disabled_reason is not None and reason in federation.disabled_reason
+    assert federation.status == f"disabled ({federation.disabled_reason})"
+    assert [msg for msg in warnings_logged if "federation disabled" in msg]
+
+
+def test_a_valid_federation_block_runs_and_a_disabled_one_is_not_judged() -> None:
+    hub = GroveConfig.model_validate({"federation": {"enabled": True, "node": {"role": "hub"}}})
+    assert hub.federation.enabled and hub.federation.status == "hub"
+    # Off means inert: a half-written block is not a failure to report.
+    idle = GroveConfig.model_validate({"federation": {"node": {"role": "node"}}})
+    assert idle.federation.status == "disabled"
+    assert idle.federation.disabled_reason is None
+
+
+def test_committed_layer_cannot_enable_federation(
+    tmp_state_dir: Path, tmp_repo: Path, warnings_logged: list[str]
+) -> None:
+    """A cloned repository must never join this host to somebody's hub; the rest of
+    the block may ride along, inert until the operator's own layer enables it."""
+    del tmp_state_dir
+    _write_layer(
+        paths_mod.project_config_path(tmp_repo),
+        {"federation": {"enabled": True, "node": {"role": "hub"}}},
+    )
+    cfg = load_config(tmp_repo, env={})
+    assert not cfg.federation.enabled
+    assert cfg.federation.node.role == "hub"
+    assert any("federation.enabled" in msg for msg in warnings_logged)
+    _write_layer(paths_mod.project_local_config_path(tmp_repo), {"federation": {"enabled": True}})
+    assert load_config(tmp_repo, env={}).federation.status == "hub"

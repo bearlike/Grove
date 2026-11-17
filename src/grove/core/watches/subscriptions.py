@@ -5,10 +5,13 @@ outlive the work it serves. The workspace record is the source of truth, and
 this class makes the watch registry agree with it:
 
 * a running workspace gets one :class:`TicketPredicate` watch for each ref in
-  ``ticket_refs``, plus one :class:`PhaseNudgePredicate` watch when the phase
-  reminder is enabled;
+  ``ticket_refs``, plus one :class:`TriggerPredicate` watch while any trigger
+  rule is configured;
 * a detached ref removes only its standing ticket watch; a workspace that is
-  paused, killed or gone has every pending recipient-owned watch cancelled.
+  paused or otherwise not running loses its standing watches only, while the
+  agent's own waits (timer, ci, command) outlive the pause and settle on their
+  own terms; a workspace that is killed or gone has every pending watch
+  addressed to it cancelled, because nothing could ever receive the mail.
 
 It is driven by the activity bus (a workspace whose status or attached tickets
 moved, or that ended) and by one pass over every workspace at start-up. Reconciling
@@ -31,8 +34,9 @@ from loguru import logger
 
 from grove.core.contracts.mailboxes import MailboxAddress
 from grove.core.contracts.watches import (
-    PhaseNudgePredicate,
+    HOST_KINDS,
     TicketPredicate,
+    TriggerPredicate,
     WatchPredicate,
     WatchRegistration,
 )
@@ -60,12 +64,12 @@ class StandingWatches:
         *,
         scheduler: WatchScheduler,
         workspaces: WorkspaceLookup,
-        phase_nudge_every: timedelta | None = None,
+        trigger_every: timedelta | None = None,
     ) -> None:
         self._scheduler = scheduler
         self._workspaces = workspaces
-        # `None` turns the phase reminder off; reconcile then cancels any held one.
-        self._nudge_every = phase_nudge_every
+        # `None` turns triggers off; reconcile then cancels any held trigger watch.
+        self._trigger_every = trigger_every
         # What each workspace last looked like to this class, so a delta that
         # changes nothing relevant (the ~1 Hz activity churn) costs no I/O.
         self._seen: dict[str, tuple[str, tuple[str, ...]]] = {}
@@ -113,9 +117,19 @@ class StandingWatches:
         known = set(workspace_ids)
         for workspace_id in known:
             self.reconcile(workspace_id)
-        for row in self._scheduler.list().watches:
-            if row.state == "pending" and row.recipient.workspace_id not in known:
-                self._scheduler.cancel(row.id)
+        # Best-effort like `reconcile`: this runs in the daemon's lifespan, so an
+        # unreadable log raising here was a crash loop for the whole daemon over a
+        # cleanup pass (2026-10-15). The next start retries the sweep.
+        try:
+            for row in self._scheduler.list().watches:
+                if (
+                    row.state == "pending"
+                    and row.predicate.kind not in HOST_KINDS
+                    and row.recipient.workspace_id not in known
+                ):
+                    self._scheduler.cancel(row.id)
+        except GroveError as exc:
+            logger.error("orphaned watches not swept at startup: {}", exc)
 
     def reconcile(self, workspace_id: str) -> None:
         """Make this workspace's standing watches match its current record. Idempotent.
@@ -126,16 +140,21 @@ class StandingWatches:
         """
         try:
             state = self._workspaces(workspace_id)
-            inactive = state is None or state.status is not WorkspaceStatus.RUNNING
-            wanted = {} if inactive else self._wanted(workspace_id, state)
+            gone = state is None
+            running = state is not None and state.status is WorkspaceStatus.RUNNING
+            wanted = self._wanted(workspace_id, state) if running else {}
             held: dict[_Key, str] = {}
             for row in self._scheduler.list(workspace_id=workspace_id).watches:
                 if row.state != "pending":
                     continue
-                if inactive:
-                    self._scheduler.cancel(row.id)
-                elif (key := self._key(row.predicate)) is not None:
+                key = self._key(row.predicate)
+                # An agent's own wait outlives a pause: it halted on that watch,
+                # and cancelling it would withhold the very mail (fired or
+                # expired) that made halting safe. Only a deleted record ends it.
+                if key is not None:
                     held[key] = row.id
+                elif gone:
+                    self._scheduler.cancel(row.id)
             for key, watch_id in held.items():
                 if key not in wanted:
                     self._scheduler.cancel(watch_id)
@@ -150,8 +169,8 @@ class StandingWatches:
         """The identity of a standing watch, or ``None`` for a wait somebody registered."""
         if isinstance(predicate, TicketPredicate):
             return ("ticket", predicate.provider, predicate.ticket_id)
-        if isinstance(predicate, PhaseNudgePredicate):
-            return ("phase_nudge",)
+        if isinstance(predicate, TriggerPredicate):
+            return ("trigger",)
         return None
 
     def _wanted(
@@ -161,7 +180,7 @@ class StandingWatches:
 
         Reads the PERSISTED intent: ``RUNNING`` is what a live workspace
         records, while ``PAUSED`` and ``ERROR`` are not watched. Whether the
-        agent is actually working is the phase watcher's own per-check question,
+        agent is actually working is the trigger watcher's own per-check question,
         not this one's: a running workspace holds the watch, and the watch
         decides each time whether there is anything to say.
         """
@@ -182,12 +201,12 @@ class StandingWatches:
                 every=TicketReads.TTL,
                 note="Grove watches the tickets attached to this workspace.",
             )
-        if self._nudge_every is not None:
-            wanted[("phase_nudge",)] = WatchRegistration(
+        if self._trigger_every is not None:
+            wanted[("trigger",)] = WatchRegistration(
                 recipient=recipient,
-                predicate=PhaseNudgePredicate(workspace_id=workspace_id),
-                every=self._nudge_every,
-                note="Grove reminds this workspace's agent when its phase goes stale.",
+                predicate=TriggerPredicate(workspace_id=workspace_id),
+                every=self._trigger_every,
+                note="Grove's configured instructions for this workspace's agent.",
             )
         return wanted
 

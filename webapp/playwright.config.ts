@@ -30,6 +30,8 @@ const webServer = {
   reuseExistingServer: false,
   env: {
     GROVE_DAEMON_URL: daemonUrl,
+    // Hides Next's dev badge; see `devIndicators` in next.config.ts.
+    GROVE_E2E: "1",
     // Hermetic cookie store: the BFF persists its grove_session ↔ bearer map
     // under $XDG_CONFIG_HOME/grove, so point it at the gitignored test-results
     // dir and a run can never touch the real ~/.config.

@@ -13,7 +13,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -86,6 +86,19 @@ for raw in sys.stdin:
         assert (await owner.send("mbx_" + "b" * 32, "the real task")).stage == "delivered"
     finally:
         await owner.close()
+
+    # A fork carries the source on `--resume` beside its own `--session-id`;
+    # the session this owner holds is the new one, never the source.
+    source = "11223344-1122-3344-5566-112233445566"
+    fork = ClaudeNativeOwner(
+        (*_command(child), "--session-id", sid, "--resume", source, "--fork-session"),
+        tmp_path,
+        timeout_seconds=0.5,
+    )
+    try:
+        assert await fork.start("") == sid
+    finally:
+        await fork.close()
 
 
 @pytest.mark.asyncio
@@ -404,6 +417,45 @@ for raw in sys.stdin:
     finally:
         await transport.close()
     assert emitted == ["Native control refused: API error: 400 bad model"]
+
+
+@pytest.mark.asyncio
+async def test_set_effort_is_an_apply_flag_settings_control_request() -> None:
+    """Claude has no effort verb; its own `/effort` writes `effortLevel` through
+    `apply_flag_settings`, and the same write nulls the inherited
+    `CLAUDE_CODE_EFFORT_LEVEL` pin that would otherwise outrank it (measured
+    2.1.289 against the real binary with the pin exported). The fake child
+    answers success ONLY for that exact frame, so dropping either half, or a
+    differently-named subtype or key, reads as a refusal."""
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") != "control_request":
+        continue
+    rid = frame["request_id"]; req = frame["request"]
+    if req == {"subtype": "apply_flag_settings", "settings": {
+            "env": {"CLAUDE_CODE_EFFORT_LEVEL": None}, "effortLevel": "xhigh"}}:
+        print(json.dumps({"type": "control_response", "response": {
+            "subtype": "success", "request_id": rid}}), flush=True)
+    else:
+        print(json.dumps({"type": "control_response", "response": {
+            "subtype": "error", "request_id": rid, "error": "unexpected " + json.dumps(req)}}),
+            flush=True)
+"""
+    emitted: list[str] = []
+    transport = ClaudeNativeOwner(
+        _command(child), Path.cwd(), timeout_seconds=2, emit=emitted.append
+    )
+    try:
+        await transport.start("initial")
+        assert await transport.set_effort("xhigh") is True
+        assert await transport.set_effort("low") is False
+    finally:
+        await transport.close()
+    assert len(emitted) == 1 and emitted[0].startswith("Native control refused: unexpected")
+    assert await transport.set_effort("xhigh") is False
 
 
 @pytest.mark.asyncio
@@ -980,3 +1032,40 @@ sys.stdin.readline()
         assert await _eventually(owner.run_command("/compact"), timeout=3) is False
     finally:
         await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_a_remote_recorder_states_each_turn_edge_and_a_local_one_states_none(
+    tmp_path: Path,
+) -> None:
+    """A remote session's agent axis is ONLY what the owner pushes (#1030): the
+    root input it accepted opens a turn, the `result` closes it. A host spool
+    gets no turn drops, because its hook and transcript already say so."""
+    child = r"""
+import json, sys
+print(json.dumps({"type": "system", "subtype": "init", "session_id": "s"}), flush=True)
+for raw in sys.stdin:
+    frame = json.loads(raw)
+    if frame.get("type") == "user" and frame.get("uuid"):
+        print(json.dumps({"type": "user", "uuid": frame["uuid"],
+                          "message": {"role": "user", "content": "x"}}), flush=True)
+        print(json.dumps({"type": "result", "subtype": "success"}), flush=True)
+"""
+    posted: list[tuple[str, dict[str, object]]] = []
+    remote = AskRecorder(sink=lambda suffix, body: posted.append((suffix, body)))
+    local_spool = tmp_path / "spool"
+    local = AskRecorder(local_spool)
+    for asks in (remote, local):
+        asks.bind("s")
+        transport = ClaudeNativeOwner(_command(child), Path.cwd(), timeout_seconds=2, asks=asks)
+        try:
+            await transport.start("")
+            result = await transport.send(str(uuid4()), "go")
+            assert result.stage == "delivered"
+            await asyncio.sleep(0.3)
+        finally:
+            await transport.close()
+    turns = [body["hook_event_name"] for suffix, body in posted if suffix == ".turn.json"]
+    assert turns == ["UserPromptSubmit", "Stop"]
+    assert all(body["session_id"] == "s" for _, body in posted)
+    assert list(local_spool.glob("*.turn.json")) == []

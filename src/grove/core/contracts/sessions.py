@@ -753,6 +753,10 @@ class SessionControlsView(BaseModel):
     models: list[str]
     current_model: str | None
     permission_mode: str | None
+    efforts: list[str] = Field(default_factory=list)
+    """Reasoning-effort levels ``POST .../controls/effort`` accepts for this
+    session right now. Empty when the session has no native control channel or
+    its agent lists none, in which case a client renders no effort control."""
 
     @classmethod
     def from_controls(cls, c: SessionControls) -> SessionControlsView:
@@ -763,6 +767,7 @@ class SessionControlsView(BaseModel):
             models=list(c.models),
             current_model=c.current_model,
             permission_mode=c.permission_mode,
+            efforts=list(c.efforts),
         )
 
 

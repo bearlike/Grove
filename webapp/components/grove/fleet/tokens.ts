@@ -4,6 +4,7 @@ import {
   BellRingIcon,
   BotIcon,
   BoxIcon,
+  CloudIcon,
   CircleCheckBigIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -133,7 +134,8 @@ const AGENT_PRESENTATION: Record<
 
 const RUNTIME_PRESENTATION: Record<Runtime, { label: string; Icon: LucideIcon }> = {
   host: { label: "Host", Icon: ServerIcon },
-  container: { label: "Container", Icon: BoxIcon },
+  container: { label: "Dev Container", Icon: BoxIcon },
+  remote: { label: "Remote", Icon: CloudIcon },
 };
 
 /**
@@ -187,6 +189,7 @@ const PHASE_PRESENTATION: Record<TaskPhase, { label: string; Icon: LucideIcon }>
 const RUNTIME_GLOSSARY: Record<Runtime, GlossaryTerm> = {
   host: "host_runtime",
   container: "container_runtime",
+  remote: "remote_runtime",
 };
 
 /**

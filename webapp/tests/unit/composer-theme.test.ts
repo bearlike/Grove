@@ -61,7 +61,7 @@ const RULES: readonly { selector: string; body: string }[] = [
 
 /** Every rule the composer seam owns: its own classes, plus any composer slot. */
 const COMPOSER = RULES.filter(
-  ({ selector }) => selector.includes("composer") || selector.includes("launch-brand-field"),
+  ({ selector }) => selector.includes("composer") || selector.includes("launch-suggestion"),
 );
 
 /**
@@ -81,9 +81,16 @@ const TEXT_ENTRIES: readonly string[] = [
   '[data-slot="textarea"]',
 ];
 
-/** The body of the one rule declaring a class, or null where it is absent. */
+/**
+ * The body of the rule that DECLARES a selector, or null where it is absent.
+ *
+ * "Declares" rather than "first mentions": a selector also appears inside the
+ * reduced-motion block, whose body is only `transition: none`, and that is
+ * not the rule any assertion here is about.
+ */
 function classBody(name: string): string | null {
-  return RULES.find(({ selector }) => selector === name)?.body ?? null;
+  const bodies = RULES.filter(({ selector }) => selector === name).map(({ body }) => body);
+  return bodies.find((body) => !/^\s*(transition|animation):\s*none;\s*$/.test(body)) ?? bodies[0] ?? null;
 }
 
 describe("the composer theme seam is SCOPED to the composer", () => {
@@ -131,7 +138,7 @@ describe("the composer theme seam speaks in TOKENS", () => {
     for (const { selector, body } of sized) {
       for (const match of body.matchAll(/font-size:\s*([^;]+);/g)) {
         expect(match[1]!.trim(), `${selector} sizes text as ${match[1]}`).toMatch(
-          /^var\(--text-(xs|sm|base)\)$/,
+          /^var\(--text-(xs|sm|base|lg)\)$/,
         );
       }
     }
@@ -157,45 +164,47 @@ describe("the composer theme seam speaks in TOKENS", () => {
     // this seam needs.
     for (const { selector, body } of COMPOSER) {
       for (const match of body.matchAll(/(?<![\w-])color:\s*([^;]+);/g)) {
+        // `oklch(1 0 0)` is the ladder's one permitted chroma-zero top (§4.2):
+        // the ink on the accent-filled send and stop controls.
         expect(match[1]!.trim(), `${selector} colours text as ${match[1]}`).toMatch(
-          /^var\(--(content-(primary|secondary|tertiary)|foreground|destructive)\)$/,
+          /^(var\(--(content-(primary|secondary|tertiary)|foreground|destructive)\)|oklch\(1 0 0\))$/,
         );
       }
     }
   });
 
-  it("gives the shelf the sunken rung and an edge a reader can FIND", () => {
-    // The shelf's fill is a sunken wash on the sunken landing page, so its edge
-    // is the only thing drawing it. On the decorative `--border` it measured
-    // 1.07:1 light / 1.12:1 dark — invisible. It mixes the prominent `--input`
-    // over the rung beneath it instead; the bar above keeps its own outline and
-    // stays the anchor by its lifted fill, not by being the only line drawn.
+  it("attaches the shelf as a quieter fill beneath the raised bar", () => {
     const shelf = classBody(".composer-shelf");
-    expect(shelf, ".composer-shelf is missing").not.toBeNull();
-    expect(shelf).toContain("var(--surface-sunken)");
-    expect(shelf).toMatch(/border:\s*1px solid color-mix\(in oklab, var\(--input\) 60%, var\(--surface-sunken\)\)/);
-    expect(shelf, "the decorative hairline is what made it invisible").not.toMatch(/var\(--border\)/);
-    const bar = RULES.find((rule) => rule.selector === '[data-slot="composer-bar"]' && /border-color:/.test(rule.body));
-    expect(bar?.body, "the composer bar has no outline of its own").toMatch(/var\(--border-source\) 43%/);
-    expect(shelf).toMatch(/border-radius:\s*var\(--radius-lg\)/);
-    expect(shelf, "the inset is the caller's").not.toMatch(
-      /\b(margin|padding|width|height|inset)\b/,
-    );
+    expect(shelf).not.toBeNull();
+    expect(shelf).toContain("var(--surface-raised) 70%, var(--surface-base)");
+    expect(shelf).toMatch(/border:\s*0/);
+    expect(shelf).toMatch(/border-radius:\s*0 0 /);
+    // Tucked under the bar: inset by the bar's 24px corner, pulled up behind
+    // its bottom edge, and padded back down so the controls clear the bar.
+    expect(shelf).toMatch(/margin-inline:\s*24px/);
+    expect(shelf).toMatch(/margin-top:\s*-24px/);
+    expect(shelf).toMatch(/padding:\s*calc\(24px \+/);
+    expect(classBody('[data-slot="composer"] > [data-slot="composer-bar"]')).toMatch(/z-index:\s*1/);
+    const bar = classBody('[data-slot="composer-bar"]');
+    expect(bar).toContain("background-color: var(--surface-raised)");
+    expect(bar).toContain("border-color: var(--border)");
   });
 
   it("marks editor focus on the bar itself, one quiet tier up", () => {
     // A focused text field always matches `:focus-visible` and both composers
     // autofocus, so a `--ring` outline here was the bar's RESTING look — the
-    // loud perimeter. The caret carries focus; the bar's own line steps up to
-    // the control tier, an opaque token rather than an alpha. `:not(...)` is
-    // the ghost rule stepping ASIDE for focus, so only a positive match counts.
+    // loud perimeter. The caret carries focus; the bar's own line steps only
+    // HALFWAY toward `--ring` from its resting 43% edge. `:not(...)` is the
+    // ghost rule stepping ASIDE for focus, so only a positive match counts.
     const focus = COMPOSER.filter(
       ({ selector }) => selector.includes(":focus-visible") && !selector.includes(":not(:focus-visible)"),
     );
     expect(focus.length, "the bar draws no focus indicator").toBeGreaterThan(0);
     for (const { selector, body } of focus) {
       expect(selector, selector).toContain('[data-slot="composer-bar"]');
-      expect(body, selector).toMatch(/border-color:\s*var\(--ring\)/);
+      expect(body, selector).toMatch(
+        /border-color:\s*color-mix\(in oklab, var\(--ring\) 50%, var\(--border\)\)/,
+      );
       expect(body, `${selector} must not resize the bar`).not.toMatch(/border(-width)?:\s*\d/);
     }
   });
@@ -203,7 +212,9 @@ describe("the composer theme seam speaks in TOKENS", () => {
   it("suppresses the nested field's own box wherever it removes its border", () => {
     // One box, not two. Dropping the border but keeping the shadow leaves a
     // floating inner rectangle — the same defect wearing another property.
-    const stripped = COMPOSER.filter(({ body }) => /border:\s*0/.test(body));
+    const stripped = COMPOSER.filter(({ selector, body }) =>
+      selector.includes('[data-slot="textarea"]') && /border:\s*0/.test(body),
+    );
     expect(stripped.length, "the nested field keeps its own border").toBeGreaterThan(0);
     for (const { selector, body } of stripped) {
       expect(body, selector).toMatch(/box-shadow:\s*none/);
@@ -214,9 +225,11 @@ describe("the composer theme seam speaks in TOKENS", () => {
     // §1: text size and hit area are separate decisions. A pointer's physical
     // size does not shrink when type gets denser, so this floor must NOT track
     // the density root — the opposite of every other rule in this file.
-    const floored = COMPOSER.filter(({ body }) => /min-(width|height):/.test(body));
+    const floored = COMPOSER.filter(({ selector, body }) =>
+      /^\[data-slot="composer-(send|attach)"\]$/.test(selector) && /min-(width|height):/.test(body),
+    );
     const covered = floored.map(({ selector }) => selector);
-    for (const slot of ["composer-send", "composer-attach", "composer-voice-button"]) {
+    for (const slot of ["composer-send", "composer-attach"]) {
       expect(covered, `${slot} has no pointer floor`).toContain(`[data-slot="${slot}"]`);
     }
     // The file row's remove control is the smallest target in the composer and
@@ -229,44 +242,19 @@ describe("the composer theme seam speaks in TOKENS", () => {
   });
 });
 
-describe("the decorative brand field is decoration and nothing else", () => {
-  const FIELD = classBody(".launch-brand-field");
-
-  it("exists and draws from the ladder's edge token, adding no palette", () => {
-    expect(FIELD, ".launch-brand-field is missing").not.toBeNull();
-    // The opaque source rather than the 30%-alpha hairline token: the field
-    // must be visible, and the hairline token stacked under its own alpha was
-    // not. Either is the ladder's own edge neutral.
-    expect(FIELD).toMatch(/var\(--surface-edge(?:-source)?\)/);
-    // A hex, a palette hue or a bare colour function here is a new palette
-    // entry smuggled in as decoration — what `lint:styling` stops Grove code
-    // doing and what the design system's ADD table exists to make deliberate.
-    expect(FIELD).not.toMatch(/#[0-9a-fA-F]{3,8}/);
-    expect(FIELD).not.toMatch(/\boklch\(|\bhsl\(/);
+describe("the landing page has NO decorative field", () => {
+  it("draws no grid behind the greeting", () => {
+    // Removed on request. A rule left in the theme would paint it again the
+    // moment a caller spelled the class, so its absence is what is pinned.
+    expect(classBody(".launch-brand-field")).toBeNull();
+    expect(CSS).not.toMatch(/launch-grid-line/);
   });
 
-  it("is STATIC — no animation, no transition", () => {
-    // It could only stand down for `prefers-reduced-motion` if a caller owned
-    // its clock. There is no clock, so there is nothing to stand down.
-    expect(FIELD).not.toMatch(/\banimation\b|\btransition\b|@keyframes/);
-  });
-
-  it("cannot swallow a pointer, and says so in CSS rather than at the caller", () => {
-    // It covers the brand mark and the headline; eating a click on either is a
-    // defect, not a variant. `aria-hidden` stays markup's — the a11y tree is.
-    expect(FIELD).toMatch(/pointer-events:\s*none/);
-  });
-
-  it("scales its cell off the ramp, so it tracks density and zoom with the type", () => {
-    // A rem literal would hold still while every neighbour moved under the
-    // density root; the generation loader's argument, applied to a background.
-    expect(FIELD).toMatch(/background-size:[^;]*var\(--text-(xs|sm|base)\)/);
-  });
-
-  it("fades out rather than ending on an edge", () => {
-    // A hard-edged field reads as a bordered box behind the mark — a second
-    // surface the ladder never placed. The mask is what makes it a field.
-    expect(FIELD).toMatch(/mask-image:\s*radial-gradient/);
+  it("gives each suggestion card the composer's plane and corner, with a hover lift", () => {
+    const card = classBody(".launch-suggestion");
+    expect(card).toMatch(/background-color:\s*var\(--surface-raised\)/);
+    expect(card).toMatch(/border-radius:\s*24px/);
+    expect(classBody(".launch-suggestion:hover")).toMatch(/var\(--accent\)/);
   });
 });
 
@@ -303,10 +291,11 @@ describe("the composer controls are GHOSTED", () => {
     }
   });
 
-  it("leaves SEND alone — it is the one ink-filled control on the bar", () => {
+  it("fills SEND with the accent through its own slot, never a toolbar rule", () => {
     for (const { selector } of painted) {
       expect(selector, `${selector} repaints send`).not.toContain("composer-send");
     }
+    expect(classBody('[data-slot="composer-send"]:not(:disabled)')).toMatch(/var\(--info\)/);
   });
 
   it("gives the open menu its elevation in BOTH themes, not just light", () => {
@@ -324,5 +313,76 @@ describe("the composer controls are GHOSTED", () => {
       lit.some(({ selector }) => /^\.dark\b/.test(selector)),
       "the open model menu has no shadow in dark",
     ).toBe(true);
+  });
+});
+
+describe("the model and effort marks are LARGE in every picker", () => {
+  // The vendored selector boxes its icon at `size-3.5` (11.2px at this root),
+  // which read as a smudge beside the model's name. The theme lifts the mark
+  // in the trigger and in every menu row by the mark's own identity, so no
+  // call site re-decides it — and a `size-3.5` left at a call site is the
+  // override that would put one picker back to a smudge.
+  const sized = RULES.filter(
+    ({ selector, body }) =>
+      /\[data-testid="(model|effort)-mark"\]/.test(selector) && /(width|height|size)/.test(body),
+  );
+
+  it("sizes both marks inside the trigger and inside the rows", () => {
+    for (const mark of ["model-mark", "effort-mark"]) {
+      for (const host of ["model-selector-trigger", "model-selector-item"]) {
+        expect(
+          sized.some(({ selector }) => selector.includes(`[data-slot="${host}"]`) && selector.includes(mark)),
+          `${mark} is not sized inside ${host}`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("no call site shrinks a mark back down", () => {
+    for (const file of [
+      "components/grove/launch/controls/model-pill.tsx",
+      "components/grove/launch/controls/effort-pill.tsx",
+      "components/grove/workspace/composer-model.tsx",
+      "components/grove/workspace/composer-effort.tsx",
+    ]) {
+      expect(readFileSync(file, "utf8"), file).not.toMatch(/Mark[^/]*className="size-3\.5"/);
+    }
+  });
+});
+
+describe("effort levels wear their own hue", () => {
+  // A sequential scale (§4.1): the hue rises with the effort — blue, green,
+  // yellow, orange, orange — keyed on the mark's `data-level` in the theme,
+  // so every picker and trigger agree without a call site naming a colour.
+  const expected: Record<string, string> = {
+    low: "--effort-low",
+    medium: "--effort-medium",
+    high: "--effort-high",
+    xhigh: "--effort-xhigh",
+    max: "--effort-max",
+  };
+  for (const [level, token] of Object.entries(expected)) {
+    it(`${level} is coloured by ${token}`, () => {
+      const rule = classBody(`[data-testid="effort-mark"][data-level="${level}"]`);
+      expect(rule, `${level} has no colour rule`).not.toBeNull();
+      expect(rule).toContain(`color: var(${token})`);
+    });
+  }
+
+  it("names the five hues once, in both themes, as blue, green, yellow, orange, orange", () => {
+    const root = CSS.slice(0, CSS.indexOf(".dark {"));
+    const dark = CSS.slice(CSS.indexOf(".dark {"));
+    for (const theme of [root, dark]) {
+      const hue = (name: string) => Number(theme.match(new RegExp(`--effort-${name}: oklch\\(\\S+ \\S+ ([\\d.]+)\\)`))?.[1]);
+      expect(hue("low")).toBeGreaterThan(230); // blue
+      expect(hue("low")).toBeLessThan(280);
+      expect(hue("medium")).toBeGreaterThan(135); // green
+      expect(hue("medium")).toBeLessThan(175);
+      expect(hue("high")).toBeGreaterThan(85); // yellow
+      expect(hue("high")).toBeLessThan(110);
+      expect(hue("xhigh")).toBeGreaterThan(45); // orange
+      expect(hue("xhigh")).toBeLessThan(75);
+      expect(hue("max")).toBe(hue("xhigh"));
+    }
   });
 });

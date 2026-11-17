@@ -7,7 +7,9 @@ has tmux + git on PATH (i.e., Linux or macOS native, or Windows-via-WSL).
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -19,6 +21,7 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
 from grove.core.store import JsonWorkspaceStore
 from grove.core.tmux import (
+    TmuxServer,
     build_workspace_layout,
     create_session,
     fit_window_to_client,
@@ -105,6 +108,12 @@ def _worktree_paths(repo: Path) -> set[Path]:
 def test_full_lifecycle_with_real_tmux_and_git(real_repo: Path, tmp_path: Path) -> None:
     manager = _real_manager(real_repo, tmp_path)
     state = manager.create(CreateWorkspaceRequest(agent_name="shell", title="it1"))
+    server = TmuxServer(socket=state.tmux_socket)
+    assert state.tmux_socket, "a host workspace runs on its own tmux server"
+
+    def on_server(name: str) -> bool:
+        return has_session(name, server)
+
     try:
         # Real branch and worktree exist
         assert Path(state.worktree_path).resolve() in _worktree_paths(real_repo)
@@ -120,10 +129,10 @@ def test_full_lifecycle_with_real_tmux_and_git(real_repo: Path, tmp_path: Path) 
 
         # Real tmux session exists. Give the layout helper a beat to settle.
         for _ in range(20):
-            if has_session(state.tmux_session):
+            if on_server(state.tmux_session):
                 break
             time.sleep(0.05)
-        assert has_session(state.tmux_session)
+        assert on_server(state.tmux_session)
 
         # Pause: worktree gone, branch retained, tmux gone.
         manager.pause(state.id)
@@ -136,16 +145,16 @@ def test_full_lifecycle_with_real_tmux_and_git(real_repo: Path, tmp_path: Path) 
             text=True,
         ).stdout
         assert state.branch in branches
-        assert not has_session(state.tmux_session)
+        assert not on_server(state.tmux_session)
 
         # Resume: back to running.
         manager.resume(state.id)
-        assert has_session(state.tmux_session)
+        assert on_server(state.tmux_session)
     finally:
         # Always tear down so a partial test doesn't leak tmux sessions / worktrees.
         with contextlib.suppress(Exception):
             manager.kill(state.id)
-        assert not has_session(state.tmux_session)
+        assert not on_server(state.tmux_session)
         branches_after = subprocess.run(
             ["git", "branch", "--list", "--format=%(refname:short)"],
             cwd=real_repo,
@@ -154,6 +163,56 @@ def test_full_lifecycle_with_real_tmux_and_git(real_repo: Path, tmp_path: Path) 
             text=True,
         ).stdout
         assert state.branch not in branches_after
+
+
+def _server_pid(server: TmuxServer) -> int | None:
+    out = subprocess.run(
+        [*server.command, "display-message", "-p", "#{pid}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return int(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else None
+
+
+def test_each_workspace_gets_its_own_server_and_a_crash_stays_local(
+    real_repo: Path, tmp_path: Path
+) -> None:
+    """One tmux crash must cost one workspace, never the fleet (the incident).
+
+    Two workspaces, two server PROCESSES. SIGKILL one server — the exact shape
+    of a segfault — and the other workspace's session is still there. Then
+    kill the surviving workspace and its server exits with its last session,
+    so isolation does not leave a process per workspace behind.
+    """
+    manager = _real_manager(real_repo, tmp_path)
+    first = manager.create(CreateWorkspaceRequest(agent_name="shell", title="iso-a"))
+    second = manager.create(CreateWorkspaceRequest(agent_name="shell", title="iso-b"))
+    a, b = TmuxServer(socket=first.tmux_socket), TmuxServer(socket=second.tmux_socket)
+    try:
+        assert a.socket and b.socket and a.socket != b.socket
+        pid_a, pid_b = _server_pid(a), _server_pid(b)
+        assert pid_a is not None and pid_b is not None and pid_a != pid_b
+        # Neither session is on the shared default server.
+        assert not has_session(first.tmux_session)
+        assert not has_session(second.tmux_session)
+
+        os.kill(pid_a, signal.SIGKILL)
+        for _ in range(40):
+            if not has_session(first.tmux_session, a):
+                break
+            time.sleep(0.05)
+        assert not has_session(first.tmux_session, a)
+        assert has_session(second.tmux_session, b)
+    finally:
+        for ws in (first, second):
+            with contextlib.suppress(Exception):
+                manager.kill(ws.id)
+    for _ in range(40):
+        if _server_pid(b) is None:
+            break
+        time.sleep(0.05)
+    assert _server_pid(b) is None, "a workspace server exits with its last session"
 
 
 def _window_size_option(session: str) -> str:

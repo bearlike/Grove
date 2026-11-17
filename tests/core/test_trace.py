@@ -476,9 +476,36 @@ def test_acknowledging_processor_refuses_overload_and_reports_it_on_flush() -> N
     # Rejection must not stop accepted work draining: otherwise the rejected
     # replay cannot fit in a queue whose accepted predecessors remain stuck.
     assert [len(batch) for batch in exporter.batches] == [2]
-    # A later empty flush cannot make a rejected record look acknowledged;
-    # only re-offering that span can clear its refusal marker.
+
+
+def test_a_refusal_fails_only_the_flush_that_follows_it() -> None:
+    """One refused span must not fail every later flush on a shared processor.
+
+    The daemon holds one processor for its whole life, shared by every session's
+    replay and every context revision. A refusal that stayed recorded until the
+    same span was re-offered made every later flush report failure once its span
+    was never offered again (a superseded context revision): each session re-sent
+    its oldest turn forever and nothing newer was ever exported. The span's owner
+    learns of the refusal from the flush right after it, and that is enough.
+    """
+    exporter = _RecordedExporter(deque(), [])
+    processor = _acknowledging_processor(exporter, max_pending_items=2)
+    _emit_finished_spans(processor, 3)
+
     assert processor.force_flush() is False
+    _emit_finished_spans(processor, 1)
+    assert processor.force_flush() is True
+    assert [len(batch) for batch in exporter.batches] == [2, 1]
+
+
+def test_a_refusal_fails_its_flush_even_when_the_queue_drains_cleanly() -> None:
+    """The refusal is reported by the drain that SUCCEEDED, not only an empty one."""
+    exporter = _RecordedExporter(deque(), [])
+    processor = _acknowledging_processor(exporter, max_pending_items=1)
+    _emit_finished_spans(processor, 2)
+
+    assert processor.force_flush() is False
+    assert [len(batch) for batch in exporter.batches] == [1]
 
 
 def test_acknowledging_processor_refuses_a_span_that_exceeds_byte_capacity() -> None:

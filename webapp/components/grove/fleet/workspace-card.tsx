@@ -1,15 +1,16 @@
+import { memo } from "react";
 import Link from "next/link";
 import { TriangleAlertIcon } from "lucide-react";
 
 import { AgentMark } from "@/components/grove/agent-mark";
 import { SectionCard } from "@/components/grove/card";
 import { BranchLabel, PROJECT_MIN_WIDTH, ProjectLabel } from "@/components/grove/entity";
-import { RelativeTime } from "@/components/grove/relative-time";
 import { LoopingText, OverflowText, ScannedTextScope } from "@/components/grove/overflow-text";
 import { WorkingMark } from "@/components/grove/working-loader";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { baseBranchOf } from "@/lib/grove/adapters";
+import { baseBranchOf, lastTranscriptIso, replyCount } from "@/lib/grove/adapters";
 import {
   AgentStateBadge,
   ExitedSessionBadge,
@@ -20,21 +21,30 @@ import {
   TicketChip,
   TodoBadge,
 } from "./badges";
-import { agentStateOf, lastActivityIso, isInactive } from "./filter";
+import { agentStateOf, isInactive } from "./filter";
 import { agentExited } from "../workspace/selectors";
-import { WorkspaceMetrics } from "./workspace-metrics";
+import { SessionTimes, UnreadDot, WorkspaceMetrics } from "./workspace-metrics";
+import { useHasUnread } from "./unread";
 import { workspaceStatusText } from "./workspace-status";
 import type { WorkspaceActivity } from "./types";
 
 /** Identity → reported status → change ledger → provenance. Each set wraps alone. */
-export function WorkspaceCard({
+export const WorkspaceCard = memo(function WorkspaceCard({
   workspace,
   repoName,
   grouped = false,
+  selected,
+  onSelectedChange,
 }: {
   workspace: WorkspaceActivity;
   repoName: string;
   grouped?: boolean;
+  /**
+   * Bulk selection, offered only when the surface has bulk verbs. Both or
+   * neither: a checkbox with no handler is a control that does nothing.
+   */
+  selected?: boolean;
+  onSelectedChange?: (id: string, selected: boolean) => void;
 }): React.ReactNode {
   const { state } = workspace;
   const base = baseBranchOf(state);
@@ -46,6 +56,7 @@ export function WorkspaceCard({
   // mark is what is happening right now. One derivation feeds both it and the
   // AgentStateBadge below — never a second read of the activity state.
   const working = agentState === "working";
+  const unread = useHasUnread(state.id, replyCount(workspace));
 
   return (
     <SectionCard
@@ -79,8 +90,23 @@ export function WorkspaceCard({
       }
       action={
         <span className="flex min-w-0 items-center gap-1.5">
+          {unread ? <UnreadDot /> : null}
           <StatusBadge status={state.status} />
           {working ? <WorkingMark /> : null}
+          {/* The native checkbox: `components/ui/` ships no checkbox primitive
+              (see `sessions/filter-menu.tsx`), and the kill dialog already
+              draws this one. Its floor is a pointer bound, not type. */}
+          {onSelectedChange ? (
+            <input
+              type="checkbox"
+              checked={selected ?? false}
+              onChange={(event) => onSelectedChange(state.id, event.target.checked)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Select ${state.title}`}
+              className="ml-1 size-4 min-h-[16px] min-w-[16px] shrink-0 cursor-pointer"
+              data-testid="workspace-card-select"
+            />
+          ) : null}
         </span>
       }
       flush
@@ -118,11 +144,14 @@ export function WorkspaceCard({
         <Separator />
         <footer className="flex min-w-0 items-center justify-between gap-2 px-3 py-1.5 text-xs text-content-tertiary" data-testid="card-footer">
           <span className="min-w-0 flex-1 truncate" title={state.agent_name}>{state.agent_name}</span>
-          <RelativeTime iso={lastActivityIso(workspace)} className="max-w-16 shrink-0 truncate tabular-nums" />
+          <SessionTimes
+            createdIso={state.created_at}
+            updatedIso={lastTranscriptIso(workspace)}
+          />
           <OwnedSessionBadge native={state.native} />
           <RuntimeBadge runtime={state.runtime} fallbackReason={state.runtime_fallback_reason} />
         </footer>
       </div>
     </SectionCard>
   );
-}
+});

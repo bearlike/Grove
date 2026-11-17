@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page, type TestInfo } from "@playwrigh
 
 import { FIXTURE_WORKSPACES } from "./_fixtures";
 import { openSharpSurface } from "./sharp-surface-probe";
+import { chooseProfile } from "./_launch";
 
 /**
  * THE SHARED NATIVE COMPOSER, on both surfaces that mount one: a `composer-bar`
@@ -33,16 +34,26 @@ test("composer editor focus strengthens its border without an outer frame", asyn
   const bar = page.getByTestId("launch-composer").locator('[data-slot="composer-bar"]');
   await expect(input).toBeFocused();
   expect(await input.evaluate(element => element.matches(":focus-visible"))).toBe(true);
+  // The focused line is the theme's halfway step from the resting edge toward
+  // `--ring`, so the browser resolves both the expected mix and the plain
+  // resting border and the test compares like with like.
   const focusBorder = await bar.evaluate((element) => {
-    const root = getComputedStyle(document.documentElement);
-    const swatch = document.createElement("div");
-    swatch.style.color = root.getPropertyValue("--ring");
-    document.body.append(swatch);
-    const ring = getComputedStyle(swatch).color;
-    swatch.remove();
-    return { border: getComputedStyle(element).borderColor, ring };
+    const resolve = (color: string): string => {
+      const swatch = document.createElement("div");
+      swatch.style.color = color;
+      document.body.append(swatch);
+      const value = getComputedStyle(swatch).color;
+      swatch.remove();
+      return value;
+    };
+    return {
+      border: getComputedStyle(element).borderColor,
+      focused: resolve("color-mix(in oklab, var(--ring) 50%, var(--border))"),
+      resting: resolve("var(--border)"),
+    };
   });
-  expect(focusBorder.border).toBe(focusBorder.ring);
+  expect(focusBorder.border).toBe(focusBorder.focused);
+  expect(focusBorder.border).not.toBe(focusBorder.resting);
   await expect(bar).toHaveCSS("outline-style", "none");
   await expect(bar).toHaveCSS("box-shadow", "none");
 });
@@ -66,11 +77,7 @@ function landing(page: Page) {
 }
 
 async function chooseAgent(page: Page): Promise<void> {
-  const agent = landing(page).shelf.getByRole("combobox", { name: "Agent", exact: true });
-  await expect(agent).toBeEnabled({ timeout: 60_000 });
-  await agent.click();
-  await page.locator(CONTENT).getByText(AGENT_WITH_MODELS, { exact: true }).click();
-  await expect(agent).toContainText(AGENT_WITH_MODELS);
+  await chooseProfile(page, "Claude", AGENT_WITH_MODELS);
 }
 
 async function pickFile(page: Page, trigger: Locator, name: string, body: string): Promise<void> {
@@ -124,6 +131,13 @@ async function commitByKeyboard(
   page: Page, content: Locator, label: string, opensPanel: boolean,
 ): Promise<void> {
   const active = content.locator('[data-slot="model-selector-item"][data-selected="true"]');
+  // The fleet snapshot streams in after first paint, so a menu opened at once
+  // can hold only the project seeded from the URL. Wait for the named option
+  // to exist before walking the highlight to it.
+  await expect(
+    content.locator('[data-slot="model-selector-item"]').filter({ hasText: label }).first(),
+    `"${label}" never appeared in the menu`,
+  ).toBeVisible({ timeout: 30_000 });
   for (let step = 0; step < 12; step += 1) {
     if ((await active.count()) === 1 && (await active.innerText()).includes(label)) break;
     await page.keyboard.press("ArrowDown");
@@ -145,6 +159,25 @@ const centre = async (locator: Locator): Promise<number> => {
 const below = async (upper: Locator, lower: Locator): Promise<void> => {
   const above = (await upper.boundingBox())!;
   expect(above.y + above.height).toBeLessThanOrEqual((await lower.boundingBox())!.y + 1);
+};
+
+/**
+ * The shelf sits UNDER the bar and tucks up behind its rounded bottom edge by
+ * the bar's corner radius (see `.composer-shelf` in globals.css), so the boxes
+ * overlap by at most that radius: the shelf starts no higher than the tuck and
+ * ends below the bar, which is what keeps it outside the writing surface. Both
+ * boxes are read in one frame, because the bar grows as files are staged.
+ */
+const tucked = async (bar: Locator, shelf: Locator): Promise<void> => {
+  await expect.poll(async () => {
+    const shelfHandle = await shelf.elementHandle();
+    return bar.evaluate((upper, lower) => {
+      const a = upper.getBoundingClientRect();
+      const b = (lower as Element).getBoundingClientRect();
+      const tuck = parseFloat(getComputedStyle(upper).borderBottomLeftRadius) || 0;
+      return b.top >= a.bottom - tuck - 1 && b.bottom > a.bottom + 1;
+    }, shelfHandle);
+  }).toBe(true);
 };
 
 async function attachShot(page: Page, testInfo: TestInfo, name: string): Promise<void> {
@@ -220,24 +253,26 @@ test.describe("the shared native composer", () => {
     await expect(bar).toHaveCount(1);
     await expect(bar.locator(".composer-shelf")).toHaveCount(0);
     await expect(shelf).toHaveCount(1);
-    await below(bar, shelf);
+    await tucked(bar, shelf);
 
     // Both halves: Model leaving and Project staying are different failures.
-    for (const name of ["Project", "Agent", "Branch and placement", "Runtime"]) {
+    for (const name of ["Project", "Agent", "Runtime"]) {
       await expect(shelf.getByRole("combobox", { name, exact: true })).toHaveCount(1);
       await expect(toolbar.getByRole("combobox", { name, exact: true })).toHaveCount(0);
     }
     await expect(toolbar.getByRole("combobox", { name: "Model", exact: true })).toHaveCount(1);
 
-    // Attach left, model · expand · send right. Sides are the contract.
+    // The reference's sides: attach · model LEFT, send RIGHT, and expand in the
+    // shelf below rather than on the toolbar at all. Sides are the contract.
     const toolbarBox = (await toolbar.boundingBox())!;
     const middle = toolbarBox.x + toolbarBox.width / 2;
+    const attach = await centre(bar.locator('[data-slot="composer-attach"]'));
     const model = await centre(toolbar.getByRole("combobox", { name: "Model", exact: true }));
-    const expand = await centre(page.getByTestId("launch-expand"));
-    expect(await centre(bar.locator('[data-slot="composer-attach"]'))).toBeLessThan(middle);
-    expect(model).toBeGreaterThan(middle);
-    expect(model).toBeLessThan(expand);
-    expect(expand).toBeLessThan(await centre(bar.locator('[data-slot="composer-send"]')));
+    expect(attach).toBeLessThan(model);
+    expect(model).toBeLessThan(middle);
+    expect(await centre(bar.locator('[data-slot="composer-send"]'))).toBeGreaterThan(middle);
+    await expect(toolbar.getByTestId("launch-expand")).toHaveCount(0);
+    await expect(shelf.getByTestId("launch-expand")).toHaveCount(1);
 
     await attachShot(page, testInfo, "landing-light.png");
     await page.emulateMedia({ colorScheme: "dark" });
@@ -256,6 +291,25 @@ test.describe("the shared native composer", () => {
     await expect(chips).toHaveCount(2);
     await expect(chips.filter({ hasText: "pasted.txt" })).toHaveCount(1);
     await below(attachments, input);
+  });
+
+  test("several files picked at once, and adds that overlap, all stage", async ({ page }) => {
+    await page.goto("/");
+    const { bar, input, chips } = landing(page);
+    await expect(input).toBeVisible({ timeout: 60_000 });
+    await expect(bar.locator('[data-slot="composer-attach"]')).toBeEnabled({ timeout: 60_000 });
+    const file = (name: string) => ({ name, mimeType: "text/plain", buffer: Buffer.from(name) });
+    const picker = page.locator('input[type="file"]').last();
+    await picker.setInputFiles([file("one.txt"), file("two.txt"), file("three.txt")]);
+    await expect(chips).toHaveCount(3);
+    // Two adds in flight together: each reads its bytes asynchronously, so a
+    // batch that appends onto the list as it stood when it STARTED drops the
+    // other. Measured on the deployed composer before the fix: 2 of 3 staged.
+    await Promise.all([pasteFile(input, "four.txt", "four"), pasteFile(input, "five.txt", "five")]);
+    await expect(chips).toHaveCount(5);
+    for (const name of ["one", "two", "three", "four", "five"]) {
+      await expect(chips.filter({ hasText: `${name}.txt` })).toHaveCount(1);
+    }
   });
 
   test("removing one of two identically named files removes the one that was clicked", async ({ page }) => {
@@ -305,13 +359,14 @@ test.describe("the shared native composer", () => {
     await expect(input).toBeVisible({ timeout: 60_000 });
     // ORDER IS LOAD-BEARING: the controls cascade, so a project clears the
     // agent and an agent the model; any other order re-empties an asserted
-    // field. `Work in place` discloses a field, so it keeps its menu open.
+    // field. Agent is the TOOL; the fixture has two Claude Code entries, so
+    // Profile appears after it and names the entry.
     const pickers: readonly [string, RegExp, string, Locator, boolean][] = [
       ["Project", /project/i, "Agents", shelf, false],
-      ["Agent", /agent/i, AGENT_WITH_MODELS, shelf, false],
+      ["Agent", /agent/i, "Claude", shelf, false],
+      ["Profile", /profile/i, AGENT_WITH_MODELS, shelf, false],
       ["Model", /model/i, "Opus", bar, false],
-      ["Branch and placement", /branch/i, "Work in place", shelf, true],
-      ["Runtime", /runtime/i, "Container", shelf, false],
+      ["Runtime", /runtime/i, "Dev Container", shelf, false],
     ];
     for (const [name, noun, choice, scope, opensPanel] of pickers) {
       const trigger = scope.getByRole("combobox", { name, exact: true });
@@ -334,7 +389,7 @@ test.describe("the shared native composer", () => {
     await expect(input).toBeVisible({ timeout: 60_000 });
     // ONE open, not two: `new` discloses its field inside this popover, so a
     // second trigger click would dismiss the panel.
-    const branch = shelf.getByRole("combobox", { name: "Branch and placement", exact: true });
+    const branch = shelf.getByRole("combobox", { name: "Placement", exact: true });
     await branch.click();
     const content = page.locator(CONTENT);
     await content.getByText("New branch…", { exact: true }).click();
@@ -590,7 +645,7 @@ test.describe("the shared native composer", () => {
     ).toBeLessThanOrEqual(1);
     const barBox = (await bar.boundingBox())!;
     expect((await shelf.boundingBox())!.width).toBeLessThanOrEqual(barBox.width + 1);
-    await below(bar, shelf);
+    await tucked(bar, shelf);
     await below(chips.first(), input);
 
     const editor = (await input.boundingBox())!;

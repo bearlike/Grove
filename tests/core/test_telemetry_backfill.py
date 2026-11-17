@@ -8,10 +8,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
+import pytest
 
 from grove.core.config import TelemetryConfig
 from grove.core.telemetry_backfill import (
     LangfuseTraceProbe,
+    LiveAcknowledgements,
     TelemetryBackfillExporter,
     TelemetryCheckpointLedger,
 )
@@ -75,10 +77,15 @@ def _manifest(*, variant: str = "v1") -> TraceManifest:
     )
 
 
-def _response(ids: set[int]) -> httpx.Response:
+def _response(ids: set[int], *, cursor: str | None = None) -> httpx.Response:
+    # The v2 observations list as Langfuse 4.48 returns it (captured 2026-10-02):
+    # rows under `data`, the next page's cursor under `meta`, `{}` on the last page.
     return httpx.Response(
         200,
-        json={"observations": [{"id": f"{span_id:016x}"} for span_id in sorted(ids)]},
+        json={
+            "data": [{"id": f"{span_id:016x}", "type": "SPAN"} for span_id in sorted(ids)],
+            "meta": {"cursor": cursor} if cursor else {},
+        },
     )
 
 
@@ -152,7 +159,7 @@ def test_remote_complete_trace_is_checkpointed_without_export(tmp_path: Path) ->
 
     assert result.completed == 1
     assert result.emitted_spans == 0
-    assert requested_paths == [f"/api/public/traces/{_TRACE_ID:032x}"]
+    assert requested_paths == ["/api/public/v2/observations"]
     assert sink.flushes == 0
     assert ledger.check(manifest.trace_id, manifest.fingerprint).status == "completed"
 
@@ -218,7 +225,7 @@ def test_unexpected_remote_shape_degrades_without_export_or_checkpoint(tmp_path:
     manifest = _manifest()
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"observations": [{}]})
+        return httpx.Response(200, json={"data": [{}], "meta": {}})
 
     sink = _Sink()
     ledger, exporter = _exporter(tmp_path, probe=_probe(handler), sink=sink)
@@ -237,7 +244,7 @@ def test_failed_flush_never_marks_completion(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal probe_calls
         probe_calls += 1
-        return httpx.Response(404)
+        return _response(set())
 
     sink = _Sink(fail_flush=True)
     ledger, exporter = _exporter(tmp_path, probe=_probe(handler), sink=sink)
@@ -288,3 +295,95 @@ def test_submitted_trace_waits_for_visibility_then_retries_only_still_missing(
     assert [record.span_id for record in second_sink.records] == [_CHILD_ID]
     assert second_sink.flushes == 1
     assert ledger.check(manifest.trace_id, manifest.fingerprint).status == "completed"
+
+
+def test_probe_reads_every_page_of_a_large_trace(tmp_path: Path) -> None:
+    """A trace larger than one page is read whole, or the rest is re-sent."""
+    manifest = _manifest()
+    cursors: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cursor = request.url.params.get("cursor")
+        cursors.append(cursor)
+        if cursor is None:
+            return _response({_ROOT_ID}, cursor="page-2")
+        return _response({_CHILD_ID})
+
+    sink = _Sink()
+    _ledger, exporter = _exporter(tmp_path, probe=_probe(handler), sink=sink)
+    result = exporter.export((manifest,), limit=1)
+
+    assert cursors == [None, "page-2"]
+    assert result.completed == 1
+    assert sink.records == []
+
+
+def test_an_unavailable_trace_endpoint_is_never_read_as_an_absent_trace(tmp_path: Path) -> None:
+    """A 404 is a missing ENDPOINT, never "nothing remote".
+
+    A v4 deployment in events_only mode answers 404 for every trace on the v1
+    read (measured 2026-10-02). Reading that as absence re-sent every trace whole.
+    An absent trace is a 200 with no rows.
+    """
+    manifest = _manifest()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "not available in events_only mode"})
+
+    sink = _Sink()
+    ledger, exporter = _exporter(tmp_path, probe=_probe(handler), sink=sink)
+    result = exporter.export((manifest,), limit=1)
+
+    assert result.degraded == 1
+    assert sink.records == []
+    assert ledger.check(manifest.trace_id, manifest.fingerprint).status == "pending"
+
+
+def test_live_acknowledgements_outlive_the_process_that_recorded_them(tmp_path: Path) -> None:
+    """A restart must not re-send a turn the collector already accepted (#905)."""
+    manifest = _manifest()
+    path = tmp_path / "telemetry-checkpoints.sqlite3"
+    first = LiveAcknowledgements(TelemetryCheckpointLedger(path, destination_id=_DESTINATION))
+    first.accept(manifest)
+    first.close()
+
+    reopened = LiveAcknowledgements(TelemetryCheckpointLedger(path, destination_id=_DESTINATION))
+    assert reopened.accepted(frozenset({_TRACE_ID, 0x9999})) == frozenset({_TRACE_ID})
+    reopened.close()
+
+    other = LiveAcknowledgements(TelemetryCheckpointLedger(path, destination_id="other-project"))
+    assert other.accepted(frozenset({_TRACE_ID})) == frozenset()
+    other.close()
+
+
+def test_a_live_acknowledgement_is_submitted_so_backfill_still_verifies_it(
+    tmp_path: Path,
+) -> None:
+    """The live path claims collector acceptance, never remote completeness."""
+    manifest = _manifest()
+    ledger = TelemetryCheckpointLedger(
+        tmp_path / "telemetry-checkpoints.sqlite3", destination_id=_DESTINATION
+    )
+    LiveAcknowledgements(ledger).accept(manifest)
+
+    assert ledger.check(manifest.trace_id, manifest.fingerprint).status == "submitted"
+
+
+def test_live_acknowledgements_from_config_shares_the_probes_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live gate and backfill must key one row per trace, or each re-sends the other's."""
+    monkeypatch.setattr(
+        "grove.core.paths.telemetry_ledger_path", lambda: tmp_path / "ledger.sqlite3"
+    )
+    live = LiveAcknowledgements.from_config(TelemetryConfig(enabled=True), env=_ENV)
+    assert live is not None
+    live.accept(_manifest())
+    live.close()
+
+    probe = _probe(lambda request: _response(set()))
+    assert probe.destination_id is not None
+    ledger = TelemetryCheckpointLedger(
+        tmp_path / "ledger.sqlite3", destination_id=probe.destination_id
+    )
+    assert ledger.recorded(frozenset({_TRACE_ID})) == frozenset({_TRACE_ID})

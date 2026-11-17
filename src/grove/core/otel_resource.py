@@ -22,8 +22,11 @@ identity that does exist at the only moment the value can be set.
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 from urllib.parse import quote
+
+from loguru import logger
 
 from grove import __version__
 from grove.core.config import AgentSpec
@@ -65,6 +68,31 @@ def _parse(raw: str) -> dict[str, str]:
         if sep and key:
             entries[key] = part.strip()
     return entries
+
+
+def node_name() -> str:
+    """Which Grove daemon this is: the federation node name, else the host name.
+
+    Read once and cached for the process, because every launch and every live
+    tick asks and the answer cannot change without a restart.
+
+    Returns:
+        A non-empty name; the host name when federation does not name one.
+    """
+    global _NODE_NAME  # noqa: PLW0603
+    if _NODE_NAME is None:
+        from grove.core.config import load_config  # noqa: PLC0415
+
+        configured = ""
+        try:
+            configured = load_config(repo_root=None).federation.node.name
+        except Exception as exc:  # a config that will not load must not cost a launch
+            logger.debug("node name not read from config: {}", exc)
+        _NODE_NAME = configured or socket.gethostname()
+    return _NODE_NAME
+
+
+_NODE_NAME: str | None = None
 
 
 def compose_resource_attributes(
@@ -122,6 +150,8 @@ def compose_resource_attributes(
         GroveIdentityAttr.RUNTIME: state.runtime.value,
         GroveIdentityAttr.TICKET_IDS: ",".join(ref.id for ref in state.ticket_refs),
         GroveIdentityAttr.SESSION_ID: state.tmux_session,
+        GroveIdentityAttr.PRINCIPAL_SUBJECT: state.created_by,
+        GroveIdentityAttr.NODE_NAME: node_name(),
         LangfuseAttr.SESSION_ID: state.telemetry_session_id,
     }
     merged = _parse(existing) if existing else {}

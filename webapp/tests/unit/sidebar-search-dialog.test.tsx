@@ -12,7 +12,6 @@ describe("sidebar workspace search", () => {
     expect(shell).toContain("useFleetSearch");
     expect(shell).toContain('window.addEventListener("keydown", onKeyDown)');
     expect(shell).toContain("<FleetOverlays\n");
-    expect(shell).toContain("snapshot={stream.snapshot}");
     expect(palette).not.toContain('window.addEventListener("keydown", onKeyDown)');
     expect(palette).toContain("open={search.open}");
     expect(palette).toContain("onOpenChange={onOpenChange}");

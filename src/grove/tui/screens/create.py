@@ -42,7 +42,7 @@ from grove.core import (
     GroveError,
     WorkspaceDefaults,
     save_workspace_defaults,
-    user_defaults_keys,
+    shadowing_defaults_keys,
 )
 from grove.core.agents import resolve_models
 from grove.core.contracts.branch_info import BranchInfo
@@ -55,6 +55,7 @@ from grove.core.contracts.branch_plan import (
     TrackRemoteBranch,
 )
 from grove.core.contracts.requests import CreateWorkspaceRequest
+from grove.core.contracts.views import WorkspaceDefaultsView
 from grove.core.workspace import Runtime, slug
 from grove.tui._status import ref_color
 from grove.tui.screens._modal import GroveModal
@@ -86,6 +87,9 @@ MODEL_CUSTOM: Final = object()
 # string sentinel could collide with one a project actually declares.
 CWD_ROOT: Final = object()
 CWD_CUSTOM: Final = object()
+
+# The runtime values a saved default may hold; a remote block is per create.
+_SAVEABLE_RUNTIMES = frozenset({Runtime.HOST.value, Runtime.CONTAINER.value})
 
 # The Brief picker is genuinely tri-state (unlike Runtime, which always submits
 # a concrete value) because `CreateWorkspaceRequest.brief` really does carry
@@ -402,7 +406,9 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         defaults = cfg.defaults
         self._default_agent = self._agent_default(defaults.agent)
         self._default_model = defaults.model
-        self._mode: BranchMode = self._branch_mode_default(defaults.branch_mode)
+        self._mode: BranchMode = self._branch_mode_default(
+            defaults.branch_mode or WorkspaceDefaultsView.from_config(cfg).branch_mode
+        )
         # Whether the user has typed (or seeded) something into the title
         # field. Drives the "seed title from picked branch" behavior — only
         # seed when the field is still empty, never overwrite typed text.
@@ -428,15 +434,16 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         # container` would use the project's own devcontainer.json or
         # Grove's packaged default.
         self._has_devcontainer = (repo_root / ".devcontainer" / "devcontainer.json").exists()
-        # The Runtime picker offers exactly Host/Container — no third "default
-        # (config)" option — and pre-selects whichever one the cascade would
-        # pick for an unopinionated create. `cfg.default_runtime` IS that
+        # The Runtime picker offers Host, Container and each configured remote
+        # runtime, with no "default (config)" option, and pre-selects whichever
+        # one the cascade would pick for an unopinionated create. `cfg.default_runtime` IS that
         # answer (`core/runtime.py`'s `RuntimeResolver.resolve` reads the same
         # property when `requested is None`); reusing it rather than re-deriving
         # from `container.enabled` is what keeps the picker honest. This screen
         # displaying one runtime while the engine chose another is the bug that
         # moved the resolution into config in the first place.
         self._default_runtime = Runtime(cfg.default_runtime)
+        self._remote_runtimes = cfg.resident_runtimes
         # Presentation hint only, same reasoning as `_default_runtime` above:
         # `cfg.brief.enabled` IS the cascade's answer for an unopinionated
         # create, reused here (never re-derived) to name it on the "cascade"
@@ -450,9 +457,14 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         names = {spec.name for spec in self._agents}
         return agent if agent in names else self._agents[0].name
 
-    def _branch_mode_default(self, mode: BranchMode | None) -> BranchMode:
-        """Fall back to Auto when no saved branch-source variant exists."""
-        return mode if mode in _MODES else cast(BranchMode, _MODE_AUTO)
+    def _branch_mode_default(self, mode: BranchMode) -> BranchMode:
+        """The saved branch-source variant, else the engine's resolved answer.
+
+        The fallback is ``WorkspaceDefaultsView``, i.e. the same resolution an
+        omitted plan gets (``LaunchResolver``), so the pre-selected mode is the
+        one a create that never mentioned a branch would get.
+        """
+        return mode if mode in _MODES else cast(BranchMode, _MODE_ROOT)
 
     @staticmethod
     def _brief_default(brief: bool | None) -> str:
@@ -529,10 +541,14 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             return self.query_one("#model-custom", Input).value.strip() or None
         return str(value)
 
-    def _shadowed_defaults(self) -> tuple[str, ...]:
-        """Name form values that raw user defaults prevent a project write changing."""
+    def _shadowed_defaults(self) -> dict[DefaultsScope, tuple[str, ...]]:
+        """Per save scope, the form values a higher saved layer prevents that write changing."""
         saved_fields = self.read_defaults().model_dump(exclude_none=True)
-        return tuple(name for name in saved_fields if name in user_defaults_keys())
+        shadowed: dict[DefaultsScope, tuple[str, ...]] = {}
+        for scope in DefaultsScope:
+            higher = shadowing_defaults_keys(scope, self._repo_root)
+            shadowed[scope] = tuple(name for name in saved_fields if name in higher)
+        return shadowed
 
     def _handle_save_defaults(self, scope: DefaultsScope | None) -> None:
         """Keep the create form open while the explicit write reports its result."""
@@ -557,7 +573,8 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         base_ref = self._base_ref_for_mode()
         return WorkspaceDefaults(
             agent=str(self.query_one("#agent", Select).value),
-            runtime=str(runtime_value),
+            # A remote runtime is a per-create choice, never a saved default.
+            runtime=str(runtime_value) if runtime_value in _SAVEABLE_RUNTIMES else None,
             brief=None if brief_value == _BRIEF_CASCADE else brief_value == _BRIEF_ON,
             model=self._model_value(),
             branch_mode=self._mode,
@@ -684,6 +701,9 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 [
                     (self._runtime_option_label(Runtime.HOST), Runtime.HOST.value),
                     (self._runtime_option_label(Runtime.CONTAINER), Runtime.CONTAINER.value),
+                    # Each configured remote runtime by its block name, which is
+                    # exactly what `runtime_fields` reads as a remote pick.
+                    *((f"Remote · {name}", name) for name in self._remote_runtimes),
                 ],
                 value=self._default_runtime.value,
                 id="runtime",
@@ -727,7 +747,7 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
                 classes="-hidden" if self._cwd_default() is not CWD_CUSTOM else None,
             )
             yield Label("Title:", classes="field-label")
-            yield Input(placeholder="my-task", id="title")
+            yield Input(placeholder="optional — Grove names it wk-…", id="title")
             yield Label("Branch:", classes="field-label")
             with RadioSet(id="branch-mode"):
                 yield RadioButton(
@@ -988,11 +1008,9 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         self._submit()
 
     def _submit(self) -> None:
-        title = self.query_one("#title", Input).value.strip()
-        if not title:
-            self.app.bell()
-            self.query_one("#title", Input).focus()
-            return
+        # Empty means "let the engine name it" (`WorkspaceTitle`), the same rule
+        # every other client follows, rather than a refusal.
+        title = self.query_one("#title", Input).value.strip() or None
         try:
             plan = self._active_block().read()
         except Exception:
@@ -1000,19 +1018,12 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
             return
         skip_init = self.query_one("#skip-init", Checkbox).value
         model = self._model_value()
-        # The picker only ever offers the two concrete runtimes (no "default
-        # (config)" sentinel), so this always resolves to a real `Runtime` —
-        # never `None`. That differs from a non-interactive caller (CLI/MCP,
-        # which still send `runtime=None` to let the cascade decide at create
-        # time) only in *when* the cascade is read: here it was read at
-        # modal-open (`self._default_runtime`, see `__init__`) to pre-select
-        # an option, and the same value is what gets submitted. The window
-        # between open and submit is sub-second and interactive — config
-        # cannot change under the user in that time — so reading it once at
-        # open and sending it concrete is equivalent to reading it again at
-        # submit and sending `None`.
+        # The picker pre-selects the resolved default runtime with no separate
+        # "default" option, so leaving it there submits NOTHING: an explicit
+        # runtime and an inherited one differ at create time (an explicit
+        # container is refused when unavailable, a saved default falls back
+        # to the host), and only an omitted field keeps the inherited meaning.
         runtime_value = self.query_one("#runtime", Select).value
-        runtime = Runtime(str(runtime_value))
         # Unlike runtime, the brief picker genuinely has three states: the
         # cascade choice sends `None` so the engine re-reads `brief.enabled`
         # at create time (the same field this modal read at open time to
@@ -1029,11 +1040,15 @@ class CreateWorkspaceScreen(GroveModal[CreateWorkspaceRequest | None]):
         try:
             request = CreateWorkspaceRequest(
                 agent_name=agent_name,
-                title=title,
+                **({"title": title} if title else {}),
                 branch_plan=plan,
                 skip_init=skip_init,
                 model=model,
-                runtime=runtime,
+                **(
+                    {}
+                    if runtime_value == self._default_runtime.value
+                    else CreateWorkspaceRequest.runtime_fields(str(runtime_value))
+                ),
                 brief=brief,
                 native=native,
                 project_cwd=self._cwd_value(),

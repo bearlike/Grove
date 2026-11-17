@@ -8,6 +8,13 @@
  */
 
 export {
+  artifactDetail,
+  artifactFaviconUrl,
+  artifactIsDiagram,
+  artifactName,
+  artifactViewerType,
+} from "./artifacts";
+export {
   applyDashboardEvent,
   applyWorkspaceState,
   allWorkspaces,
@@ -16,7 +23,9 @@ export {
   findWorkspaceActivity,
   lastActivityAt,
   lastActivityIso,
+  lastTranscriptIso,
   newestActivityIso,
+  replyCount,
   peekFromActivity,
   pendingQuestions,
   primarySessionId,
@@ -96,13 +105,13 @@ export {
   branchPlanFor,
   buildCreateRequest,
   customModelError,
-  deriveTitle,
-  newTitleSalt,
+  effortLabel,
 } from "./launch";
 
 export { COMPOSER_COMMANDS, grovePaletteCommands, mentionsFromContacts } from "./composer";
 
 export { operationLabel } from "./operation";
+export { liveLabel, liveStepName } from "./live";
 export type { ComposerCommand, ComposerMention } from "./composer";
 
 export { mergeTurns, turnCursor } from "./turns";
@@ -224,3 +233,4 @@ export type {
 } from "./footer";
 
 export { orderWatches, watchSubject } from "./watches";
+

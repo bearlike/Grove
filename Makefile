@@ -116,7 +116,7 @@ test-all: test integration  ## Run every test we have
 
 # ─── build artifacts ────────────────────────────────────────────────────────
 
-.PHONY: build clean uvx-smoke install-smoke
+.PHONY: build clean uvx-smoke install-smoke runtime-image runtime-smoke
 build:  ## Build sdist + wheel into $(DIST)/  (PyPI-ready)
 	$(UV) build
 
@@ -126,6 +126,13 @@ uvx-smoke:  ## Verify the package works under uvx from the local checkout
 install-smoke:  ## Clean-install + first-run smoke test in a fresh Ubuntu container (needs docker)
 	docker build -t grove-install-smoke packaging/docker
 	docker run --rm -v "$(CURDIR):/src:ro" -e GROVE_INSTALL_SPEC grove-install-smoke bash /src/packaging/docker/smoke.sh
+
+runtime-image:  ## Build the remote-workspace runtime image (grove-runtime:smoke) from a fresh wheel
+	rm -rf $(BUILD)/runtime-image && $(UV) build --wheel -o $(BUILD)/runtime-image
+	docker build -t grove-runtime:smoke -f packaging/docker/runtime.Dockerfile $(BUILD)/runtime-image
+
+runtime-smoke: runtime-image  ## Prove the runtime image boots the native worker paneless (needs docker)
+	bash packaging/docker/runtime-smoke.sh
 
 clean:  ## Remove build artifacts and caches
 	rm -rf $(DIST) $(BUILD) *.egg-info
@@ -219,7 +226,10 @@ WEBAPP_BUNDLE_NEW := $(CURDIR)/build/webapp-bundle-out
 webapp-bundle: webapp-install  ## Build the standalone dashboard into src/grove/_webapp (shipped in the wheel)
 	rm -rf $(WEBAPP_BUNDLE_TMP) $(WEBAPP_BUNDLE_NEW)
 	mkdir -p $(WEBAPP_BUNDLE_TMP)
-	cd $(WEBAPP_DIR) && git ls-files -z | xargs -0 cp --parents -t $(WEBAPP_BUNDLE_TMP)
+	# `git archive | tar` copies the tracked tree with its directories intact on
+	# both GNU and BSD userlands; `cp --parents -t` is GNU-only and fails on
+	# macOS, and `pax` is absent from the GitHub release runner.
+	cd $(WEBAPP_DIR) && git archive --format=tar HEAD . | tar -x -C $(WEBAPP_BUNDLE_TMP)
 	cp -al $(WEBAPP_DIR)/node_modules $(WEBAPP_BUNDLE_TMP)/node_modules
 	cd $(WEBAPP_BUNDLE_TMP) && GROVE_WEBAPP_BUNDLE=1 $(WEBAPP_NPM) run build
 	cp -a $(WEBAPP_BUNDLE_TMP)/.next/standalone $(WEBAPP_BUNDLE_NEW)
@@ -297,7 +307,7 @@ _MCP_INSTALL_DEP := $(if $(WITH_MCP),_systemd-install-mcp,)
 # Precondition: required binaries discoverable. Run before any install/enable.
 _systemd-precheck:
 	@if [ -z "$(GROVE_BIN)" ]; then \
-	  echo "✗ grove binary not on PATH. Install first: 'curl -fsSL https://raw.githubusercontent.com/bearlike/Grove/current/install.sh | bash'" >&2; \
+	  echo "✗ grove binary not on PATH. Install first: 'curl -fsSL https://raw.githubusercontent.com/bearlike/Grove/current/tools/install.sh | bash'" >&2; \
 	  exit 1; \
 	fi
 	@echo "✓ grove: $(GROVE_BIN)"

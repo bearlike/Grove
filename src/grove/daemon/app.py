@@ -20,10 +20,13 @@ import os
 import platform
 import secrets
 import socket
+import time
 import urllib.error
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from concurrent.futures import Future
+from contextlib import asynccontextmanager, contextmanager, suppress
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 from urllib.parse import quote
@@ -39,20 +42,22 @@ from websockets.exceptions import WebSocketException
 
 from grove import __version__ as _GROVE_VERSION
 from grove.core import paths as core_paths
-from grove.core.activity import ActivityService
+from grove.core.activity import ActivityService, WorkspaceActivity
 from grove.core.activity_runtime import ActivityRuntime
 from grove.core.activity_sources import ActivitySources
 from grove.core.admission import Admission
 from grove.core.agents import configure_transcript_caches, get_adapter, resolve_models
 from grove.core.agents.hook import HOOK_INGEST_ROUTE, ClaudeHook
+from grove.core.agents.registry import ModelProbeMemo
 from grove.core.auth import SessionStore
 from grove.core.config import (
     DefaultsScope,
     GroveConfig,
+    TriggerRule,
     WorkspaceDefaults,
     load_config,
     save_workspace_defaults,
-    user_defaults_keys,
+    shadowing_defaults_keys,
 )
 from grove.core.container_infra import ProjectInfra
 from grove.core.contracts.activity import (
@@ -64,6 +69,7 @@ from grove.core.contracts.activity import (
     WorkspaceActivityView,
 )
 from grove.core.contracts.agents import AgentSummaryView, ModelOptionView
+from grove.core.contracts.artifacts import ArtifactAttachRequest
 from grove.core.contracts.assignment_events import AssignmentTicketEvent
 from grove.core.contracts.attachments import AttachmentUploadRequest, AttachmentView
 from grove.core.contracts.branch_info import BranchInfo
@@ -85,7 +91,14 @@ from grove.core.contracts.gallery import (
 from grove.core.contracts.history import WorkspaceHistoryView
 from grove.core.contracts.issueops import IssueOpsEvent, IssueOpsOutcome
 from grove.core.contracts.keys import SendKeysRequest
+from grove.core.contracts.launch import (
+    LaunchOptionsView,
+    LaunchPreviewView,
+    RuntimeOptionView,
+)
+from grove.core.contracts.live import LivePulseView
 from grove.core.contracts.phase import PhaseView, SetPhaseRequest
+from grove.core.contracts.projects import AddProjectRequest, ProjectCandidatesView
 from grove.core.contracts.public import PublicWorkspaceView
 from grove.core.contracts.questions import QuestionAnswerRequest
 from grove.core.contracts.requests import CreateWorkspaceRequest, UpdateWorkspaceRequest
@@ -113,6 +126,7 @@ from grove.core.contracts.views import (
     HealthView,
     ProjectView,
     ProvisionProgressView,
+    RuntimeTargetView,
     WhoamiView,
     WorkspaceDefaultsSaveView,
     WorkspaceDefaultsView,
@@ -123,9 +137,13 @@ from grove.core.contracts.views import (
     WorkspaceStateView,
     attach_instruction_view,
 )
-from grove.core.contracts.watches import TicketPredicate
+from grove.core.contracts.watches import MIN_INTERVAL, TicketPredicate
+from grove.core.delegations import DelegationJournal
+from grove.core.devcontainer import DevcontainerCli
 from grove.core.errors import (
     AgentSessionNotFound,
+    ArtifactInvalid,
+    ArtifactUnavailable,
     BranchAlreadyCheckedOut,
     BranchConflict,
     BranchError,
@@ -134,9 +152,14 @@ from grove.core.errors import (
     ConfigError,
     DiagramConflict,
     DiagramUnavailable,
+    EffortNotSupported,
+    GitError,
     GroveError,
+    InvalidLaunch,
     MacroNotFound,
     PaneNotFound,
+    ProjectNotOnNode,
+    ProjectTargetRefused,
     QuestionAnswerInvalid,
     QuestionNotPending,
     ResumeNotSupported,
@@ -152,14 +175,18 @@ from grove.core.errors import (
     WorkspaceNotFound,
     WorkspaceStateError,
 )
+from grove.core.fleet_digest import FleetDigest, MailboxBatch
 from grove.core.gallery import DiagramGallery, GalleryItem
+from grove.core.idle import FreezeSpans, IdleRule, IdleWatcher
 from grove.core.issueops import AssigneePoller, IssueOpsEngine, TicketStatusPublisher
+from grove.core.launch_options import node_options, runtime_options
 from grove.core.loaded_source import LoadedSource
 from grove.core.mailboxes import MailboxDelivery
 from grove.core.manager import WorkspaceManager
 from grove.core.model_catalog import model_options
 from grove.core.native_owners import NativeOwnerRegistry
 from grove.core.notifications import NotificationBroker
+from grove.core.otel_resource import node_name
 from grove.core.pane_events import (
     PaneEventHub,
     PaneEventsUnavailable,
@@ -168,9 +195,23 @@ from grove.core.pane_events import (
     TmuxControlPaneSource,
 )
 from grove.core.panels import PanelResolver, PanelTarget
+from grove.core.phase import PhaseReport
+from grove.core.project_onboarding import ProjectOnboarding
+from grove.core.reaper import (
+    FilesCollector,
+    ProcessCollector,
+    Reaper,
+    ReaperStore,
+    ReaperWatcher,
+    TmuxCollector,
+)
+from grove.core.registry import Project
 from grove.core.release import ReleaseChecker, ReleaseStatus
 from grove.core.sessions import SessionCatalog, SessionExplorer, SessionListing
 from grove.core.share_policy import SharePolicy, SharePolicyStore
+from grove.core.sidebar_pins import SidebarPinStore
+from grove.core.slack import SlackBridge
+from grove.core.speech import OpenAISpeech
 from grove.core.store import JsonWorkspaceStore
 from grove.core.telemetry.feedback import (
     LangfuseScores,
@@ -178,29 +219,33 @@ from grove.core.telemetry.feedback import (
     Rating,
     TurnFeedback,
 )
+from grove.core.telemetry.outbox import OutboxSink
 from grove.core.telemetry.project import LangfuseProject
 from grove.core.tickets.provider import TicketProvider
 from grove.core.tickets.reads import TicketReads
 from grove.core.tickets.registry import TicketProviderRegistry
-from grove.core.trace import turn_trace_id
+from grove.core.trace import build_span_sink, turn_trace_id
 from grove.core.trace_forwarder import TraceForwarder
 from grove.core.watches import (
     CiWatcher,
     CommandWatcher,
     MailboxWatchCourier,
-    NudgeEvidence,
-    PhaseNudgeWatcher,
     StandingWatches,
     TicketWatcher,
     TimerWatcher,
+    TriggerDispatch,
+    TriggerEvidence,
+    TriggerWatcher,
     WatcherRegistry,
     WatchLog,
     WatchScheduler,
 )
-from grove.core.watches.phase_nudge import EvidenceLookup
+from grove.core.watches.dispatch import Fleet
 from grove.core.watches.ticket import ProviderLookup
-from grove.core.workspace import WorkspaceState
+from grove.core.watches.triggers import EvidenceLookup, TextRenderer
+from grove.core.workspace import Runtime, WorkspaceState
 from grove.core.workspace_history import WorkspaceHistoryStore
+from grove.core.workspace_runtime import WorkspaceRuntimes
 from grove.daemon._audience import _PollAudience
 from grove.daemon._catalog import _CatalogMemo, _GalleryMemo
 from grove.daemon._catalog_sources import _CatalogSources
@@ -211,9 +256,12 @@ from grove.daemon._fleet_stream import (
     fleet_sse_frame,
 )
 from grove.daemon._lifecycle import _LifecycleRunner
+from grove.daemon._live import LiveHub
 from grove.daemon._pane_stream import _PaneStreamer
+from grove.daemon._project_sources import _ProjectSources
 from grove.daemon._public import PublicWorkspaceReader, ShareNotFound
 from grove.daemon._public_tickets import _PublicTicketMemo
+from grove.daemon._readiness import _ReadinessMemo
 from grove.daemon._runtime_sources import RuntimeSources
 from grove.daemon._scoped_events import ScopedWorkspaceEvents
 from grove.daemon._sse import _SseHub
@@ -221,11 +269,18 @@ from grove.daemon._turns import turn_window
 from grove.daemon.auth import (
     build_auth_router,
     make_require_hook_token,
-    make_require_session,
+    make_require_principal,
+    principal_of,
 )
+from grove.daemon.federation import Federation, create_resolver
+from grove.daemon.fleet_digest import FleetDigestRouter
 from grove.daemon.mailbox_socket import MailboxSocket
 from grove.daemon.mailboxes import MailboxRouter, OwnerSteerClient
+from grove.daemon.oidc import OidcVerifier
 from grove.daemon.repos import RepoRegistry
+from grove.daemon.request_audit import RequestAudit
+from grove.daemon.sidebar_pins import SidebarPinRouter
+from grove.daemon.speech import SpeechRouter
 from grove.daemon.usage import _default_usage_service, build_usage_router
 from grove.daemon.watches import WatchRouter
 
@@ -242,6 +297,10 @@ if TYPE_CHECKING:
 # a URL copied out of devtools is not a durable key to the workspace's sidecar.
 _PANEL_TOKEN_TTL = timedelta(hours=12)
 
+# The first orphan scan is best effort after readiness: its await must not
+# retain a task forever. Reaper skips a later pass while this thread still runs.
+_STARTUP_REAPER_TIMEOUT_SECONDS = 180
+
 # Signing key for panel tokens, minted once per process and never persisted.
 # Module scope rather than per-app so a test building two apps still validates
 # its own tokens; process scope rather than a file so a daemon restart revokes
@@ -257,7 +316,54 @@ def _close_best_effort(name: str, close: Callable[[], None]) -> None:
         logger.warning("{} shutdown failed: {}", name, type(exc).__name__)
 
 
-async def _source_startup(*sources: ActivitySources | _CatalogSources) -> None:
+class _StartupTimer:
+    """Time each lifespan startup step so a slow start names its own step.
+
+    The listener is not bound until the lifespan yields, so a slow step reads
+    from outside as a dead port with nothing in the journal. Each step logs its
+    start and end at INFO, which the daemon's default WARNING sink hides, and
+    `report` writes ONE warning per start listing every step slowest first, so
+    the journal carries the answer without anyone turning on debug logging.
+    A start that never finishes never reaches `report`; for that case the INFO
+    lines under `GROVE_DEBUG` show the last step entered.
+    """
+
+    def __init__(self) -> None:
+        """Start the clock for the whole startup."""
+        self._began = time.monotonic()
+        self._steps: list[tuple[str, float]] = []
+
+    @contextmanager
+    def step(self, name: str) -> Iterator[None]:
+        """Time one startup step.
+
+        Args:
+            name: How the step reads in the journal.
+        """
+        logger.info("lifespan step {} starting", name)
+        began = time.monotonic()
+        try:
+            yield
+        finally:
+            elapsed = time.monotonic() - began
+            self._steps.append((name, elapsed))
+            logger.info("lifespan step {} took {:.2f}s", name, elapsed)
+
+    def summary(self) -> str:
+        """The one-line report, slowest step first."""
+        total = time.monotonic() - self._began
+        steps = ", ".join(
+            f"{name} {seconds:.2f}s"
+            for name, seconds in sorted(self._steps, key=lambda step: step[1], reverse=True)
+        )
+        return f"lifespan ready in {total:.2f}s: {steps}"
+
+    def report(self) -> None:
+        """Write the summary to the journal once startup has finished."""
+        logger.warning("{}", self.summary())
+
+
+async def _source_startup(*sources: ActivitySources | _CatalogSources | _ProjectSources) -> None:
     """Arm the file-event observers off the readiness path, loudly on failure.
 
     Moving work off startup must not move its failures into silence: a bare
@@ -302,6 +408,8 @@ def _build_whoami(
     langfuse_project_id: str | None = None,
     feedback_reasons: list[str] | None = None,
     positive_feedback_reasons: list[str] | None = None,
+    speech: bool = False,
+    federation: str = "disabled",
 ) -> WhoamiView:
     """Snapshot the daemon's identity + uptime + release skew.
 
@@ -330,6 +438,8 @@ def _build_whoami(
         langfuse_project_id=langfuse_project_id,
         feedback_reasons=feedback_reasons or [],
         positive_feedback_reasons=positive_feedback_reasons or [],
+        speech=speech,
+        federation=federation,
     )
 
 
@@ -453,6 +563,17 @@ class _SwitchModelBody(BaseModel):
     model: str = Field(min_length=1)
 
 
+class _SwitchEffortBody(BaseModel):
+    """Change the running native session's reasoning effort.
+
+    ``effort`` must be one of the agent's ``AgentSummaryView.efforts``; the
+    pattern keeps a flag-shaped value out of any provider frame, and the engine
+    refuses a level the kind does not list. Module-scope for the same
+    forward-ref reason above."""
+
+    effort: str = Field(pattern=r"^[a-z]+$", max_length=16)
+
+
 class _HookIngestBody(BaseModel):
     """Native Claude Code http-hook payload — permissive by design.
 
@@ -502,6 +623,20 @@ _TicketAttachBody = TicketSelector | _TicketLinkBody
 # stale-tab self-heal reconnects when the last event is older than 20s, so this
 # must stay comfortably under that or a healthy quiet stream reads as dead.
 _HEARTBEAT_INTERVAL_SECONDS = 15.0
+
+
+def _sse_response(body: AsyncIterator[str]) -> StreamingResponse:
+    """An unbuffered ``text/event-stream`` response over ``body``."""
+    return StreamingResponse(
+        body,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
 
 # Kinds that carry no state to resume from, so their frames are written WITHOUT
 # an `id:` line. Verified against the HTML spec and a real Chromium: the
@@ -578,27 +713,104 @@ def _ticket_provider_lookup(registry: RepoRegistry) -> ProviderLookup:
     return lookup
 
 
-def _nudge_evidence(registry: RepoRegistry, activity: ActivityService) -> EvidenceLookup:
-    """Fresh evidence for the phase reminder, computed for ONE workspace and never published.
+def _trigger_evidence(registry: RepoRegistry, activity: ActivityService) -> EvidenceLookup:
+    """Fresh evidence for the trigger rules, computed for ONE workspace and never published.
 
     Deliberately not the maintained projection: a row the poll has not
     refreshed (the poll waits while no dashboard is open) can still read
-    WORKING for an agent that has since stopped, and a reminder sent on that
-    is the one case this feature must never hit. ``workspace_row`` would serve
+    WORKING for an agent that has since stopped, and an instruction sent on
+    that is the one case triggers must never hit. ``workspace_row`` would serve
     the maintained row, so this asks for a new one. The check runs once per
-    workspace per interval on the watch worker, so its cost is one row read
-    every ten minutes, not a fleet scan.
+    workspace per ``triggers.check_seconds`` on the watch worker, so its cost
+    is one row read per workspace per minute, not a fleet scan.
+
+    The rules come from the workspace's OWN repo cascade, so a project can
+    override a built-in rule or add its own.
     """
 
-    def lookup(workspace_id: str) -> NudgeEvidence | None:
+    def lookup(workspace_id: str) -> TriggerEvidence | None:
         try:
             manager, state = registry.resolve_workspace(workspace_id)
             row = activity.prepare_workspace_refresh(str(manager.repo_root), state.id)
         except GroveError:
             return None
-        return NudgeEvidence.of(row) if row is not None else None
+        if row is None:
+            return None
+        return TriggerEvidence.of(row, manager.config.triggers.active())
 
     return lookup
+
+
+def _idle_watcher(
+    registry: RepoRegistry, activity: ActivityService, lifecycle: _LifecycleRunner
+) -> IdleWatcher:
+    """The idle check over the maintained projection, confirmed by a fresh row per candidate."""
+
+    def fresh(row: WorkspaceActivity) -> WorkspaceActivity | None:
+        try:
+            return activity.prepare_workspace_refresh(row.state.repo_root, row.state.id)
+        except GroveError:
+            return None
+
+    def freeze(row: WorkspaceActivity) -> None:
+        registry.get(Path(row.state.repo_root)).freeze(row.state.id)
+
+    def hibernate(row: WorkspaceActivity) -> None:
+        registry.get(Path(row.state.repo_root)).hibernate(row.state.id)
+
+    def rule_for(row: WorkspaceActivity) -> IdleRule:
+        idle = registry.get(Path(row.state.repo_root)).config.idle
+        return IdleRule(
+            cooldown=timedelta(seconds=idle.cooldown_seconds),
+            hibernate_after=(
+                timedelta(seconds=idle.hibernate_after_seconds)
+                if idle.hibernate_after_seconds
+                else None
+            ),
+        )
+
+    def submit(workspace_id: str, action: Callable[[], None]) -> Future[None]:
+        return lifecycle.submit(workspace_id, action)
+
+    return IdleWatcher(
+        candidates=lambda: tuple(activity.snapshot().iter_workspaces()),
+        fresh=fresh,
+        freeze=freeze,
+        rule_for=rule_for,
+        hibernate=hibernate,
+        submit=submit,
+    )
+
+
+def _trigger_text(registry: RepoRegistry) -> TextRenderer:
+    """Render a rule's text through the workspace's own manager, which owns the facts."""
+
+    def render(rule: TriggerRule, seen: TriggerEvidence, values: Mapping[str, str]) -> str:
+        manager, state = registry.resolve_workspace(seen.state.id)
+        return manager.trigger_text(state, rule, rule.render(values))
+
+    return render
+
+
+def _trigger_fleet(registry: RepoRegistry) -> Fleet:
+    """Every workspace on the host with its current phase and its repo's trigger rules.
+
+    For a manual dispatch's selector. The phase comes from the manager's own
+    reader, so a ``--phase`` filter means what the dashboard shows.
+    """
+
+    def fleet() -> list[tuple[WorkspaceState, PhaseReport | None, tuple[TriggerRule, ...]]]:
+        rows: list[tuple[WorkspaceState, PhaseReport | None, tuple[TriggerRule, ...]]] = []
+        for root in registry.known_roots():
+            try:
+                manager = registry.get(root)
+                rules = tuple(manager.config.triggers.rules)
+                rows.extend((state, manager.phase_for(state), rules) for state in manager.list())
+            except GroveError:
+                continue
+        return rows
+
+    return fleet
 
 
 def build_app(  # noqa: PLR0915
@@ -608,11 +820,13 @@ def build_app(  # noqa: PLR0915
     auth_store: SessionStore | None = None,
     history_store: WorkspaceHistoryStore | None = None,
     share_policy_store: SharePolicyStore | None = None,
+    sidebar_pin_store: SidebarPinStore | None = None,
     notification_broker: NotificationBroker | None = None,
     release_checker: ReleaseChecker | None = None,
     issue_ops_engine: IssueOpsEngine | None = None,
     status_publisher: TicketStatusPublisher | None = None,
     assignee_poller: AssigneePoller | None = None,
+    slack_bridge: SlackBridge | None = None,
     loaded_source: LoadedSource | None = None,
 ) -> FastAPI:
     """Construct the daemon's FastAPI app.
@@ -627,6 +841,8 @@ def build_app(  # noqa: PLR0915
     ``status_publisher`` is built from ``cfg.issueops`` if not supplied (``None``
     when issue-ops is disabled) — tests inject a capturing one to assert the
     lifespan bind/close wiring, mirroring ``notification_broker``.
+    ``slack_bridge`` is built from ``cfg.slack`` if not supplied (``None`` when
+    Slack is off or has no tokens) and started in the lifespan the same way.
     ``release_checker`` defaults to a real GitHub-backed one — tests inject one
     with a fake fetcher so ``/whoami`` never touches the network.
     ``loaded_source`` defaults to a snapshot of the package taken here, at
@@ -745,6 +961,8 @@ def build_app(  # noqa: PLR0915
     # dedicated bounded pool AND the per-workspace serialization the event loop
     # used to provide for free (see `_lifecycle.py` for both rationales).
     lifecycle = _LifecycleRunner(max_pending=cfg.lifecycle_max_pending)
+    readiness = _ReadinessMemo()
+    onboarding = ProjectOnboarding(cfg.projects_root)
     # Who wants activity deltas. The 2s poll waits on it, so an idle daemon that
     # nobody and nothing is listening to does no per-workspace git/transcript
     # work at all (see `_audience.py`).
@@ -758,8 +976,22 @@ def build_app(  # noqa: PLR0915
             DashboardEvent(kind="catalog_changed", seq=activity_service.next_seq())
         ),
     )
+
+    async def _projects_changed() -> None:
+        # A project list change moves groups, never rows, so the held projection
+        # is regrouped rather than the fleet re-read (a full reconcile measured
+        # 57 s on a busy host). The snapshot frame is what reaches clients that
+        # already hold one; the catalog and gallery index per known repo.
+        snapshot, cursor = await asyncio.to_thread(activity_service.regroup_projects)
+        sse_hub.resync(snapshot, cursor)
+        catalog_sources.rescan()
+
+    project_sources = _ProjectSources(registry, _projects_changed)
     if notification_broker is None:
         notification_broker = NotificationBroker.from_config(cfg.notifications)
+    # Slack mentions in, agent replies out. Built from the daemon-wide config: one
+    # Slack app serves every project, and a mention picks its repo by channel.
+    slack_bridge = slack_bridge or SlackBridge.from_config(cfg.slack, registry=registry)
     # The watch scheduler is NOT an activity-bus subscriber: a watch is woken by
     # its own deadline rather than by anything a workspace does, so it owns a
     # heap instead of a subscription. It is constructed here for the lifespan's
@@ -770,7 +1002,28 @@ def build_app(  # noqa: PLR0915
     # explicitly, so there is no repo in hand to resolve a cascade against at
     # probe time — and the credential a forge read needs is the same one at
     # either scope.
-    phase_nudge_every = timedelta(minutes=cfg.nudges.phase.every_minutes)
+    trigger_watcher = TriggerWatcher(
+        _trigger_evidence(registry, activity_service), render=_trigger_text(registry)
+    )
+    # The fleet digest reads the MAINTAINED projection, unlike the trigger
+    # evidence above. No `audience.join()` keeps it fresh, because none would:
+    # the projection is refreshed by hook, filesystem and runtime edges, and
+    # nothing awaits the audience any more.
+    fleet_digest = FleetDigest(
+        snapshot=activity_service.snapshot_with_cursor, config=cfg.fleet_digest
+    )
+    # The daemon's own spans (reaper actions, freezes, request audits) share one
+    # exporter behind a durable outbox, so a crash or a dead collector loses
+    # nothing and what a previous run left is sent before anything new.
+    inner_sink = build_span_sink(cfg.telemetry)
+    daemon_sink = OutboxSink(inner_sink) if inner_sink is not None else None
+    # Host-wide leak reconciliation; one span per action when telemetry is on.
+    reaper = Reaper(
+        collectors=(TmuxCollector(), ProcessCollector(), FilesCollector()),
+        workspaces=store,
+        store=ReaperStore(),
+        sink=daemon_sink,
+    )
     watch_scheduler = WatchScheduler(
         log=WatchLog(),
         watchers=WatcherRegistry(
@@ -782,24 +1035,40 @@ def build_app(  # noqa: PLR0915
                 # import the engine's orchestration to answer where to run. A
                 # workspace that has since been killed resolves to None, which
                 # the watcher settles honestly rather than retrying forever.
-                CommandWatcher(_workspace_lookup(registry)),
+                CommandWatcher(
+                    _workspace_lookup(registry),
+                    WorkspaceRuntimes(
+                        cfg, cli=DevcontainerCli, remote_runner=native_steer.run_in_worktree
+                    ).for_state,
+                ),
                 # A ticket is named the way its workspace names it, so the
                 # provider comes from THAT workspace's repo cascade.
                 TicketWatcher(_ticket_provider_lookup(registry), ticket_reads),
-                PhaseNudgeWatcher(
-                    _nudge_evidence(registry, activity_service), every=phase_nudge_every
-                ),
+                trigger_watcher,
+                ReaperWatcher(reaper, dry_run=cfg.reaper.dry_run),
+                _idle_watcher(registry, activity_service, lifecycle),
             ]
         ),
         deliver=MailboxWatchCourier(MailboxDelivery(registry)),
     )
     # Standing watches follow each running workspace: one per attached ticket,
-    # plus the phase reminder unless it is turned off.
+    # plus one trigger watch unless triggers are switched off host-wide. Which
+    # rules apply is each workspace's own repo cascade, read at every check.
     standing_watches = StandingWatches(
         scheduler=watch_scheduler,
         workspaces=_workspace_lookup(registry),
-        phase_nudge_every=phase_nudge_every if cfg.nudges.phase.enabled else None,
+        trigger_every=(
+            timedelta(seconds=cfg.triggers.check_seconds) if cfg.triggers.enabled else None
+        ),
     )
+    trigger_dispatch = TriggerDispatch(
+        scheduler=watch_scheduler,
+        watcher=trigger_watcher,
+        fleet=_trigger_fleet(registry),
+    )
+    # The daemon is the long-lived reader of every create form, so it is where
+    # the operator's catalog freshness applies; a one-shot CLI keeps the default.
+    ModelProbeMemo.ttl_seconds = cfg.models.catalog_ttl_seconds
     if release_checker is None:
         release_checker = ReleaseChecker()
     # Taken once, as the process boots: the code this daemon will run for its
@@ -825,14 +1094,45 @@ def build_app(  # noqa: PLR0915
         history_store = store.history
     if share_policy_store is None:
         share_policy_store = SharePolicyStore()
-    require_session = make_require_session(auth_store=auth_store, enabled=cfg.auth.enabled)
-    auth_dep = [Depends(require_session)]
+    # One gate for every authenticated route: a person's OIDC ID token, or a Grove
+    # bearer (a person's, or this host's paired user, which a federation refuses).
+    oidc = OidcVerifier(cfg.auth.oidc)
+    require_principal = make_require_principal(
+        auth_store=auth_store,
+        enabled=cfg.auth.enabled,
+        oidc=oidc,
+        federated=cfg.federation.enabled,
+    )
+    auth_dep = [Depends(require_principal)]
+    live_hub = LiveHub(native_owners)
     mailbox_router = MailboxRouter(
         owners=native_owners,
         registry=registry,
         store=store,
-        auth_dep=require_session,
+        auth_dep=require_principal,
         lifecycle=lifecycle,
+        live=live_hub,
+        # A remote owner's spool drop is the same edge a hook ingest POST is.
+        on_spooled=activity_runtime.hook,
+    )
+    # The batch's durable replay record, so a retried id after a restart replays.
+    delegation_journal = DelegationJournal()
+    fleet_digest_router = FleetDigestRouter(
+        digest=fleet_digest,
+        # Each recipient's send holds that recipient's lifecycle lock, exactly as
+        # the single send does, and never two at once.
+        batch=MailboxBatch(
+            MailboxDelivery(registry), hold=lifecycle.hold, journal=delegation_journal
+        ),
+        auth_dep=require_principal,
+    )
+    speech_router = SpeechRouter(OpenAISpeech(cfg.speech), auth_dep=require_principal)
+    federation = Federation.build(
+        cfg.federation,
+        auth_dep=require_principal,
+        workspaces=lambda: [state.id for state in store.load_all()],
+        projects=registry.known_identities,
+        runtimes=cfg.resident_runtimes,
     )
     mailbox_socket = (
         MailboxSocket(Path(path), mailbox_router.router())
@@ -865,6 +1165,7 @@ def build_app(  # noqa: PLR0915
         # Statement count grows linearly with subscriber/owner count (bind on
         # entry, close in `finally`) — the same justification `build_app`
         # itself already carries the identical suppression for.
+        startup = _StartupTimer()
         app.state.registry = registry
         app.state.auth_store = auth_store
         app.state.share_policy_store = share_policy_store
@@ -875,7 +1176,8 @@ def build_app(  # noqa: PLR0915
         app.state.native_owners = native_owners
         app.state.mailbox_router = mailbox_router
         if mailbox_socket is not None:
-            await mailbox_socket.start()
+            with startup.step("mailbox socket"):
+                await mailbox_socket.start()
             app.state.mailbox_socket = mailbox_socket
         if otlp_ingest is not None:
             app.state.otlp_ingest = otlp_ingest
@@ -887,8 +1189,10 @@ def build_app(  # noqa: PLR0915
         # Bridge the sync activity bus to the loop and start the slow activity
         # poll. The hub must bind the *running* loop so its cross-thread
         # ``call_soon_threadsafe`` targets the right one.
-        sse_hub.start(asyncio.get_running_loop())
-        native_steer.bind(asyncio.get_running_loop())
+        loop = asyncio.get_running_loop()
+        sse_hub.start(loop)
+        native_steer.bind(loop)
+        lifecycle.bind(loop)
         # Subscribe the notification broker to the SAME activity bus the SSE hub
         # rides — a debounced edge-trigger, no new status computation. Its
         # dispatch worker keeps channel HTTP off the activity poll thread.
@@ -902,19 +1206,77 @@ def build_app(  # noqa: PLR0915
             notification_broker.bind(activity_service.subscribe)
             audience.join()
             app.state.notification_broker = notification_broker
+        # Same bargain as the broker: a Slack thread is a consumer with no
+        # dashboard open, so the bus keeps polling while Slack is connected. The
+        # connect is a network handshake, so it runs off the loop; a failure is
+        # logged and the daemon starts without Slack.
+        if slack_bridge is not None:
+            await asyncio.to_thread(slack_bridge.start, activity_service.subscribe)
+            audience.join()
+        # A create, kill or provision a SIGKILL interrupted left a record that
+        # describes work nobody is doing; finish it before any surface reads it.
+        with startup.step("resolve interrupted"):
+            await asyncio.to_thread(registry.resolve_interrupted)
         # Re-arms every durable watch and begins waiting. A restart must not
         # lose a callback an agent has already halted waiting for.
-        await watch_scheduler.start()
+        with startup.step("watch scheduler"):
+            await watch_scheduler.start()
         app.state.watch_scheduler = watch_scheduler
         # Ticket watches follow the activity bus (attach, detach, pause, kill,
         # from any process); the start-up pass repairs whatever changed while
         # the daemon was down. No `audience.join()`: these edges arrive by
         # invalidation, not by the fleet poll. Off the loop: store + log reads.
         standing_watches.bind(activity_service.subscribe)
-        await asyncio.to_thread(
-            standing_watches.reconcile_all,
-            [state.id for state in registry.workspace_states()],
+        with startup.step("standing watches"):
+            await asyncio.to_thread(
+                standing_watches.reconcile_all,
+                [state.id for state in registry.workspace_states()],
+            )
+
+        # The standing watch repeats this pass; disabled cancels a watch a past
+        # run left. The first scan starts after readiness below: it can touch a
+        # large durable ledger and never earns a dead listener.
+        async def _startup_reaper() -> None:
+            began = time.monotonic()
+            try:
+                async with asyncio.timeout(_STARTUP_REAPER_TIMEOUT_SECONDS):
+                    await asyncio.to_thread(reaper.run, apply=not cfg.reaper.dry_run)
+            except asyncio.CancelledError:
+                logger.info("startup reaper pass cancelled after {:.2f}s", time.monotonic() - began)
+                raise
+            except TimeoutError:
+                logger.warning(
+                    "startup reaper pass timed out after {}s", _STARTUP_REAPER_TIMEOUT_SECONDS
+                )
+            except Exception as exc:
+                logger.warning(
+                    "startup reaper pass failed after {:.2f}s: {}", time.monotonic() - began, exc
+                )
+            else:
+                logger.warning("startup reaper pass finished in {:.2f}s", time.monotonic() - began)
+
+        # One host-wide idle check per tenth of the cooldown, so a workspace is
+        # frozen within ~10% of the moment it crossed it, never more often than
+        # the scheduler's floor allows.
+        with startup.step("idle watch"):
+            await asyncio.to_thread(
+                IdleWatcher.ensure,
+                watch_scheduler,
+                every=max(MIN_INTERVAL, timedelta(seconds=cfg.idle.cooldown_seconds) / 10),
+            )
+        freeze_spans = FreezeSpans(daemon_sink)
+
+        def _span_freezes(_root: Path, manager: WorkspaceManager) -> None:
+            manager.subscribe(
+                lambda event: freeze_spans.record(event.kind, event.workspace_id, datetime.now(UTC))
+            )
+
+        registry.subscribe_managers(_span_freezes)
+        reaper_every = (
+            timedelta(seconds=cfg.reaper.interval_seconds) if cfg.reaper.enabled else None
         )
+        with startup.step("reaper watch"):
+            await asyncio.to_thread(ReaperWatcher.ensure, watch_scheduler, every=reaper_every)
         # The issue-ops status publisher is the bus's third subscriber
         # (alongside the SSE hub + notification broker) — same discipline: bind
         # after `sse_hub.start`, close on shutdown. None when issue-ops is off.
@@ -966,18 +1328,36 @@ def build_app(  # noqa: PLR0915
         # `_source_startup` logs it rather than letting the task die silently,
         # which is the cost of moving work off the readiness path.
         watchers: asyncio.Task[None] | None = None
+        startup_reaper: asyncio.Task[None] | None = None
         try:
-            await activity_runtime.start()
-            await runtime_sources.start()
+            with startup.step("activity runtime"):
+                await activity_runtime.start()
+            with startup.step("runtime sources"):
+                await runtime_sources.start()
             watchers = asyncio.create_task(
-                _source_startup(activity_sources, catalog_sources), name="grove-source-startup"
+                # The one-file project watch first: the other two take many
+                # seconds to arm, and `add-project` must not wait on them.
+                _source_startup(project_sources, activity_sources, catalog_sources),
+                name="grove-source-startup",
             )
             app.state.activity_runtime = activity_runtime
+            if federation is not None:
+                federation.start()
+                app.state.federation = federation
+            startup.report()
+            if cfg.reaper.enabled:
+                startup_reaper = asyncio.create_task(_startup_reaper(), name="grove-startup-reaper")
             yield
         finally:
+            if startup_reaper is not None:
+                startup_reaper.cancel()
+                await asyncio.gather(startup_reaper, return_exceptions=True)
+            if federation is not None:
+                await _aclose_best_effort("federation", federation.close)
             if watchers is not None:
                 watchers.cancel()
                 await asyncio.gather(watchers, return_exceptions=True)
+            await _aclose_best_effort("project sources", project_sources.close)
             await _aclose_best_effort("catalog sources", catalog_sources.close)
             await _aclose_best_effort("pane events", pane_events.aclose)
             await _aclose_best_effort("activity sources", activity_sources.close)
@@ -987,6 +1367,8 @@ def build_app(  # noqa: PLR0915
             _close_best_effort("watch scheduler", watch_scheduler.close)
             if notification_broker is not None:
                 _close_best_effort("notification broker", notification_broker.close)
+            if slack_bridge is not None:
+                _close_best_effort("slack bridge", slack_bridge.close)
             if status_publisher is not None:
                 _close_best_effort("status publisher", status_publisher.close)
             if trace_forwarder is not None:
@@ -995,6 +1377,7 @@ def build_app(  # noqa: PLR0915
                 _close_best_effort("assignee poller", assignee_poller.close)
             if otlp_ingest is not None:
                 await _aclose_best_effort("otlp ingest", otlp_ingest.aclose)
+            await _aclose_best_effort("speech router", speech_router.aclose)
             await _aclose_best_effort("mailbox router", mailbox_router.aclose)
             if mailbox_socket is not None:
                 await _aclose_best_effort("mailbox socket", mailbox_socket.close)
@@ -1002,6 +1385,7 @@ def build_app(  # noqa: PLR0915
             _close_best_effort("SSE hub", sse_hub.stop)
             _close_best_effort("activity service", activity_service.close)
             _close_best_effort("workspace history", history_store.close)
+            _close_best_effort("delegation journal", delegation_journal.close)
             try:
                 await asyncio.to_thread(usage_service.close)
             except Exception as exc:
@@ -1029,6 +1413,16 @@ def build_app(  # noqa: PLR0915
     # The sentry test attaches the real middleware before an SSE fixture, so its
     # result cannot pass after this registration is deleted.
     app.add_middleware(GZipMiddleware, minimum_size=1024)
+    # Outermost of the daemon's own layers: it stamps the request id and trace
+    # context every layer below reads, the federation proxy included.
+    app.add_middleware(RequestAudit, sink=daemon_sink, node=node_name())
+    Federation.mount(
+        federation,
+        app,
+        session_store=auth_store,
+        authenticate_caller=require_principal,
+        resolve_create=create_resolver(registry, cfg),
+    )
 
     if otlp_ingest is not None:
         # A MOUNT, never routes re-declared here: `build_receiver_app` is what
@@ -1048,9 +1442,29 @@ def build_app(  # noqa: PLR0915
 
     # Pairing + sessions router. Mounts before the gated routes so its own
     # per-route auth decisions stay local to ``build_auth_router``.
-    app.include_router(build_auth_router(auth_store=auth_store, require_session=require_session))
+    app.include_router(
+        build_auth_router(
+            auth_store=auth_store,
+            require_principal=require_principal,
+            oidc=oidc,
+            federated=cfg.federation.enabled,
+        )
+    )
     app.include_router(mailbox_router.router())
-    app.include_router(WatchRouter(scheduler=watch_scheduler, auth_dep=require_session).router())
+    app.include_router(fleet_digest_router.router())
+    app.include_router(speech_router.router())
+    app.include_router(
+        SidebarPinRouter(
+            pins=sidebar_pin_store or SidebarPinStore(),
+            workspaces=store,
+            auth_dep=require_principal,
+        ).router()
+    )
+    app.include_router(
+        WatchRouter(
+            scheduler=watch_scheduler, dispatch=trigger_dispatch, auth_dep=require_principal
+        ).router()
+    )
 
     # The historical usage-audit router — bounded reads over the SQLite cache,
     # the past-tense sibling of `/activity` + `/events` above. Auth is applied
@@ -1073,6 +1487,8 @@ def build_app(  # noqa: PLR0915
         # is the catch-all for any future subclass we forgot to enumerate.
         code_map: dict[type[GroveError], tuple[int, str]] = {
             WorkCapacityExceeded: (503, "work_capacity_exceeded"),
+            ArtifactInvalid: (422, "artifact_invalid"),
+            ArtifactUnavailable: (404, "artifact_unavailable"),
             DiagramConflict: (409, "diagram_conflict"),
             DiagramUnavailable: (404, "diagram_unavailable"),
             BranchConflict: (409, "branch_conflict"),
@@ -1080,6 +1496,7 @@ def build_app(  # noqa: PLR0915
             BranchNotFound: (404, "branch_not_found"),
             BranchError: (409, "branch_error"),
             WorkspaceNotFound: (404, "workspace_not_found"),
+            ProjectNotOnNode: (404, "project_not_on_node"),
             WorkspaceStateError: (409, "workspace_state_error"),
             # Steering refusals. PaneNotFound is 409 like the state
             # errors: the live session's current shape conflicts with the
@@ -1114,6 +1531,9 @@ def build_app(  # noqa: PLR0915
             # request is well-formed but semantically invalid for this agent, no
             # state change fixes it (mirrors question_answer_invalid).
             ResumeNotSupported: (422, "resume_not_supported"),
+            # A create named a reasoning effort the agent cannot launch with.
+            # 422 for the same reason: well-formed, invalid for this agent.
+            EffortNotSupported: (422, "effort_not_supported"),
             # Ticket providers. NotConfigured is 404 — the named tracker
             # simply isn't enabled for this repo (nothing went wrong on the
             # wire). TicketProviderError is 502 — the upstream tracker API
@@ -1155,12 +1575,21 @@ def build_app(  # noqa: PLR0915
             # capability refusals above: the request is well-formed, and no
             # retry succeeds until the daemon's configuration changes.
             WatchUnobservable: (422, "watch_unobservable"),
+            # An add-project target Grove will not write (exists, not one path
+            # segment, not a repository). Refused before any side effect, and the
+            # fix is a different value in the same form, so 422.
+            ProjectTargetRefused: (422, "project_target_refused"),
             # A repo whose `.grove/config.json` will not parse. 500 and
             # not 4xx: the request was fine, the server's own state is not, and
             # no client retry fixes it — but it is NAMED, because the message
             # carries the file and the parse position an operator needs.
             ConfigError: (500, "config_error"),
         }
+        if isinstance(exc, InvalidLaunch):
+            return HTTPException(
+                status_code=422,
+                detail={"error": exc.error, "message": str(exc), "field": exc.field},
+            )
         for cls, (status, code) in code_map.items():
             if isinstance(exc, cls):
                 return HTTPException(
@@ -1711,6 +2140,8 @@ def build_app(  # noqa: PLR0915
             positive_feedback_reasons=(
                 list(cfg.telemetry.positive_feedback_reasons) if langfuse_host else []
             ),
+            speech=speech_router.available,
+            federation=cfg.federation.status,
         )
 
     @app.get("/activity", response_model=DashboardSnapshotView, dependencies=auth_dep)
@@ -1817,8 +2248,10 @@ def build_app(  # noqa: PLR0915
 
     @app.get("/workspaces", response_model=list[WorkspaceStateView], dependencies=auth_dep)
     async def list_workspaces(
+        request: Request,
         repo: Annotated[Path, Query()] | None = None,
         ticket: Annotated[str, Query()] | None = None,
+        creator: Annotated[Literal["me", "all"], Query()] = "me",
     ) -> list[WorkspaceStateView]:
         """Cross-repo (default) or single-repo (``repo=``) workspace listing.
 
@@ -1830,7 +2263,11 @@ def build_app(  # noqa: PLR0915
         ``WorkspaceManager.find_by_ticket`` resolves for that ticket — the
         issue-ops "does a workspace already exist for this ticket" lookup —
         scanned within ``repo`` when given, else across every known repo.
+        ``creator`` defaults to ``me``, the caller's own workspaces; ``all``
+        shows everyone's. It narrows a view and grants nothing: every signed-in
+        person may read every workspace.
         """
+        mine = principal_of(request).subject if creator == "me" else None
         ticket_filter: tuple[str, str] | None = None
         if ticket is not None:
             provider, sep, ticket_id = ticket.partition(":")
@@ -1860,7 +2297,7 @@ def build_app(  # noqa: PLR0915
                         out.append(WorkspaceStateView.from_state(match))
                     continue
                 out.extend(WorkspaceStateView.from_state(state) for state in mgr.list())
-            return out
+            return out if mine is None else [view for view in out if view.created_by == mine]
 
         # `list()` reconciles every workspace against live tmux + the
         # filesystem — measured ~500 ms for 23 workspaces — and this is the
@@ -1869,7 +2306,7 @@ def build_app(  # noqa: PLR0915
         return await asyncio.to_thread(_scan)
 
     @app.post("/workspaces", response_model=WorkspaceStateView, dependencies=auth_dep)
-    async def create_workspace(req: CreateWorkspaceRequest) -> WorkspaceStateView:
+    async def create_workspace(req: CreateWorkspaceRequest, request: Request) -> WorkspaceStateView:
         """Create a workspace and return it once it is fully provisioned.
 
         Runs on the lifecycle runner's own pool, never the event loop: with containers
@@ -1883,17 +2320,26 @@ def build_app(  # noqa: PLR0915
         the id it would serialize on is minted *by* this call (see
         ``_LifecycleRunner.run``).
         """
+        if req.repo_root is None and req.project is not None:
+            try:
+                root = await asyncio.to_thread(registry.root_for, req.project)
+            except GroveError as exc:
+                raise _grove_error_to_http(exc) from exc
+            req = req.model_copy(update={"repo_root": root})
         if req.repo_root is None:
             raise HTTPException(
                 status_code=422,
                 detail={
                     "error": "repo_root_required",
-                    "message": "POST /workspaces requires repo_root in the request body",
+                    "message": "POST /workspaces requires repo_root or project in the request body",
                 },
             )
         mgr = registry.get(req.repo_root)
+        # The creator is whoever the daemon admitted, never a field the request
+        # could carry: a client cannot create a workspace in somebody else's name.
+        creator = principal_of(request).subject
         try:
-            state = await lifecycle.run(None, mgr.create, req)
+            state = await lifecycle.run(None, partial(mgr.create, created_by=creator), req)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
         return WorkspaceStateView.from_state(state)
@@ -2139,6 +2585,26 @@ def build_app(  # noqa: PLR0915
             raise _grove_error_to_http(exc) from exc
         return WorkspaceStateView.from_state(state)
 
+    @app.post(
+        "/workspaces/{ws_id}/fork",
+        response_model=WorkspaceStateView,
+        dependencies=auth_dep,
+    )
+    async def fork_workspace(ws_id: str, request: Request) -> WorkspaceStateView:
+        """Create a new workspace whose agent starts from a copy of this one's conversation.
+
+        Returns the NEW workspace once it is provisioned, like ``POST /workspaces``.
+        Unkeyed on the lifecycle runner for the same reason create is: the
+        serializing id is minted by the call, and the source is only read.
+        """
+        mgr = _manager_for(ws_id)
+        creator = principal_of(request).subject
+        try:
+            state = await lifecycle.run(None, partial(mgr.fork, created_by=creator), ws_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return WorkspaceStateView.from_state(state)
+
     @app.post("/workspaces/{ws_id}/kill", status_code=204, dependencies=auth_dep)
     async def kill_workspace(ws_id: str, body: _KillBody) -> None:
         """Tear the workspace down — lifecycle runner: removing the
@@ -2308,6 +2774,23 @@ def build_app(  # noqa: PLR0915
         mgr = _manager_for(ws_id)
         try:
             await asyncio.to_thread(mgr.switch_model, ws_id, body.model)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+
+    @app.post("/workspaces/{ws_id}/controls/effort", status_code=204, dependencies=auth_dep)
+    async def switch_workspace_effort(ws_id: str, body: _SwitchEffortBody) -> None:
+        """Change the running native session's reasoning effort.
+
+        Delivered over the provider's own control channel (Claude Code
+        ``apply_flag_settings``, Codex ``thread/settings/update``) — 204 means
+        the request reached the owner, not that the provider applied it.
+        Refusals: 422 ``effort_not_supported`` (a level the kind does not list,
+        or a workspace with no native channel), 409 ``pane_not_found`` (no
+        connected owner), 501 ``steering_unsupported``.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            await asyncio.to_thread(mgr.switch_effort, ws_id, body.effort)
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
 
@@ -2650,6 +3133,8 @@ def build_app(  # noqa: PLR0915
         mgr = _manager_for(ws_id)
 
         state = await asyncio.to_thread(mgr.get, ws_id)
+        if state.runtime is Runtime.REMOTE:
+            return _sse_response(_remote_pane_frames(ws_id))
         pane = await asyncio.to_thread(mgr.pane_for, state)
         if pane is None:
             raise HTTPException(status_code=409, detail={"error": "pane_not_found"})
@@ -2679,15 +3164,35 @@ def build_app(  # noqa: PLR0915
             async for event in streamer.events():
                 yield _sse_frame(event) if event is not None else ": keepalive\n\n"
 
-        return StreamingResponse(
-            stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache, no-transform",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
-        )
+        return _sse_response(stream())
+
+    async def _remote_pane_frames(ws_id: str) -> AsyncIterator[str]:
+        """A remote workspace's pane: the lines its worker posts while this stream is open.
+
+        Opening it joins the workspace's live room, which is the watch: the
+        worker starts posting its printed lines and the first batch is its
+        whole log. Same frame shape and keepalive as a host pane's stream.
+        """
+        wake = live_hub.join_pane(ws_id)
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=_HEARTBEAT_INTERVAL_SECONDS)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                wake.clear()
+                ansi, taken_at = live_hub.pane(ws_id)
+                if ansi is None:
+                    continue
+                yield _sse_frame(
+                    DashboardEvent.pane_event(
+                        WorkspacePaneView.from_capture(ws_id, ansi, taken_at),
+                        seq=activity_service.next_seq(),
+                    )
+                )
+        finally:
+            live_hub.leave_pane(ws_id, wake)
 
     @app.get(
         "/workspaces/{ws_id}/commits",
@@ -3257,6 +3762,57 @@ def build_app(  # noqa: PLR0915
         )
 
     @app.get(
+        "/workspaces/{ws_id}/live",
+        dependencies=auth_dep,
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "model": LivePulseView,
+                "description": (
+                    "Server-sent `live_pulse` events: what the workspace's native "
+                    "session is doing this second (thinking, generating, a tool, a "
+                    "sub-agent). Produced only while a viewer holds this stream; "
+                    "a terminal workspace sends heartbeats and nothing else."
+                ),
+            }
+        },
+    )
+    async def workspace_live_stream(ws_id: str) -> StreamingResponse:
+        """The working loader's feed, alive exactly as long as somebody reads it.
+
+        Opening the stream is the watch: the first viewer asks the owner worker
+        to start posting its live step and the last one leaving stops it, so an
+        unwatched session costs nothing beyond the in-memory fold the worker
+        already does. No snapshot read, no poll and no host-wide delta.
+        """
+        _manager_for(ws_id)
+        queue = live_hub.join(ws_id)
+
+        async def stream() -> AsyncIterator[str]:
+            try:
+                while True:
+                    try:
+                        pulse = await asyncio.wait_for(
+                            queue.get(), timeout=_HEARTBEAT_INTERVAL_SECONDS
+                        )
+                    except TimeoutError:
+                        yield "event: heartbeat\ndata: {}\n\n"
+                        continue
+                    yield f"event: live_pulse\ndata: {pulse.model_dump_json()}\n\n"
+            finally:
+                live_hub.leave(ws_id, queue)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    @app.get(
         "/workspaces/{ws_id}/provision",
         response_model=ProvisionProgressView,
         dependencies=auth_dep,
@@ -3656,6 +4212,53 @@ def build_app(  # noqa: PLR0915
             key=lambda v: (v.repo_name.lower(), v.cwd),
         )
 
+    @app.get("/projects/candidates", response_model=ProjectCandidatesView, dependencies=auth_dep)
+    async def project_candidates() -> ProjectCandidatesView:
+        """Git repositories under `projects_root` that Grove does not list yet.
+
+        The "add an existing repository" step's source. Off-loop because it
+        stats every entry of the root and reads each candidate's remotes.
+        """
+
+        def _scan() -> ProjectCandidatesView:
+            known = {root.resolve() for root in registry.known_roots()}
+            return onboarding.candidates(known)
+
+        return await asyncio.to_thread(_scan)
+
+    @app.post("/projects", status_code=201, response_model=ProjectView, dependencies=auth_dep)
+    async def add_project(body: AddProjectRequest) -> ProjectView:
+        """Create, clone or adopt a repository and add it to the user config.
+
+        Rides the lifecycle pool, not the default executor: a clone takes as long
+        as the remote and the repository make it take.
+
+        The registry is reloaded HERE, with the watch's own loader, before the
+        response leaves. The user-config watch would get there a second or two
+        later, and in that window every repo-gated route (`/agents`,
+        `/branches`, `/defaults`) answered `unknown_repo_root` for the project a
+        client had just been told exists — measured as a 404 on the launch
+        picker's first agents read. The watch's later reload then finds nothing
+        changed. Pushing the new snapshot to clients stays the watch's job.
+        """
+
+        def _add_and_register(request: AddProjectRequest) -> Path:
+            root = onboarding.add(request)
+            registry.reload_projects(load_config(repo_root=None).projects)
+            return root
+
+        try:
+            repo_root = await lifecycle.run(None, _add_and_register, body)
+        except GitError as exc:
+            # The git failure is the user's to act on (a wrong URL, no access),
+            # and its message is git's own, already free of credentials.
+            raise HTTPException(
+                status_code=422, detail={"error": "project_git_failed", "message": str(exc)}
+            ) from exc
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return ProjectView.from_project(Project(repo_root=repo_root, cwd=repo_root))
+
     @app.get("/agents", response_model=list[AgentSummaryView], dependencies=auth_dep)
     async def list_agents(repo: Annotated[Path, Query()]) -> list[AgentSummaryView]:
         """Configured agents for one repo's cascade — the new-workspace picker source.
@@ -3681,6 +4284,7 @@ def build_app(  # noqa: PLR0915
                     models=resolve_models(
                         kind=spec.kind, command=spec.command, configured=spec.models
                     ),
+                    efforts=get_adapter(spec.kind).efforts,
                 )
                 for spec in agents
             ]
@@ -3732,12 +4336,78 @@ def build_app(  # noqa: PLR0915
         brief, branch mode, and init behavior already have create-path fallbacks,
         and a remote form needs the same pre-selected answers the TUI sees.
         """
-        root = _known_root(repo)
-        registry.get(root)
-        # Managers cache their config for lifecycle consistency. Defaults writes
-        # are immediately visible instead, so re-resolve the read-only cascade.
-        cfg_for_repo = await asyncio.to_thread(load_config, root)
-        return WorkspaceDefaultsView.from_config(cfg_for_repo)
+        mgr = registry.get(_known_root(repo))
+        # The SAME config `create` resolves against (`launch_config`: the
+        # manager's cascade with saved defaults re-read), so this view and an
+        # untouched create can never disagree, and a `PUT /defaults` shows here
+        # and applies to the next create at once.
+        view = WorkspaceDefaultsView.from_config(await asyncio.to_thread(mgr.launch_config))
+        hub = federation.routes.hub if federation is not None else None
+        if hub is None:
+            return view
+        nodes = [
+            RuntimeTargetView(node=node.name, runtimes=tuple(node.runtimes))
+            for node in await asyncio.to_thread(hub.nodes)
+            if node.state == "reachable"
+        ]
+        return view.model_copy(update={"targets": (*view.targets, *nodes)})
+
+    @app.post("/launch/preview", response_model=LaunchPreviewView, dependencies=auth_dep)
+    async def preview_launch(req: CreateWorkspaceRequest) -> LaunchPreviewView:
+        """What ``POST /workspaces`` would do with this exact body, before anything is created.
+
+        Same resolution and same pre-side-effect checks as the create, run
+        against the same per-repo config, so a form showing this is showing
+        what the create will record. ``problems`` empty means validation
+        passed; provisioning is still checked by the create itself. Cheap
+        enough to call on every draft change: container readiness is a
+        shared reading at most a few seconds old (`_ReadinessMemo`), and
+        nothing here runs git, tmux or Docker on the request.
+        """
+        if req.repo_root is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "repo_root_required",
+                    "message": "POST /launch/preview requires repo_root in the request body",
+                },
+            )
+        mgr = registry.get(_known_root(req.repo_root))
+        unavailable = await readiness.reason(mgr.repo_root, mgr.container_unavailable_reason)
+        # The project's own requires_container refusal, memoized the same way,
+        # so the preview raises the identical 422 a create would.
+        refused = await readiness.reason(mgr.repo_root, mgr.host_refusal, "host_refusal")
+        preview = await asyncio.to_thread(
+            partial(mgr.preview, container_unavailable=unavailable, host_refused=refused), req
+        )
+        return LaunchPreviewView.from_preview(preview, req)
+
+    @app.get("/launch/options", response_model=LaunchOptionsView, dependencies=auth_dep)
+    async def list_launch_options(repo: Annotated[Path, Query()]) -> LaunchOptionsView:
+        """Where a create in ``repo`` could run, configured or not, and whether each is ready.
+
+        Host and container readiness are the same preflight checks ``grove
+        doctor`` runs, read through the preview's shared memo so a form fetching
+        this costs at most one probe per runtime every few seconds. A remote
+        block's platform is never probed and reads ``unknown``; a hub appends
+        each reachable node's runtimes by name, also ``unknown``.
+        """
+        mgr = registry.get(_known_root(repo))
+        host = await readiness.reason(mgr.repo_root, mgr.host_unavailable_reason, "host")
+        container = await readiness.reason(
+            mgr.repo_root, mgr.container_unavailable_reason, "container"
+        )
+        options = runtime_options(
+            mgr.config, host_unavailable=host, container_unavailable=container
+        )
+        hub = federation.routes.hub if federation is not None else None
+        if hub is not None:
+            for node in await asyncio.to_thread(hub.nodes):
+                if node.state == "reachable":
+                    options.extend(node_options(node.name, node.runtimes))
+        return LaunchOptionsView(
+            runtimes=tuple(RuntimeOptionView.from_option(option) for option in options)
+        )
 
     @app.put(
         "/defaults",
@@ -3760,8 +4430,9 @@ def build_app(  # noqa: PLR0915
         # `WorkspaceDefaults` keeps optional fields for config layers, but this
         # route's replacement semantics require an explicit value or clear for
         # every field — don't let a partial JSON body silently erase the rest.
-        if defaults.model_fields_set != set(WorkspaceDefaults.model_fields):
-            missing = sorted(set(WorkspaceDefaults.model_fields) - defaults.model_fields_set)
+        required = set(WorkspaceDefaults.model_fields) - WorkspaceDefaults.HAND_EDITED
+        if not required <= defaults.model_fields_set:
+            missing = sorted(required - defaults.model_fields_set)
             raise HTTPException(
                 status_code=422,
                 detail={
@@ -3772,11 +4443,8 @@ def build_app(  # noqa: PLR0915
 
         def _save() -> WorkspaceDefaultsSaveView:
             saved_fields = defaults.model_dump(exclude_none=True)
-            shadowed = (
-                tuple(name for name in saved_fields if name in user_defaults_keys())
-                if scope is not DefaultsScope.USER
-                else ()
-            )
+            higher = shadowing_defaults_keys(scope, repo_root)
+            shadowed = tuple(name for name in saved_fields if name in higher)
             path = save_workspace_defaults(defaults, scope=scope, repo_root=repo_root)
             return WorkspaceDefaultsSaveView(path=str(path), shadowed=shadowed)
 
@@ -3970,5 +4638,79 @@ def build_app(  # noqa: PLR0915
         except GroveError as exc:
             raise _grove_error_to_http(exc) from exc
         return WorkspaceStateView.from_state(state)
+
+    # ─── artifacts: files and links a workspace hands back ───────────────────
+
+    @app.post(
+        "/workspaces/{ws_id}/artifacts",
+        response_model=WorkspaceStateView,
+        dependencies=auth_dep,
+    )
+    async def attach_artifact(ws_id: str, body: ArtifactAttachRequest) -> WorkspaceStateView:
+        """Attach a file path or an http(s) link to a workspace.
+
+        The engine classifies and validates the target: a file must be a
+        regular file under the workspace checkout, the project root or a
+        configured ``artifacts.roots`` directory. Idempotent by target. A
+        refused target is 422 ``artifact_invalid``.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            state = await asyncio.to_thread(mgr.attach_artifact, ws_id, body.target, body.title)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return WorkspaceStateView.from_state(state)
+
+    @app.delete(
+        "/workspaces/{ws_id}/artifacts",
+        response_model=WorkspaceStateView,
+        dependencies=auth_dep,
+    )
+    async def detach_artifact(
+        ws_id: str, ref: Annotated[str, Query(min_length=1, max_length=4096)]
+    ) -> WorkspaceStateView:
+        """Remove an artifact by its id or by the target it was attached with.
+
+        ``ref`` is a query parameter because a target is a path or a URL, and
+        neither survives as one path segment. Idempotent.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            state = await asyncio.to_thread(mgr.detach_artifact, ws_id, ref)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return WorkspaceStateView.from_state(state)
+
+    @app.get(
+        "/workspaces/{ws_id}/artifacts/{artifact_id}/content",
+        dependencies=auth_dep,
+        response_class=Response,
+        responses={200: {"content": {"application/octet-stream": {}}}},
+    )
+    async def read_artifact_content(ws_id: str, artifact_id: str) -> Response:
+        """The current bytes of one attached file artifact.
+
+        Only an attached artifact is addressable, so a client never names a
+        path, and the engine re-checks the allowed directories on every read.
+
+        ALWAYS ``application/octet-stream`` with ``nosniff``, whatever the file
+        is. An agent-written HTML or SVG file opened directly at this URL must
+        download, never render on the dashboard's origin. The viewer picks a
+        renderer from the file name, which rides ``Content-Disposition``.
+        """
+        mgr = _manager_for(ws_id)
+        try:
+            content = await asyncio.to_thread(mgr.read_artifact, ws_id, artifact_id)
+        except GroveError as exc:
+            raise _grove_error_to_http(exc) from exc
+        return Response(
+            content=content.data,
+            media_type="application/octet-stream",
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(content.name)}",
+                "Cache-Control": "no-store",
+            },
+        )
 
     return app

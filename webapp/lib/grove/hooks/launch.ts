@@ -9,6 +9,9 @@ import { groveKeys } from "./keys";
 type WorkspaceDefaultsView = components["schemas"]["WorkspaceDefaultsView"];
 type WorkspaceDefaultsSaveView = components["schemas"]["WorkspaceDefaultsSaveView"];
 type DefaultsScope = components["schemas"]["DefaultsScope"];
+type LaunchPreviewView = components["schemas"]["LaunchPreviewView"];
+type LaunchOptionsView = components["schemas"]["LaunchOptionsView"];
+type CreateWorkspaceRequest = components["schemas"]["CreateWorkspaceRequest"];
 
 /** Read the resolved defaults that the selected repository's create path would use. */
 export function useWorkspaceDefaults(repoRoot: string | null): UseQueryResult<WorkspaceDefaultsView> {
@@ -16,6 +19,37 @@ export function useWorkspaceDefaults(repoRoot: string | null): UseQueryResult<Wo
     queryKey: groveKeys.defaults(repoRoot ?? ""),
     queryFn: () => groveClient.getWorkspaceDefaults(repoRoot!),
     enabled: repoRoot !== null,
+  });
+}
+
+/**
+ * The engine's verdict on one serialised launch request, or nothing while the
+ * request cannot be built. Keyed by the request itself, so every draft that
+ * would send the same launch shares one answer and the cache does the dedupe.
+ */
+export function useLaunchPreview(request: string | null): UseQueryResult<LaunchPreviewView> {
+  return useQuery({
+    queryKey: groveKeys.launchPreview(request ?? ""),
+    queryFn: () => groveClient.previewLaunch(JSON.parse(request!) as CreateWorkspaceRequest),
+    enabled: request !== null,
+    // A preview is a validation, not data a reader browses: re-asking on focus
+    // would re-run it for nothing, and a stale one is replaced on the next edit.
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+}
+
+/**
+ * Where a create in this repository could run: configured runtimes, the
+ * implemented ones that are not configured, and each hub node's rows. Fetched
+ * once per repo; container readiness inside it is the daemon's own short memo.
+ */
+export function useLaunchOptions(repoRoot: string | null): UseQueryResult<LaunchOptionsView> {
+  return useQuery({
+    queryKey: groveKeys.launchOptions(repoRoot ?? ""),
+    queryFn: () => groveClient.getLaunchOptions(repoRoot!),
+    enabled: repoRoot !== null,
+    refetchOnWindowFocus: false,
   });
 }
 

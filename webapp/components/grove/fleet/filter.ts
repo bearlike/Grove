@@ -22,6 +22,14 @@ export interface FleetFilter {
   readonly hiddenProjects: readonly string[];
   /** How the surviving rows are arranged. */
   readonly groupBy: "none" | "project";
+  /** Board only: fold an empty phase column to a rail so full ones get the width. */
+  readonly foldEmpty: boolean;
+  /**
+   * Show every person's workspaces, not only the signed-in caller's. Off by
+   * default: the fleet opens on what you created. Narrows a view and grants
+   * nothing, since everyone may read every workspace.
+   */
+  readonly everyone: boolean;
 }
 
 export const NO_FILTER: FleetFilter = {
@@ -30,6 +38,8 @@ export const NO_FILTER: FleetFilter = {
   hiddenStates: [],
   hiddenProjects: [],
   groupBy: "none",
+  foldEmpty: true,
+  everyone: false,
 };
 
 /**
@@ -85,10 +95,17 @@ export function fleetRows(snapshot: DashboardSnapshotView | undefined): FleetRow
  * lowest id. That trade is the point.
  *
  * It does NOT change what the row DISPLAYS. The rail still renders the precise
- * age from `lastActivityIso`, so the guide's rule that a list sorted by a value
- * must show that value still holds; only the ranking is quantized.
+ * last-update time from the same transcript stamps, so the guide's rule that a
+ * list sorted by a value must show that value still holds; only the ranking is
+ * quantized.
  */
 const RANK_BUCKET_MS = 60_000;
+const rankByWorkspace = new WeakMap<WorkspaceActivity, number>();
+
+/** Lifecycle, not agent silence: an idle session may still be a live workspace. */
+export function isInactive(workspace: WorkspaceActivity): boolean {
+  return ["offline", "orphaned", "paused"].includes(workspace.state.status);
+}
 
 /**
  * The whole fleet as ONE list, newest activity first.
@@ -105,25 +122,33 @@ const RANK_BUCKET_MS = 60_000;
  * `Array.prototype.sort` being stable means equal keys simply inherit whatever
  * order arrived. Without the tiebreaker the rail is only as steady as an
  * ordering nobody promised.
+ *
+ * Age, phase and attention deliberately do NOT rank. Age is how long a
+ * workspace has existed, which says nothing about where a reader should look
+ * next. Attention is saturated on a real host (16 of 17 rows, because every
+ * finished turn reads `waiting`), so ranking by it would sort on noise. Both
+ * stay visible as marks on the row instead.
  */
-/** Lifecycle, not agent silence: an idle session may still be a live workspace. */
-export function isInactive(workspace: WorkspaceActivity): boolean {
-  return ["offline", "orphaned", "paused"].includes(workspace.state.status);
-}
-
 export function sortedFleetRows(snapshot: DashboardSnapshotView | undefined): FleetRow[] {
-  const rank = (row: FleetRow) => Math.floor(lastActivityAt(row.workspace) / RANK_BUCKET_MS);
-  return fleetRows(snapshot).sort((a, b) => {
-    const inactive = Number(isInactive(a.workspace)) - Number(isInactive(b.workspace));
+  // Unchanged immutable rows keep their rank across stream deltas.
+  return fleetRows(snapshot).map((row) => {
+    let rank = rankByWorkspace.get(row.workspace);
+    if (rank === undefined) {
+      rank = Math.floor(lastActivityAt(row.workspace) / RANK_BUCKET_MS);
+      rankByWorkspace.set(row.workspace, rank);
+    }
+    return { row, rank };
+  }).sort((a, b) => {
+    const inactive = Number(isInactive(a.row.workspace)) - Number(isInactive(b.row.workspace));
     if (inactive !== 0) return inactive;
-    const recency = rank(b) - rank(a);
+    const recency = b.rank - a.rank;
     if (recency !== 0) return recency;
-    return a.workspace.state.id < b.workspace.state.id
+    return a.row.workspace.state.id < b.row.workspace.state.id
       ? -1
-      : a.workspace.state.id > b.workspace.state.id
+      : a.row.workspace.state.id > b.row.workspace.state.id
         ? 1
         : 0;
-  });
+  }).map(({ row }) => row);
 }
 
 /**
@@ -145,16 +170,27 @@ export function matchesQuery(row: FleetRow, query: string): boolean {
   return haystack.some((value) => value.toLowerCase().includes(needle));
 }
 
-/** Whether one row survives the filter. */
-export function admits(row: FleetRow, filter: FleetFilter): boolean {
+/**
+ * Whether one row survives the filter. `me` is the caller's subject; until it
+ * is known nothing is narrowed by creator, so the fleet never flashes empty.
+ * A workspace with no recorded creator was made by this host's own user.
+ */
+export function admits(row: FleetRow, filter: FleetFilter, me?: string): boolean {
+  if (!filter.everyone && me !== undefined && (row.workspace.state.created_by ?? "local") !== me) {
+    return false;
+  }
   if (filter.attentionOnly && !row.workspace.needs_attention) return false;
   if (filter.hiddenStates.includes(agentStateOf(row.workspace))) return false;
   if (filter.hiddenProjects.includes(row.repoRoot)) return false;
   return matchesQuery(row, filter.query);
 }
 
-export function filterRows(rows: readonly FleetRow[], filter: FleetFilter): FleetRow[] {
-  return rows.filter((row) => admits(row, filter));
+export function filterRows(
+  rows: readonly FleetRow[],
+  filter: FleetFilter,
+  me?: string,
+): FleetRow[] {
+  return rows.filter((row) => admits(row, filter, me));
 }
 
 export interface FleetGroup {
@@ -169,6 +205,13 @@ export interface FleetGroup {
  * Projects can arrive as several nested groups with one `repo_root`; grouping
  * by that root keeps them together while a project-name collision remains two
  * distinct groups.
+ *
+ * Groups take the order of their FIRST row, i.e. the project whose newest
+ * workspace moved most recently leads. They were alphabetical, and the rail
+ * groups by default, so a workspace that had just replied could sit below a
+ * stale one in a project whose name sorts first — the reported "most recent
+ * is not at the top" (#919). Map insertion order over sorted rows is that
+ * order already.
  */
 export function fleetGroups(
   rows: readonly FleetRow[],
@@ -184,9 +227,7 @@ export function fleetGroups(
     else groups.set(row.repoRoot, { key: row.repoRoot, repoName: row.repoName, rows: [row] });
   }
 
-  return [...groups.values()].sort(
-    (a, b) => a.repoName.localeCompare(b.repoName) || a.key.localeCompare(b.key),
-  );
+  return [...groups.values()];
 }
 
 /** How many criteria are doing work — the number the filter button badges. */

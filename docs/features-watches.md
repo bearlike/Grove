@@ -52,7 +52,7 @@ flowchart TB
 | `timer` | A wall-clock instant arrives | A durable `sleep` |
 | `cmd` | A command exits with a status you name | Anything Grove does not model |
 | `ticket` | Never: it reports each change and keeps watching | Registered by Grove for you, below |
-| `phase_nudge` | Never: it reminds a working agent whose phase went stale | Registered by Grove for you, below |
+| `trigger` | Never: it puts Grove's configured instructions into a working session | Registered by Grove for you, below |
 
 ## Changes to your attached tickets
 
@@ -64,19 +64,46 @@ Attach an issue or pull request to a running workspace, and Grove tells the agen
 - Each ticket is read at most once a minute, however many workspaces are attached to it. The status comment reuses the same read.
 - The Watches card in the web dashboard lists each ticket watch as "Watching while the workspace runs", and `grove watch ls` shows them too.
 
-## A reminder when the phase goes stale
+## Instructions Grove sends on its own
 
-An agent that reported its [phase](features-status.md) and then kept working without updating it gets one short reminder from the Grove daemon.
+Every running workspace also holds one trigger watch. It puts a short instruction from Grove into the agent's session when a rule's condition holds. Four rules ship:
 
-- It fires only when the agent is **working**, its phase has stood unchanged for **10 minutes**, and its reply or tool-call count **moved** during those 10 minutes.
-- A paused, idle, waiting, blocked, errored or handed-off session is never reminded. Neither is one stuck inside a single long tool call, or one that never reported a phase at all.
-- Each phase report is reminded about **once**. Writing a new phase arms it again.
-- The reminder is one line fenced as `<grove-instruction kind="reminder">`, so the agent and anyone reading the transcript can tell it came from Grove rather than from the person. It is never counted as a human turn.
-- It never wakes or revives a session. A reminder that finds the agent stopped is dropped.
+| Rule | Fires when | Cap |
+|---|---|---|
+| `start` | The session's first working moment: the first-turn brief, with your `brief.instructions` and the workspace's own record | Once per session |
+| `compaction` | The agent's context was just compacted | Once per compaction |
+| `phase` | A phase the agent reported has stood for 10 minutes while it kept working | Once per phase report |
+| `unnamed` | The title is still a generated `wk-…` name, or there is no description | Twice per session |
 
-```json
-{ "nudges": { "phase": { "enabled": true, "every_minutes": 10 } } }
+- A rule reaches only a session that is running **and working right now**, with replies or tool calls moving since the last check. A paused, idle, waiting, blocked, errored or handed-off session is never contacted, and neither is one stuck in a single long tool call.
+- It never wakes or revives a session. One that has stopped is skipped.
+- At most one rule goes out per check, which runs once a minute per workspace.
+- Every instruction is fenced as `<grove-instruction>`, so the agent and anyone reading the transcript can tell Grove wrote it. It is never counted as a human turn.
+
+Rules are configuration. Each layer adds a rule, switches one off, or changes one field of a built-in by naming it, the way `agents` entries merge:
+
+```json title=".grove/config.json"
+{
+  "triggers": {
+    "rules": [
+      { "name": "phase", "after_minutes": 20 },
+      { "name": "unnamed", "enabled": false },
+      { "name": "review", "when": "manual", "text": "Stop and request a review of {title} now." }
+    ]
+  }
+}
 ```
+
+A `manual` rule never fires on its own. Send any rule now with `grove trigger fire`, to one workspace or a filtered set:
+
+```bash
+grove trigger ls                                   # the rules this repo resolves
+grove trigger fire review -w <workspace-id>
+grove trigger fire phase --all --phase build       # every running workspace in `build`
+grove trigger fire unnamed --repo . --agent claude
+```
+
+A dispatch counts against the same per-session cap, and a selector that names nothing is refused rather than sent to everyone. `triggers.enabled: false` stops every rule, the brief included.
 
 `ci` is keyed on the commit SHA, never a branch name: a force-push makes a different commit, and a watch that followed the name would answer about work nobody asked about.
 

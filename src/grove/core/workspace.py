@@ -33,8 +33,10 @@ if TYPE_CHECKING:
     # `git` imports this module, so a runtime import would close a cycle. The
     # field defaults to None, so no symbol is needed at runtime.
     from grove.core.container_runtime import ContainerRuntimeState
+    from grove.core.contracts.artifacts import ArtifactRef
     from grove.core.contracts.diagrams import DiagramSessionView
     from grove.core.contracts.tickets import TicketRef
+    from grove.core.runtimes import RemoteHandle
 
 
 class ShareToken:
@@ -297,6 +299,11 @@ class Runtime(StrEnum):
     The blast radius is the worktree plus whatever the config mounts — not a
     credential boundary."""
 
+    REMOTE = "remote"
+    """The agent runs in a long-lived container on a serverless platform named
+    by a ``runtimes.<name>`` block, and dials this daemon. Its identity is
+    :attr:`WorkspaceState.remote`."""
+
 
 class BranchProvenance(StrEnum):
     """Whether Grove created this workspace's branch or the user attached one.
@@ -463,6 +470,21 @@ class WorkspaceState:
     created_at: datetime
     updated_at: datetime
     paused_at: datetime | None = None
+    # Idle suspension (#970). A frozen workspace keeps its RUNNING intent, so
+    # every verb that reads the record still sees a live workspace; ``frozen_at``
+    # set is the whole marker, and the next message thaws it. ``thawed_at`` is
+    # the last thaw, kept so idle-versus-active time is a number.
+    frozen_at: datetime | None = None
+    thawed_at: datetime | None = None
+    # Hibernation (#1042): a frozen workspace whose runtime released it to a
+    # stored snapshot. ``frozen_at`` stays set, so every reader that handles a
+    # frozen workspace needs no new branch; only the wake path reads this.
+    hibernated_at: datetime | None = None
+    # The person who created this workspace, as the OIDC subject the daemon
+    # admitted; ``local`` for this host's own user, an in-process create, and
+    # every record written before identity existed. Never a role: every
+    # signed-in person sees every workspace, and this only narrows a view.
+    created_by: str = "local"
     error_detail: str | None = None
     # Optional free-form text the user attaches to the workspace. Defaults
     # to None so legacy on-disk records load without migration. Empty string
@@ -528,6 +550,10 @@ class WorkspaceState:
     # explicitly by the store. Defaults to an empty list so legacy records load
     # without migration — the branch_provenance/placement precedent.
     ticket_refs: list[TicketRef] = field(default_factory=list)
+    # Files and links the agent attached as its deliverables (a plan, a doc, a
+    # diagram). Pointers only: the content stays wherever the agent keeps it.
+    # Stored and defaulted exactly like `ticket_refs` above.
+    artifact_refs: list[ArtifactRef] = field(default_factory=list)
     # Optional override for reading this workspace's transcript from a
     # different runtime context than the host — see TranscriptContext.
     # None (the default) means every transcript read falls back to agent_cwd/
@@ -556,6 +582,13 @@ class WorkspaceState:
     # so a later roster edit never re-decides for a workspace that exists.
     # Defaults to False so a pre-native record loads as the terminal it was.
     native: bool = False
+    # The private tmux server (`tmux -L <socket>`) this workspace's HOST session
+    # lives on, so one tmux crash costs one workspace rather than the host's
+    # whole fleet. Resolved once at create and persisted, because every read,
+    # steer and attach must reach the server the session was started on. Empty
+    # is the shared default server — every record written before isolation
+    # existed, and every container workspace (whose agent tmux is in-container).
+    tmux_socket: str = ""
     # Non-None ⟺ a container was wanted and a host workspace was produced,
     # because the container runtime was UNAVAILABLE at create (D5 arm 4).
     # The requested value needs no second field: the fallback only ever runs
@@ -586,6 +619,15 @@ class WorkspaceState:
     # transcript_context precedent), and None stays the honest answer for
     # every host-mode workspace.
     container: ContainerRuntimeState | None = None
+    # The serverless workload this REMOTE workspace runs as, or None for every
+    # other runtime. The handle is the platform's own name for it and the only
+    # thing a driver needs after a daemon restart.
+    remote: RemoteHandle | None = None
+    # A snapshot whose restore request the platform accepted, but whose worker
+    # has not yet registered with the daemon. Keep it through restarts so a
+    # failed restore retains its only durable home and transcript. There is no
+    # timeout cleanup: a never-confirmed restore must stay recoverable.
+    pending_snapshot: RemoteHandle | None = None
     # True iff this container workspace ran Grove's PACKAGED default config
     # (D5 arm 3: the repo had no `.devcontainer/` of its own at create time).
     # Persisted rather than re-derived, because the answer is a create-time
@@ -720,6 +762,17 @@ class WorkspaceState:
         )
 
     @property
+    def host_tmux_socket(self) -> str:
+        """The private host tmux server this workspace's session is on, or ``""``.
+
+        Only a HOST workspace starts one (`TmuxLaunchBackend`); a container's
+        host-pane arm always uses the default server. The one rule every launch,
+        read and liveness observer resolves through, so a launch and its reads
+        can never land on different servers.
+        """
+        return self.tmux_socket if self.runtime is Runtime.HOST else ""
+
+    @property
     def agent_cwd(self) -> Path:
         """Absolute directory the agent session runs in: ``worktree / subpath``.
 
@@ -831,7 +884,19 @@ class WorkspaceState:
         tz-naive value is coerced to UTC defensively so a malformed timestamp
         degrades the comparison rather than raising on the poll path (the
         peek/best-effort discipline).
+
+        **Birth is not evidence for a ROOT workspace that minted its own
+        session.** Its cwd is the shared repo root, so "born after me, here"
+        holds for every session anyone starts there afterwards, including the
+        sessions OTHER root workspaces minted. Measured on 2026-10-04: 12 of 17
+        workspaces on one host carried sessions that a sibling had launched, so
+        each card ranked by, and asked for attention on behalf of, a stranger.
+        Only pane-verified live-here evidence attributes a session there. A
+        root workspace with no minted id keeps birth, because discovery is the
+        only way it has a session at all.
         """
+        if self.placement is Placement.ROOT and self.agent_session_id:
+            return self._is_after_create(live_here_at)
         return self._is_after_create(born_at) or self._is_after_create(live_here_at)
 
     def _is_after_create(self, ts: datetime | None) -> bool:
@@ -956,6 +1021,36 @@ def slug(title: str) -> str:
     """
     s = _SLUG_RE.sub("-", title.lower()).strip("-")
     return s or "ws"
+
+
+class WorkspaceTitle:
+    """The one name a workspace gets when nobody gave it one, and how to recognise it.
+
+    Random and never derived from the prompt. A name sliced or hashed from a
+    task's first words reads as somebody's choice, so nothing downstream could
+    tell it apart from a real one, and two clients deriving it differently is
+    how the TUI and the web composer came to disagree. A fixed prefix makes
+    "this name was generated" a fact any reader can check, which is what the
+    ``unnamed`` trigger rule keys on to ask the agent to replace it.
+
+    The prefix starts with a letter so the slug never begins with a digit run:
+    an auto branch is ``<prefix><slug>-<ts>``, and the numeric ticket providers
+    read a leading ``123-`` as issue #123.
+    """
+
+    PREFIX: ClassVar[str] = "wk-"
+    _HEX_CHARS: ClassVar[int] = 6
+    _GENERATED: ClassVar[re.Pattern[str]] = re.compile(r"wk-[0-9a-f]{6}")
+
+    @classmethod
+    def generate(cls) -> str:
+        """A fresh random name, ``wk-`` plus six hex characters (~16.7M values)."""
+        return f"{cls.PREFIX}{secrets.token_hex(cls._HEX_CHARS // 2)}"
+
+    @classmethod
+    def is_generated(cls, title: str) -> bool:
+        """Whether *title* is exactly a name :meth:`generate` would produce."""
+        return cls._GENERATED.fullmatch(title.strip()) is not None
 
 
 class WorkspaceIdentity:

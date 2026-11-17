@@ -130,6 +130,17 @@ class OpencodeNativeOwner:
         self._model = parts
         return True
 
+    async def set_effort(self, effort: str) -> bool:
+        """Refuse: OpenCode's `variant` is per model, not one effort ladder.
+
+        The legacy message route does accept a `variant` string (measured
+        1.18.31), but its valid values are named by each model, so there is no
+        list Grove could honestly offer or validate. The adapter publishes no
+        efforts, which keeps the engine from ever reaching this.
+        """
+        del effort
+        return False
+
     async def compact(self) -> bool:
         """Request legacy compaction with the retained per-message model."""
         if self._session_id is None or self._model is None:

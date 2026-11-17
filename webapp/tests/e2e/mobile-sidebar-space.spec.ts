@@ -16,7 +16,9 @@ for (const width of [320, 390, 600]) {
     expect(target!.y + target!.height).toBeLessThanOrEqual(header!.y + header!.height);
     await opener.click();
     const sheet = page.getByRole("dialog", { name: "Grove workspaces", exact: true });
-    await expect(sheet.getByTestId("fleet-row").first()).toBeVisible();
+    // The first page a shard opens pays `next dev`'s cold compile of the fleet
+    // route; the default 5 s failed only on the first width (CI 8407 and 8410).
+    await expect(sheet.getByTestId("fleet-row").first()).toBeVisible({ timeout: 60_000 });
     await sheet.evaluate(async el => {
       await Promise.all(el.getAnimations().map(animation => animation.finished.catch(() => undefined)));
     });

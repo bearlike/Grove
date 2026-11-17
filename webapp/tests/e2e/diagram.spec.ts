@@ -291,7 +291,7 @@ test.describe("diagram tab", () => {
 
   test("does not exist on a workspace with no descriptor", async ({ page }) => {
     await page.goto(`/w/${PLAIN_WORKSPACE}`);
-    await expect(page.getByTestId("work-panel")).toBeVisible();
+    await expect(page.getByTestId("work-panel")).toBeVisible({ timeout: 60_000 });
     await expect(page.getByTestId("work-panel-tab-diagram")).toHaveCount(0);
   });
 

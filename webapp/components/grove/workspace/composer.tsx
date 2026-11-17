@@ -8,8 +8,8 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
-import { AtSignIcon, BanIcon, MicIcon, SquareIcon, SquareSlashIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
+import { AtSignIcon, BanIcon, Loader2Icon, SquareIcon, SquareSlashIcon, XIcon } from "lucide-react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { toast } from "sonner";
 
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
@@ -21,11 +21,17 @@ import {
   ComposerBar,
   ComposerSend,
   ComposerToolbar,
+  ComposerVoiceButton,
 } from "@/components/elements/composer";
 import { ContextDisplay } from "@/components/elements/context-display";
 import { ExpandedComposer } from "@/components/grove/composer";
+import { DictationWaveform, useHeightTween, useLevelHistory } from "@/components/grove/dictation-waveform";
 import { useWorkspaceOnboardingDemands } from "@/components/grove/onboarding";
-import { COMPOSER_COMMANDS, grovePaletteCommands, mentionsFromContacts } from "@/lib/grove/adapters";
+import {
+  COMPOSER_COMMANDS,
+  grovePaletteCommands,
+  mentionsFromContacts,
+} from "@/lib/grove/adapters";
 import {
   useInterrupt,
   useInvokeControl,
@@ -34,9 +40,12 @@ import {
   useWorkspaceActivity,
   useWorkspacePeek,
 } from "@/lib/grove/hooks";
+import { DictationContext } from "@/lib/grove/runtime/speech";
 import { cn } from "@/lib/utils";
 import { ComposerAttachmentRows } from "./composer-attachment";
+import { ComposerEffort } from "./composer-effort";
 import { ComposerModel } from "./composer-model";
+import { ControlTip } from "./composer-tip";
 import { canInterruptNative } from "./selectors";
 import { flushComposerDraft, useComposerDraft } from "./use-composer-draft";
 
@@ -53,8 +62,9 @@ const TRIGGER_ICONS = { command: SquareSlashIcon, agent: AtSignIcon } as const;
  * (`Composer` → `ComposerBar` → attachments, input, `ComposerToolbar`) driven by
  * `ComposerPrimitive`, with the reference's two character triggers — `/` for
  * the commands Grove can deliver, `@` for the live peers an agent can write to.
- * The toolbar reads left to right as "add to the message" (attach) against
- * "how it is sent" (context, model, expand, interrupt, send).
+ * The toolbar reads left to right as "shape the message" (attach, model,
+ * reasoning effort, expand) against "send it" (context, interrupt, microphone,
+ * send). While the microphone is live the whole bar becomes the recorder.
  *
  * The composer is MOVED rather than cloned by `ExpandedComposer`; that is
  * affordable because the draft and every attachment live in the assistant-ui
@@ -68,6 +78,12 @@ export function WorkspaceComposerSurface({
   /** The native owner ended; the next send resumes this conversation. */
   readonly exitReason: string | null;
 }): ReactNode {
+  // This phase outlives the editor's move into and out of the expand dialog.
+  const [transcribing, setTranscribing] = useState(false);
+  const dictating = useAuiState((state) => state.composer.dictation != null);
+  useEffect(() => {
+    if (!dictating) setTranscribing(false);
+  }, [dictating]);
   return (
     <ExpandedComposer
       // NOT "Message input": that is the textarea's own accessible name, and
@@ -81,6 +97,8 @@ export function WorkspaceComposerSurface({
       {(expanded, inputRef, expandControl) => (
         <WorkspaceComposer
           workspaceId={workspaceId}
+          transcribing={transcribing}
+          onTranscribing={() => setTranscribing(true)}
           // The inline editor is the focus-restore target, so only the inline
           // mount claims the ref: handing it to the dialog's copy too would
           // leave it pointing at whichever unmounted last.
@@ -100,12 +118,16 @@ export function WorkspaceComposerSurface({
 
 function WorkspaceComposer({
   workspaceId,
+  transcribing,
+  onTranscribing,
   inputRef,
   expanded,
   expandControl,
   notice,
 }: {
   readonly workspaceId: string;
+  readonly transcribing: boolean;
+  readonly onTranscribing: () => void;
   readonly inputRef: RefObject<HTMLTextAreaElement | null> | undefined;
   /** The dialog moves this same composer and lets its editor use the available height. */
   readonly expanded: boolean;
@@ -116,6 +138,14 @@ function WorkspaceComposer({
   const outstanding = useDraftRestore(workspaceId, expanded);
   const slash = useComposerCommands(workspaceId);
   const mention = useComposerMentions(workspaceId);
+  // The runtime's own dictation state, so the bar swaps for the whole span of a
+  // recording and its upload. The draft lives in the runtime, which is why the
+  // editor can unmount: cancel finds the text as it was, and the core appends
+  // the transcript to it when the words land.
+  const dictating = useAuiState((state) => state.composer.dictation != null);
+  // The pill collapse between the editor and the recording strip, and back.
+  const bar = useRef<HTMLDivElement | null>(null);
+  useHeightTween(bar, dictating ? "voice" : "text");
 
   return (
     // The trigger root wraps the whole bar, not just the input: both popovers
@@ -129,7 +159,11 @@ function WorkspaceComposer({
               `data-dragging` on whatever element it renders, and the bar is the
               element the theme shows that on. */}
           <ComposerPrimitive.AttachmentDropzone asChild>
-            <ComposerBar className={cn(expanded && "min-h-0 flex-1")}>
+            <ComposerBar ref={bar} className={cn(expanded && "min-h-0 flex-1")}>
+              {dictating ? (
+                <DictationBar transcribing={transcribing} onTranscribing={onTranscribing} />
+              ) : (
+                <>
               <ComposerAttachmentRows />
               {outstanding.length > 0 && (
                 <p role="status" className="px-3 text-xs text-content-tertiary" data-testid="composer-pending-re-add">
@@ -158,18 +192,27 @@ function WorkspaceComposer({
                 aria-label="Message input"
               />
               <ComposerToolbar>
-                <ComposerPrimitive.AddAttachment asChild>
-                  <ComposerAttachButton aria-label="Add attachment" />
-                </ComposerPrimitive.AddAttachment>
+                {/* Left: what goes INTO the message and how the agent answers
+                    it. Right: the context reading and the two ways to send. */}
                 <ComposerActions className="min-w-0">
-                  <WorkspaceContext workspaceId={workspaceId} />
+                  <ControlTip tip="Add attachment">
+                    <ComposerPrimitive.AddAttachment asChild>
+                      <ComposerAttachButton aria-label="Add attachment" />
+                    </ComposerPrimitive.AddAttachment>
+                  </ControlTip>
                   <ComposerModel workspaceId={workspaceId} />
+                  <ComposerEffort workspaceId={workspaceId} />
                   {expandControl}
+                </ComposerActions>
+                <ComposerActions>
+                  <WorkspaceContext workspaceId={workspaceId} />
                   <NativeInterrupt workspaceId={workspaceId} />
                   <Dictation />
                   <SendOrCancel />
                 </ComposerActions>
               </ComposerToolbar>
+                </>
+              )}
             </ComposerBar>
           </ComposerPrimitive.AttachmentDropzone>
         </ComposerPrimitive.Root>
@@ -259,25 +302,105 @@ export function NativeInterrupt({ workspaceId }: { readonly workspaceId: string 
   );
 }
 
-/** Dictation, only where the runtime has a dictation adapter. */
-function Dictation(): ReactNode {
+/**
+ * The idle microphone, only where the runtime has a dictation adapter.
+ *
+ * Recording and transcribing are NOT drawn here: while the runtime reports a
+ * dictation the whole bar is `DictationBar`, so this renders nothing then.
+ */
+export function Dictation(): ReactNode {
+  const dictating = useAuiState((s) => s.composer.dictation != null);
+  if (dictating) return null;
   return (
     <AuiIf condition={(s) => s.thread.capabilities.dictation}>
-      <AuiIf condition={(s) => s.composer.dictation == null}>
+      <ControlTip tip="Dictate">
         <ComposerPrimitive.Dictate asChild>
-          <TooltipIconButton tooltip="Voice input" side="top" aria-label="Start voice input">
-            <MicIcon />
-          </TooltipIconButton>
+          <ComposerVoiceButton active={false} aria-label="Start dictation" data-testid="composer-dictate" />
         </ComposerPrimitive.Dictate>
-      </AuiIf>
-      <AuiIf condition={(s) => s.composer.dictation != null}>
-        <ComposerPrimitive.StopDictation asChild>
-          <TooltipIconButton tooltip="Stop dictation" side="top" aria-label="Stop voice input">
-            <SquareIcon className="fill-current" />
-          </TooltipIconButton>
-        </ComposerPrimitive.StopDictation>
-      </AuiIf>
+      </ControlTip>
     </AuiIf>
+  );
+}
+
+/**
+ * The whole bar while a recording is live or being transcribed: cancel, the
+ * LIVE waveform, stop (transcribe into the draft) and send (transcribe and
+ * send). It REPLACES the editor and toolbar rather than sitting beside them,
+ * so there is exactly one thing to do and it is obvious.
+ *
+ * The recording is uploaded ONCE, on stop or send. The runtime has no cancel
+ * verb, so Cancel is the adapter's own, reached through `DictationContext`; it
+ * works during the upload too, and a cancelled session never lands text. Send
+ * awaits the runtime's `stopDictation`, which has already appended the
+ * transcript to the draft by the time it resolves, then sends that draft.
+ */
+export function DictationBar({
+  transcribing,
+  onTranscribing,
+}: {
+  readonly transcribing: boolean;
+  readonly onTranscribing: () => void;
+}): ReactNode {
+  const adapter = useContext(DictationContext);
+  const aui = useAui();
+  const strip = useRef<HTMLDivElement | null>(null);
+  const level = useCallback(() => adapter?.level() ?? 0, [adapter]);
+  const levels = useLevelHistory(!transcribing, level, strip);
+  const stop = useCallback(async () => {
+    onTranscribing();
+    await aui.composer.stopDictation();
+  }, [aui, onTranscribing]);
+  const send = useCallback(async () => {
+    await stop();
+    if (aui.composer.getState().text.trim()) aui.composer.send();
+  }, [aui, stop]);
+  return (
+    <div className="flex w-full items-center gap-2" data-slot="dictation" data-phase={!transcribing ? "recording" : "transcribing"} data-testid="composer-dictation-bar">
+      {/* Announced once per phase; a per-level readout would be read aloud forever. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {transcribing ? "Transcribing your recording" : "Recording"}
+      </span>
+      <TooltipIconButton
+        type="button"
+        tooltip="Cancel dictation"
+        side="top"
+        aria-label="Cancel dictation"
+        onClick={() => adapter?.cancel()}
+        data-testid="composer-dictation-cancel"
+      >
+        <XIcon aria-hidden />
+      </TooltipIconButton>
+      <div ref={strip} className="min-w-0 flex-1">
+        <DictationWaveform levels={levels} />
+      </div>
+      {transcribing ? (
+        <span aria-busy data-testid="composer-dictation-transcribing" className="inline-flex size-8 items-center justify-center">
+          <Loader2Icon className="animate-spin" aria-hidden />
+        </span>
+      ) : (
+        <>
+          <TooltipIconButton
+            type="button"
+            tooltip="Stop and transcribe"
+            side="top"
+            aria-label="Finish dictation"
+            onClick={() => void stop()}
+            data-testid="composer-dictation-done"
+          >
+            <SquareIcon className="fill-current" aria-hidden />
+          </TooltipIconButton>
+          <ControlTip tip="Send dictated message">
+            <ComposerSend
+              streaming={false}
+              idle={false}
+              aria-label="Send dictated message"
+              onClick={() => void send()}
+              data-testid="composer-dictation-send"
+            />
+          </ControlTip>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -287,16 +410,20 @@ function SendOrCancel(): ReactNode {
   return (
     <>
       <AuiIf condition={(s) => !s.thread.isRunning}>
-        <ComposerPrimitive.Send asChild>
-          {/* The vendored `idle` means "nothing to send yet": it draws the dim
-              fill, and the ink fill appears once there is a message. */}
-          <ComposerSend streaming={false} idle={!canSend} className="aui-composer-send" />
-        </ComposerPrimitive.Send>
+        <ControlTip tip="Send message">
+          <ComposerPrimitive.Send asChild>
+            {/* The vendored `idle` means "nothing to send yet": it draws the dim
+                fill, and the ink fill appears once there is a message. */}
+            <ComposerSend streaming={false} idle={!canSend} className="aui-composer-send" />
+          </ComposerPrimitive.Send>
+        </ControlTip>
       </AuiIf>
       <AuiIf condition={(s) => s.thread.isRunning}>
-        <ComposerPrimitive.Cancel asChild>
-          <ComposerSend streaming idle={false} className="aui-composer-cancel" />
-        </ComposerPrimitive.Cancel>
+        <ControlTip tip="Stop generating">
+          <ComposerPrimitive.Cancel asChild>
+            <ComposerSend streaming idle={false} className="aui-composer-cancel" />
+          </ComposerPrimitive.Cancel>
+        </ControlTip>
       </AuiIf>
     </>
   );

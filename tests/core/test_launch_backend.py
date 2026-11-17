@@ -20,10 +20,8 @@ from typing import ClassVar
 import pytest
 
 from grove import __version__
-from grove.core import paths
 from grove.core import tmux as tmux_mod
 from grove.core.agents.base import AgentVersionProbe
-from grove.core.agents.brief import AgentBrief
 from grove.core.agents.registry import get_adapter
 from grove.core.config import GroveConfig
 from grove.core.container_policy import CONTAINER_CONTROL_ROOT, AgentSharePlan
@@ -120,11 +118,6 @@ def test_create_routes_the_assembled_command_through_the_backend(
         PhaseFile.PATH_ENV: str(
             PhaseFile.path_for(state.worktree_path, PhaseFile.key_for(state.id))
         ),
-        # …and the first-turn brief, published the same way and for the same
-        # reason: the hook process inherits the agent's env, and the settings
-        # file it lives in is host-global so it cannot carry a per-workspace
-        # answer.
-        AgentBrief.PATH_ENV: str(paths.agent_brief_path(state.id)),
     }
     # Identity stamping rides every launch, telemetry credentials or not — and
     # the correlation attribute is what later joins Grove's own spans to the
@@ -207,12 +200,20 @@ def test_tmux_backend_unpacks_the_spec_into_the_tmux_calls(
         cfg=GroveConfig(),
         worktree=tmp_path / "wt",
         kind="claude_code",
+        tmux_socket="grove-abc123",
     )
-    created: list[tuple[str, Path, int, str]] = []
+    created: list[tuple[str, Path, int, str, tmux_mod.TmuxServer]] = []
     laid_out: list[dict[str, object]] = []
 
-    def _create(name: str, cwd: Path, *, history_limit: int = 50_000, size: str = "") -> None:
-        created.append((name, cwd, history_limit, size))
+    def _create(
+        name: str,
+        cwd: Path,
+        *,
+        history_limit: int = 50_000,
+        size: str = "",
+        server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER,
+    ) -> None:
+        created.append((name, cwd, history_limit, size, server))
 
     def _layout(session_name: str, **kwargs: object) -> None:
         laid_out.append({"session_name": session_name, **kwargs})
@@ -228,12 +229,16 @@ def test_tmux_backend_unpacks_the_spec_into_the_tmux_calls(
             tmp_path / "wt",
             GroveConfig().tmux.history_limit,
             GroveConfig().tmux.detached_size,
+            # The session and its layout both land on the workspace's OWN
+            # server; either on the default one is the shared fault domain.
+            tmux_mod.TmuxServer(socket="grove-abc123"),
         )
     ]
     assert laid_out == [
         {
             "session_name": "test-sess",
             "cfg": spec.cfg,
+            "server": tmux_mod.TmuxServer(socket="grove-abc123"),
             "worktree": tmp_path / "wt",
             "command": "claude",
             "decoration": ("--session-id", "abc"),

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import subprocess
+import uuid
 
 # A CLI refusal is asserted by its TEXT, and Rich splits an option token's
 # leading `-` into its own styled span (`--from` arrives as `-`+`--from` with an
@@ -17,7 +19,7 @@ import subprocess
 # after that and cannot undo it. Verified by mutation: dropping this line
 # reproduces the CI failure under `GITHUB_ACTIONS=true`.
 os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar, Final
 
@@ -27,6 +29,7 @@ from grove.core import tmux as tmux_mod
 from grove.core.agents.base import AgentVersionProbe
 from grove.core.agents.claude_code import ClaudeCodeAdapter
 from grove.core.agents.codex import CodexAdapter
+from grove.core.agents.registry import ModelProbeMemo
 from grove.core.config import DeclaredEnvVars, GroveConfig
 from grove.core.container_infra import ProjectInfra
 from grove.core.container_netfilter import NetfilterPayload
@@ -45,7 +48,9 @@ from grove.core.devcontainer import (
 from grove.core.errors import DevcontainerError, TmuxError
 from grove.core.phase import PhaseFile
 from grove.core.preflight import CheckResult, HostPreflight
+from grove.core.runtime_events import RuntimeEventReader
 from grove.core.tmux import HostAttach
+from grove.daemon import _runtime_sources
 
 #: The in-container workspace folder `FakeCli.up` reports — the nested-cwd
 #: rule is resolved against it, so tests assert offsets from it.
@@ -403,6 +408,37 @@ def _fresh_transcript_caches() -> None:
     """
     ClaudeCodeAdapter.clear_caches()
     CodexAdapter.clear_caches()
+    ModelProbeMemo.clear()
+
+
+@pytest.fixture(autouse=True)
+def _legacy_launch_defaults(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create with no branch plan and no saved mode gets an AUTO worktree in tests.
+
+    The product built-ins are the current checkout (``RootBranch``) on the
+    host, and hundreds of tests written against worktree or container
+    behaviour omit both because the plan used to default to ``AutoBranch`` and
+    ``container.enabled`` used to select the runtime. Same shape as
+    ``_terminal_agents_by_default``: the suite pins the old answers centrally,
+    through the resolver's one named built-in and ``default_runtime``, so every
+    such test still exercises the resolver path. A test about the built-ins
+    themselves opts out with ``@pytest.mark.launch_builtins``.
+    """
+    if request.node.get_closest_marker("launch_builtins") is not None:
+        return
+    from grove.core.config import GroveConfig  # noqa: PLC0415
+    from grove.core.launch_resolution import LaunchResolver  # noqa: PLC0415
+
+    monkeypatch.setattr(LaunchResolver, "BUILTIN_BRANCH_MODE", "auto")
+    monkeypatch.setattr(
+        GroveConfig,
+        "default_runtime",
+        property(
+            lambda cfg: cfg.defaults.runtime or ("container" if cfg.container.enabled else "host")
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -486,12 +522,19 @@ def _isolated_agent_hook_paths(
     # so redirect the root as well as its individually named siblings. Tests
     # requesting `tmp_state_dir` override this accessor with their own state.
     monkeypatch.setattr("grove.core.paths.user_state_path", lambda: base / "state.json")
+    # The developer's own `tmux-user.conf` would otherwise add a mount to every
+    # container plan and an include to every server config a test composes.
+    monkeypatch.setattr("grove.core.paths.tmux_user_conf_path", lambda: base / "tmux-user.conf")
     # The daemon's session store. A native worker, native steering and every
     # local client mint a session into it, so a test driving one without asking
     # for `tmp_state_dir` wrote into the developer's REAL auth.json — 399 live
     # sessions for the fixture workspace `native-worker-aaaaaaaa` on one host,
     # each listed as a paired device.
     monkeypatch.setattr("grove.core.paths.user_auth_path", lambda: base / "auth.json")
+    monkeypatch.setattr("grove.core.paths.user_login_path", lambda: base / "login.json")
+    monkeypatch.setattr(
+        "grove.core.paths.telemetry_outbox_path", lambda: base / "telemetry-outbox.sqlite3"
+    )
     monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: base / "agent-sidecars")
     monkeypatch.setattr(
         "grove.core.paths.agent_hooks_settings_path",
@@ -515,13 +558,6 @@ def _isolated_agent_hook_paths(
     monkeypatch.setattr(
         "grove.core.paths.agent_workspace_config_dir",
         lambda workspace_id: base / "agent-config" / workspace_id,
-    )
-    # The first-turn brief is rendered by `_launch_env` on every claude_code
-    # host launch — another raw `platformdirs` config path, and `brief.enabled`
-    # defaults True, so it is reached exactly as widely as the hook settings.
-    monkeypatch.setattr(
-        "grove.core.paths.agent_brief_path",
-        lambda workspace_id: base / "agent-briefs" / f"{workspace_id}.md",
     )
     # The handover log is the same class of hazard one directory over: any test
     # that reaches `PickupEngine()` or the daemon's `AssigneePoller` without
@@ -558,6 +594,8 @@ def _isolated_agent_hook_paths(
     # developer's real transcripts into their live state dir, and a fixture
     # session id counted there would then answer a later real scan.
     monkeypatch.setattr("grove.core.paths.session_turns_path", lambda: base / "session-turns.json")
+    # Sidebar reads and writes must not inherit the developer's real pins.
+    monkeypatch.setattr("grove.core.paths.sidebar_pins_path", lambda: base / "sidebar-pins.json")
     # The workspace-history store is reached by every `JsonWorkspaceStore.save`
     # and every `ActivityService` tick built without an injected path — i.e. most
     # of this suite — and it is the DURABLE half of the pair, so the quota
@@ -569,6 +607,20 @@ def _isolated_agent_hook_paths(
         "grove.core.paths.workspace_history_path",
         lambda: base / "workspace-history.sqlite3",
     )
+    # The delegation journal is every `build_app`'s batch replay record: a
+    # fixture `request_id` recorded in the developer's live journal would make
+    # a later real batch with that id replay a test's receipts, or 409.
+    monkeypatch.setattr("grove.core.paths.delegations_path", lambda: base / "delegations.sqlite3")
+    # The reaper's marks and action log: a fixture leak recorded in the live
+    # store would be swept, or reported by `grove doctor`, on the real host.
+    monkeypatch.setattr("grove.core.paths.reaper_db_path", lambda: base / "reaper.sqlite3")
+    # A reaper pass must never read the developer's live tmux sockets or /proc:
+    # a test that means a collector builds one over its own fake tree.
+    monkeypatch.setattr("grove.core.reaper.collectors.tmux.TmuxCollector.found", lambda self: [])
+    monkeypatch.setattr(
+        "grove.core.reaper.collectors.processes.ProcessCollector.found", lambda self: []
+    )
+    monkeypatch.setattr("grove.core.reaper.collectors.files.FilesCollector.found", lambda self: [])
 
 
 @pytest.fixture(autouse=True)
@@ -605,6 +657,8 @@ def init_logs(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monk
         "grove.core.paths.provision_log_path",
         lambda workspace_id: logs / f"{workspace_id}-provision.log",
     )
+    # Every create and kill writes a progress file here while it runs.
+    monkeypatch.setattr("grove.core.paths.lifecycle_dir", lambda: logs / "lifecycle")
     return logs
 
 
@@ -1018,6 +1072,10 @@ class FakeTmux:
         # assertion for that case — a fake that swallowed it would let the
         # manager steer the wrong tmux and stay green.
         self.commands: list[tuple[str, tuple[str, ...]]] = []
+        # session → the HOST tmux server it was created on. Recorded so a test
+        # can assert a workspace's session went to its OWN server rather than
+        # the shared default — the isolation property is otherwise invisible.
+        self.session_servers: dict[str, tmux_mod.TmuxServer] = {}
 
     def send_text(
         self,
@@ -1051,15 +1109,26 @@ class FakeTmux:
         self.escapes.append(target)
         self.commands.append((target, tuple(command)))
 
-    def has_session(self, name: str) -> bool:
+    def has_session(self, name: str, server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER) -> bool:
+        # Matched by name: session names are unique per host, and many tests
+        # drive the module-level helpers on the default server. Which server a
+        # session went to is asserted through `session_servers` instead.
+        del server
         return name in self.sessions
 
     def create_session(
-        self, name: str, cwd: Path, *, history_limit: int = 50_000, size: str = ""
+        self,
+        name: str,
+        cwd: Path,
+        *,
+        history_limit: int = 50_000,
+        size: str = "",
+        server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER,
     ) -> None:
         del history_limit
         if name in self.sessions:
             raise TmuxError(f"session already exists: {name}")
+        self.session_servers[name] = server
         self.session_sizes[name] = size
         self.session_cwds[name] = cwd
         self.sessions.add(name)
@@ -1067,8 +1136,14 @@ class FakeTmux:
         # below renames it; until then the placeholder mirrors that state.
         self.windows[name] = ["0"]
 
-    def kill_session(self, name: str, *, wait_for_exit: bool = False) -> None:
-        del wait_for_exit
+    def kill_session(
+        self,
+        name: str,
+        *,
+        wait_for_exit: bool = False,
+        server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER,
+    ) -> None:
+        del wait_for_exit, server
         self.sessions.discard(name)
         self.windows.pop(name, None)
 
@@ -1084,7 +1159,9 @@ class FakeTmux:
         env_unset: Sequence[str] = (),
         exit_suffix: str = "",
         shell_command: str = "",
+        server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER,
     ) -> None:
+        del server
         self.layout_worktrees[session_name] = worktree
         self.layouts.append((session_name, command))
         # Recorded for the same reason `exit_suffix` is: it is what makes
@@ -1139,16 +1216,33 @@ class FakeTmux:
         self.commands.append((target, tuple(command)))
         return self.snapshots.get(target, "")
 
-    def list_windows(self, session: str) -> list[str]:
+    def list_windows(
+        self, session: str, server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER
+    ) -> list[str]:
+        del server
         return list(self.windows.get(session, []))
 
-    def pane_activity_seconds_ago(self, target: str) -> int | None:
+    def pane_activity_seconds_ago(
+        self, target: str, server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER
+    ) -> int | None:
+        del server
         if target in self.activity_seconds_ago:
             return self.activity_seconds_ago[target]
         return self.default_activity_seconds_ago
 
-    def attach_instruction(self, session_name: str, *, read_only: bool = False) -> HostAttach:
-        return HostAttach(tmux_session=session_name, inside_outer_tmux=False, read_only=read_only)
+    def attach_instruction(
+        self,
+        session_name: str,
+        *,
+        read_only: bool = False,
+        server: tmux_mod.TmuxServer = tmux_mod.DEFAULT_SERVER,
+    ) -> HostAttach:
+        return HostAttach(
+            tmux_session=session_name,
+            inside_outer_tmux=False,
+            read_only=read_only,
+            tmux_socket=server.socket,
+        )
 
 
 # `create_session` alone, because it is the only seam that leaves a tmux
@@ -1220,3 +1314,110 @@ def fake_tmux(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeTmux]:
     monkeypatch.setattr(tmux_mod, "pane_activity_seconds_ago", fake.pane_activity_seconds_ago)
     monkeypatch.setattr(tmux_mod, "attach_instruction", fake.attach_instruction)
     yield fake
+
+
+class _EmptyEventReader:
+    """A source that ended without a frame: the consumer reads "cannot tell"."""
+
+    returncode: int | None = None
+
+    async def lines(self) -> AsyncIterator[str]:
+        return
+        yield ""  # pragma: no cover - makes this an async generator
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _SilentRuntimeEventTransport:
+    """A liveness transport that records what it was asked to observe and emits nothing.
+
+    ``build_app`` builds ``RuntimeSources``, which builds ``RuntimeEvents`` with
+    the real transport, and every daemon test that persisted a workspace then
+    spawned a real ``tmux -C attach-session`` — 1,265 of the 1,323 orphans
+    measured on 2026-10-21 carried ``PYTEST_CURRENT_TEST``. Returning ``None``
+    is the transport's own "cannot tell" answer, so liveness stays unknown and
+    the probe fallback answers, exactly as production does for an absent server.
+    """
+
+    def __init__(self) -> None:
+        self.docker_starts: list[str] = []
+        self.tmux_starts: list[str] = []
+
+    async def docker_events(self, *, docker_bin: str) -> RuntimeEventReader:
+        self.docker_starts.append(docker_bin)
+        return _EmptyEventReader()
+
+    async def tmux_control(self, *, session: str) -> RuntimeEventReader | None:
+        self.tmux_starts.append(session)
+        return None
+
+
+@pytest.fixture(autouse=True)
+def runtime_event_transport(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> _SilentRuntimeEventTransport:
+    """Every daemon the suite builds observes through a silent transport.
+
+    Patched where the daemon constructs ``RuntimeEvents`` rather than on the core
+    class, so ``tests/core/test_runtime_events.py`` still drives the real one.
+    ``integration`` tests own a live server and keep the real transport.
+    """
+    transport = _SilentRuntimeEventTransport()
+    if request.node.get_closest_marker("integration") is None:
+        monkeypatch.setattr(
+            _runtime_sources,
+            "RuntimeEvents",
+            functools.partial(_runtime_sources.RuntimeEvents, transport=transport),
+        )
+    return transport
+
+
+#: Tags every process this run spawns, so the leak census below counts only its
+#: own children — never the live fleet's servers or a concurrent run's.
+_RUN_TAG: Final = f"GROVE_TEST_RUN={uuid.uuid4().hex}"
+
+
+def _leaked_tmux(tag: str) -> list[tuple[int, str]]:
+    """``(pid, PYTEST_CURRENT_TEST)`` of each live tmux process this run spawned."""
+    leaked: list[tuple[int, str]] = []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            if not (proc / "comm").read_text().startswith("tmux"):
+                continue
+            environ = (proc / "environ").read_bytes().split(b"\0")
+        except OSError:
+            continue  # exited mid-scan, or not ours to read
+        if tag.encode() not in environ:
+            continue
+        current = next(
+            (e.decode(errors="replace") for e in environ if e.startswith(b"PYTEST_CURRENT_TEST=")),
+            "PYTEST_CURRENT_TEST=<unknown>",
+        )
+        leaked.append((int(proc.name), current.partition("=")[2]))
+    return sorted(leaked)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_leaked_tmux() -> Iterator[None]:
+    """Fail the run if any tmux process it spawned outlives it, naming the first test.
+
+    A leaked observer or server never fails the test that made it: the suite
+    stays green and the host fills up over days (#951). The leak carries the
+    environment of the test that spawned it, so its ``PYTEST_CURRENT_TEST`` is
+    the attribution. Linux-only, because the census reads ``/proc``.
+    """
+    name, _, value = _RUN_TAG.partition("=")
+    os.environ[name] = value
+    yield
+    if not Path("/proc").is_dir():
+        return
+    leaked = _leaked_tmux(_RUN_TAG)
+    if leaked:
+        pid, test = leaked[0]
+        pytest.fail(
+            f"{len(leaked)} tmux process(es) spawned by this run outlived it; the first "
+            f"(pid {pid}) was started by {test}. A test reached a real tmux server "
+            "without tearing it down — use `fake_tmux`, or kill what it started.",
+            pytrace=False,
+        )

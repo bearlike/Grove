@@ -11,7 +11,7 @@ import {
  * against one agent must not carry to the next — the same reason a model
  * chosen for one agent is forgotten when the agent changes (RULE 1).
  */
-const initial: LaunchState = { values: LAUNCH_INITIAL_VALUES, touched: new Set() };
+const initial: LaunchState = { values: LAUNCH_INITIAL_VALUES, touched: new Set(), seededRepo: null };
 
 describe("session mode follows the agent", () => {
   it("is touched when set, and rides as a real value", () => {

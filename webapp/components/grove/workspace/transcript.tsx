@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 
 import { TurnFeedbackContext } from "@/lib/grove/runtime/feedback";
+import { DictationContext } from "@/lib/grove/runtime/speech";
 
 import { ErrorState } from "@/components/elements/error-state";
 import { findWorkspaceActivity } from "@/lib/grove/adapters";
@@ -175,6 +176,7 @@ export function Transcript({
             the tool-body coordinate rides a provider: `TurnActions` mounts
             inside the thread with no route for a prop. */}
         <TurnFeedbackContext.Provider value={thread.feedback}>
+        <DictationContext.Provider value={thread.dictation}>
         {/* While the agent works, its newest turn is still growing, so that
             turn's file summary waits for it to conclude. */}
         <LiveTurnContext.Provider
@@ -195,9 +197,11 @@ export function Transcript({
             fleetParentWorking={parentWorking}
             onOpenSubagentTranscript={openSubagentTranscript}
             exitReason={exitReason}
+            native={native}
           />
         </div>
         </LiveTurnContext.Provider>
+        </DictationContext.Provider>
         </TurnFeedbackContext.Provider>
         <SubagentTranscriptDialog
           workspaceId={workspaceId}
@@ -246,6 +250,7 @@ function ThreadPane({
   fleetParentWorking,
   onOpenSubagentTranscript,
   exitReason,
+  native,
 }: {
   workspaceId: string;
   thread: GroveThreadState;
@@ -263,6 +268,8 @@ function ThreadPane({
   onOpenSubagentTranscript: (sessionId: string, label: string) => void;
   /** The primary native owner ended; sending revives it. */
   exitReason: string | null;
+  /** A native session has an owned stream, so its loader can follow the live step. */
+  native: boolean;
 }) {
   const {
     todo,
@@ -309,7 +316,9 @@ function ThreadPane({
                 reports the agent rather than the conversation, which is why it
                 needs no condition beyond the agent working — a pending question
                 means `waiting`, so the two can never claim the floor at once. */}
-            {working && <WorkingLoader operation={operation} />}
+            {working && (
+              <WorkingLoader operation={operation} liveWorkspaceId={native ? workspaceId : null} />
+            )}
             {todo && <TodoPanel todo={todo} />}
             {queue && <QueuePanel queue={queue} />}
             {/* Beside Queue: both say what this agent is waiting on. */}
@@ -347,6 +356,7 @@ function ThreadPane({
     [
       workspaceId,
       exitReason,
+      native,
       maxWidth,
       inset,
       narrow,

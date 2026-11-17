@@ -6,15 +6,23 @@ import json
 import os
 import sys
 import time
+from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from grove.core.config import GroveConfig
 from grove.core.container_runtime import ContainerRuntimeState
 from grove.core.contracts.watches import CommandPredicate
+from grove.core.devcontainer import DevcontainerCli
+from grove.core.native_owners import WorktreeRead
+from grove.core.runtimes import RemoteHandle
 from grove.core.watches.command import CommandWatcher
 from grove.core.workspace import Runtime, WorkspaceState, WorkspaceStatus
+from grove.core.workspace_runtime import WorkspaceRuntimes
 
 WORKSPACE_ID = "a" * 32
+_RUNTIMES = WorkspaceRuntimes(GroveConfig(), cli=DevcontainerCli)
 
 
 def _workspace(tmp_path: Path, *, container: ContainerRuntimeState | None = None) -> WorkspaceState:
@@ -50,7 +58,7 @@ def test_timeout_kills_the_process_group_and_its_child(tmp_path: Path, monkeypat
         "while True: time.sleep(1)\n"
     )
     monkeypatch.setattr(CommandWatcher, "TIMEOUT_SECONDS", 0.5)
-    watcher = CommandWatcher(lambda _: _workspace(tmp_path))
+    watcher = CommandWatcher(lambda _: _workspace(tmp_path), _RUNTIMES.for_state)
 
     outcome = watcher.evaluate(
         CommandPredicate(argv=[sys.executable, "-c", parent], workspace_id=WORKSPACE_ID),
@@ -99,7 +107,9 @@ def test_container_workspace_runs_the_predicate_through_docker_exec(
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
     monkeypatch.setenv("WATCH_DOCKER_ARGV", str(received))
     container = ContainerRuntimeState(container_id="c" * 64, remote_user="vscode")
-    watcher = CommandWatcher(lambda _: _workspace(tmp_path, container=container))
+    watcher = CommandWatcher(
+        lambda _: _workspace(tmp_path, container=container), _RUNTIMES.for_state
+    )
 
     outcome = watcher.evaluate(
         CommandPredicate(argv=["probe", "--check"], workspace_id=WORKSPACE_ID), datetime.now(UTC)
@@ -119,7 +129,7 @@ def test_container_workspace_runs_the_predicate_through_docker_exec(
 
 def test_truncated_output_says_so(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(CommandWatcher, "OUTPUT_LIMIT_BYTES", 32)
-    watcher = CommandWatcher(lambda _: _workspace(tmp_path))
+    watcher = CommandWatcher(lambda _: _workspace(tmp_path), _RUNTIMES.for_state)
 
     outcome = watcher.evaluate(
         CommandPredicate(
@@ -134,7 +144,7 @@ def test_truncated_output_says_so(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_missing_workspace_settles_as_a_failed_outcome() -> None:
-    watcher = CommandWatcher(lambda _: None)
+    watcher = CommandWatcher(lambda _: None, _RUNTIMES.for_state)
 
     outcome = watcher.evaluate(
         CommandPredicate(argv=["true"], workspace_id=WORKSPACE_ID), datetime.now(UTC)
@@ -146,7 +156,7 @@ def test_missing_workspace_settles_as_a_failed_outcome() -> None:
 
 
 def test_non_terminal_exit_keeps_waiting(tmp_path: Path) -> None:
-    watcher = CommandWatcher(lambda _: _workspace(tmp_path))
+    watcher = CommandWatcher(lambda _: _workspace(tmp_path), _RUNTIMES.for_state)
 
     outcome = watcher.evaluate(
         CommandPredicate(
@@ -157,4 +167,37 @@ def test_non_terminal_exit_keeps_waiting(tmp_path: Path) -> None:
         datetime.now(UTC),
     )
 
+    assert outcome is None
+
+
+def _remote_workspace(tmp_path: Path) -> WorkspaceState:
+    return replace(
+        _workspace(tmp_path), runtime=Runtime.REMOTE, remote=RemoteHandle("gcp", "exec-1")
+    )
+
+
+def test_a_remote_workspace_runs_its_command_through_the_worker(tmp_path: Path) -> None:
+    """The argv reaches the worker's own worktree; nothing runs on this host."""
+    asked: list[list[str]] = []
+
+    def worker(state: WorkspaceState, argv: Sequence[str], timeout: float) -> WorktreeRead:
+        asked.append(list(argv))
+        return WorktreeRead(returncode=0, output="green")
+
+    runtimes = WorkspaceRuntimes(GroveConfig(), cli=DevcontainerCli, remote_runner=worker)
+    watcher = CommandWatcher(lambda _: _remote_workspace(tmp_path), runtimes.for_state)
+    outcome = watcher.evaluate(
+        CommandPredicate(argv=["make", "check"], workspace_id=WORKSPACE_ID),
+        datetime.now(UTC),
+    )
+    assert asked == [["make", "check"]]
+    assert outcome is not None and outcome.ok and "green" in outcome.summary
+
+
+def test_an_unreachable_remote_worker_is_no_observation_not_a_failure(tmp_path: Path) -> None:
+    watcher = CommandWatcher(lambda _: _remote_workspace(tmp_path), _RUNTIMES.for_state)
+    outcome = watcher.evaluate(
+        CommandPredicate(argv=["make", "check"], workspace_id=WORKSPACE_ID),
+        datetime.now(UTC),
+    )
     assert outcome is None

@@ -20,4 +20,6 @@ def daemon_test_config() -> GroveConfig:
     mistake it for a test (any top-level ``def test_*`` would be picked
     up as a 0-arg test that returns a value, triggering a warning).
     """
-    return GroveConfig.model_validate({"auth": {"enabled": False}})
+    # The reaper reconciles the HOST's real tmux sockets and /proc and writes
+    # its standing watch into the log; a unit-test daemon must do neither.
+    return GroveConfig.model_validate({"auth": {"enabled": False}, "reaper": {"enabled": False}})

@@ -203,6 +203,22 @@ async def test_env_model_overrides_config_and_malformed_model_is_omitted(
 
 
 @pytest.mark.asyncio
+async def test_set_effort_is_refused_and_sends_no_request(
+    opencode_server: _Server, tmp_path: Path
+) -> None:
+    """OpenCode's `variant` is named per model, so there is no ladder to apply.
+    The refusal must be `False` with zero requests, not a guessed `variant`."""
+    owner = OpencodeNativeOwner(_command(opencode_server), tmp_path, timeout_seconds=1)
+    try:
+        await owner.start("")
+        before = len(opencode_server.requests)
+        assert await owner.set_effort("high") is False
+        assert len(opencode_server.requests) == before
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
 async def test_server_wide_event_stream_filters_foreign_session_and_normalizes_ours(
     opencode_server: _Server, tmp_path: Path
 ) -> None:

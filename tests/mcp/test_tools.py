@@ -238,7 +238,7 @@ async def test_fleet_status_tolerates_an_unreported_phase(
 # ─── create ──────────────────────────────────────────────────────────────────
 
 
-async def test_create_workspace_builds_request_with_auto_default(
+async def test_create_workspace_leaves_omitted_launch_fields_to_the_engine(
     fake_client: FakeGroveClient,
 ) -> None:
     tools = GroveTools(fake_client)
@@ -250,8 +250,8 @@ async def test_create_workspace_builds_request_with_auto_default(
     assert name == "create_workspace"
     req = kwargs["req"]
     assert req.repo_root == Path("/projects/demo")
-    assert req.branch_plan.kind == "auto"
-    assert req.skip_init is False
+    assert req.branch_plan is None
+    assert req.skip_init is None
 
 
 async def test_create_workspace_threads_model_through(
@@ -482,6 +482,20 @@ async def test_detach_ticket_passes_ref_straight_through(fake_client: FakeGroveC
     result = await tools.detach_ticket("ws-1", "#42")
     assert result.id == "ws-1"
     assert fake_client.calls[-1] == ("detach_ticket_by_ref", {"ws_id": "ws-1", "ref": "#42"})
+
+
+async def test_artifact_tools_pass_their_arguments_straight_through(
+    fake_client: FakeGroveClient,
+) -> None:
+    """Classification and validation are the engine's; the tool adds nothing."""
+    tools = GroveTools(fake_client)
+    await tools.attach_artifact("ws-1", "docs/plan.md", "Plan")
+    assert fake_client.calls[-1] == (
+        "attach_artifact",
+        {"ws_id": "ws-1", "target": "docs/plan.md", "title": "Plan"},
+    )
+    await tools.detach_artifact("ws-1", "docs/plan.md")
+    assert fake_client.calls[-1] == ("detach_artifact", {"ws_id": "ws-1", "ref": "docs/plan.md"})
 
 
 # ─── set phase: blocked + ticket ─────────────────────────────────────────────

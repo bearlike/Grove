@@ -11,6 +11,7 @@ layers (manager.py) compose these into the lifecycle.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -31,6 +32,7 @@ from grove.core import paths
 from grove.core.config import GroveConfig, InitScriptConfig
 from grove.core.errors import TmuxError
 from grove.core.process import ProcessTree
+from grove.core.scope import Scope
 
 
 class SendKey(StrEnum):
@@ -85,24 +87,42 @@ class HostAttach:
     scrolling log kills the worker, and with it the only process holding the
     session's control channel. Steering goes through Grove's own verbs.
     """
+    tmux_socket: str = ""
+    """The workspace's private server (``tmux -L``), or empty for the shared default."""
+
+    def attach_argv(self) -> list[str]:
+        """A plain ``attach`` to this session on its own server."""
+        return [
+            *TmuxServer(socket=self.tmux_socket).command,
+            "attach",
+            *(("-r",) if self.read_only else ()),
+            "-t",
+            self.tmux_session,
+        ]
 
     def terminal_argv(self) -> list[str]:
         """The command that hands a terminal the caller OWNS to this session.
 
-        ``switch-client`` when the caller is already inside an outer tmux
-        client — re-point that client rather than nesting one inside itself —
-        else a plain ``attach``. A caller with a FRESH pty (the daemon's
-        xterm.js bridge) is never inside an outer client and must not read this
-        flag; it composes its own argv off the wire mirror.
+        Outside tmux, a plain ``attach``. Inside an outer tmux client on the
+        SAME server, ``switch-client`` re-points that client rather than
+        nesting one inside itself. A session on its OWN server cannot be
+        switched to — ``switch-client`` only moves a client within its server —
+        so the outer tmux opens a window running the attach instead, with
+        ``TMUX`` cleared because tmux refuses to start a client inside one.
+        A caller with a FRESH pty (the daemon's xterm.js bridge) is never inside
+        an outer client and composes its own argv off the wire mirror.
 
-        ``read_only`` rides only the ``attach`` arm: ``switch-client -r``
+        ``read_only`` never rides ``switch-client``: ``switch-client -r``
         TOGGLES the client's read-only flag rather than setting it, so a
         client that was already read-only would be flipped writable. The
         switch arm therefore stays as it is, and the CLI says so.
         """
-        if self.inside_outer_tmux:
+        if not self.inside_outer_tmux:
+            return self.attach_argv()
+        if not self.tmux_socket:
             return ["tmux", "switch-client", "-t", self.tmux_session]
-        return ["tmux", "attach", *(("-r",) if self.read_only else ()), "-t", self.tmux_session]
+        inner = shlex.join(["env", "-u", "TMUX", *self.attach_argv()])
+        return ["tmux", "new-window", "-n", self.tmux_session, inner]
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +173,122 @@ type AttachInstruction = HostAttach | ContainerAttach
 #: Nothing in this module knows what a container is; the caller supplies the
 #: prefix (see :class:`grove.core.container_tmux.ContainerTmux`).
 DEFAULT_TMUX_COMMAND: Final[tuple[str, ...]] = ("tmux",)
+
+#: Global flags every OBSERVER (a ``-C attach-session`` reader) passes before
+#: its command. ``attach-session`` against a socket with no server STARTS one,
+#: and without ``-f`` that server sources ``~/.tmux.conf`` — on the reference
+#: host tpm plus resurrect/continuum, which block forever on a server with no
+#: session, so the accidental server never exit-emptied and nothing reaped it.
+#: An empty config makes a server an observer did create exit as soon as the
+#: observer does. ``/dev/null`` rather than ``os.devnull`` because the same
+#: argv also runs inside a container.
+OBSERVER_FLAGS: Final[tuple[str, ...]] = ("-f", "/dev/null")
+
+
+@dataclass(frozen=True, slots=True)
+class TmuxServer:
+    """Which HOST tmux server a workspace lives on — its own, or the shared default.
+
+    One server per workspace is a fault-isolation boundary. A tmux server is a
+    single process, and while every workspace and the user's own terminal tmux
+    shared ``/tmp/tmux-<uid>/default``, one crash ended them all in the same
+    second: measured on the reference host 2026-10-06..09, four segfaults in
+    tmux 3.4's ``control_write`` (a control-mode client with no control state)
+    each ended 34-54 panes at once. Grove's observers are the only control-mode
+    clients, so they were driving the least-hardened code path inside the one
+    process every agent depended on.
+
+    ``socket`` empty means the default server, which is what every record
+    written before this existed decodes to — a live workspace is never moved,
+    because moving it would mean killing the agent it hosts.
+
+    ``conf`` is the config the server STARTS with. A workspace server never
+    reads the user's ``~/.tmux.conf``: session-restoring plugins key their
+    "am I the only server" guard on a process count, so a workspace server
+    starting right after the default one crashed — the exact incident — would
+    restore the user's whole saved environment into itself, and a later
+    autosave would overwrite the user's snapshot with one workspace.
+    """
+
+    socket: str = ""
+    conf: str = ""
+
+    #: The server-name prefix Grove owns. ``-L`` names a socket under
+    #: ``$TMUX_TMPDIR/tmux-<uid>/``, so the name is all a client needs.
+    SOCKET_PREFIX: ClassVar[str] = "grove-"
+
+    @classmethod
+    def for_workspace(cls, workspace_id: str) -> str:
+        """The socket name a NEW workspace's private server is reached by."""
+        return f"{cls.SOCKET_PREFIX}{workspace_id[:12]}"
+
+    @property
+    def command(self) -> tuple[str, ...]:
+        """The argv that reaches this server — the seam every helper here takes."""
+        if not self.socket:
+            return DEFAULT_TMUX_COMMAND
+        return (*DEFAULT_TMUX_COMMAND, "-L", self.socket)
+
+    #: Separates a private server's socket from a session name in a
+    #: :meth:`handle`. Neither contains it: a socket is :meth:`for_workspace`'s
+    #: prefix plus hex, and a session name is a slug.
+    _HANDLE_SEP: ClassVar[str] = "|"
+
+    def handle(self, session: str) -> str:
+        """One string naming a session ON this server — an observer's identity.
+
+        Session names are unique per host, but a liveness stream has to know
+        which server to attach to, and keying it by name alone sent every
+        observer to the default server. The default server's handle is the bare
+        name, so every identity that existed before isolation is unchanged.
+        """
+        return f"{self.socket}{self._HANDLE_SEP}{session}" if self.socket else session
+
+    @classmethod
+    def parse_handle(cls, handle: str) -> tuple[TmuxServer, str]:
+        """Invert :meth:`handle`: the server and the session it names."""
+        socket, sep, session = handle.partition(cls._HANDLE_SEP)
+        if not sep:
+            return DEFAULT_SERVER, handle
+        return cls(socket=socket), session
+
+    def libtmux(self) -> Server:
+        if shutil.which("tmux") is None:
+            raise TmuxError("tmux not found on PATH — on Windows, run Grove inside WSL2")
+        if not self.socket:
+            return libtmux.Server()
+        return libtmux.Server(socket_name=self.socket, config_file=self.conf or None)
+
+    def socket_path(self) -> Path | None:
+        """Where this server's socket lives, honouring ``TMUX_TMPDIR``."""
+        tmpdir = os.environ.get("TMUX_TMPDIR") or "/tmp"
+        try:
+            return Path(tmpdir) / f"tmux-{os.getuid()}" / (self.socket or "default")
+        except AttributeError:  # pragma: no cover - no getuid on Windows
+            return None
+
+
+#: The shared default server: every pre-isolation record, and every caller that
+#: does not say otherwise.
+DEFAULT_SERVER: Final = TmuxServer()
+
+
+#: Grove's own config for a workspace server, written once per process start.
+#: Only what Grove's behaviour depends on, never the user's plugins (see
+#: :class:`TmuxServer`). ``escape-time 0`` because tmux's 500 ms
+#: default delays every Escape an agent TUI receives, which is the key Grove
+#: itself presses to dismiss a question. ``exit-empty`` (tmux's default, stated
+#: so a user's global cannot flip it) is what ends a server with its last
+#: session, so a killed workspace leaves no process behind.
+GROVE_SERVER_CONF: Final = """\
+# Written by Grove for a per-workspace tmux server; regenerated on every start.
+set -g exit-empty on
+set -g escape-time 0
+set -g default-terminal "tmux-256color"
+set -as terminal-features ",*:RGB"
+set -g mouse on
+set -g focus-events on
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,10 +485,8 @@ class TmuxPane:
         press_escape(self.target, command=self.command)
 
 
-def _server() -> Server:
-    if shutil.which("tmux") is None:
-        raise TmuxError("tmux not found on PATH — on Windows, run Grove inside WSL2")
-    return libtmux.Server()
+def _server(server: TmuxServer = DEFAULT_SERVER) -> Server:
+    return server.libtmux()
 
 
 #: What tmux's client prints when its connect() succeeds but the handshake gets
@@ -361,7 +495,7 @@ def _server() -> Server:
 _SERVER_GONE = "server exited unexpectedly"
 
 
-def diagnose_server_failure(message: str) -> str:
+def diagnose_server_failure(message: str, server: TmuxServer = DEFAULT_SERVER) -> str:
     """Tell a tmux server that CRASHED apart from one that is merely wedged.
 
     tmux prints the same ``server exited unexpectedly`` for both, and the two
@@ -380,30 +514,22 @@ def diagnose_server_failure(message: str) -> str:
     """
     if _SERVER_GONE not in message:
         return message
-    socket = _server_socket_path()
+    socket = server.socket_path()
     if socket is None or not socket.exists():
         return message
+    kill = " ".join((*server.command, "kill-server"))
     return (
         f"{message} — but its socket at {socket} still exists, so the tmux "
         "server is running and not answering (a wedged server, not a crashed "
         "one). Restarting Grove will not help; end the stuck client or the "
-        "server itself (`tmux kill-server`) and retry."
+        f"server itself (`{kill}`) and retry."
     )
 
 
-def _server_socket_path() -> Path | None:
-    """Where tmux's default socket lives for this user, honouring ``TMUX_TMPDIR``."""
-    tmpdir = os.environ.get("TMUX_TMPDIR") or "/tmp"
-    try:
-        return Path(tmpdir) / f"tmux-{os.getuid()}" / "default"
-    except AttributeError:  # pragma: no cover - no getuid on Windows
-        return None
-
-
-def has_session(name: str) -> bool:
+def has_session(name: str, server: TmuxServer = DEFAULT_SERVER) -> bool:
     """True iff a tmux session with this exact name exists right now."""
     try:
-        sessions = _server().sessions.filter(session_name=name)
+        sessions = _server(server).sessions.filter(session_name=name)
     except Exception as exc:  # libtmux raises various subprocess-derived errors
         logger.debug("has_session({}) raised: {}", name, exc)
         return False
@@ -425,7 +551,45 @@ def parse_size(size: str) -> tuple[int, int] | None:
     return parsed if all(parsed) else None
 
 
-def create_session(name: str, cwd: Path, *, history_limit: int = 50_000, size: str = "") -> None:
+def server_conf_text() -> str:
+    """Grove's server config, preceded by an optional include of the user's own.
+
+    The include (:func:`grove.core.paths.tmux_user_conf_path`) is for styling a
+    user wants on every workspace, never their ``~/.tmux.conf`` with its
+    session-restoring plugins (see :class:`TmuxServer`). It comes FIRST so
+    Grove's settings below always win, and ``-q`` makes a missing file a no-op.
+    """
+    quoted = re.sub(r'([\\"$#~])', r"\\\1", str(paths.tmux_user_conf_path()))
+    return f'source-file -q "{quoted}"\n{GROVE_SERVER_CONF}'
+
+
+def server_conf_path() -> Path:
+    """Write :func:`server_conf_text` under Grove's config dir and return its path.
+
+    Rewritten on every call rather than once, so an upgrade that changes the
+    text reaches the next server Grove starts. A per-workspace server reads it
+    only when it starts, so rewriting under a running server changes nothing.
+    """
+    path = paths.tmux_server_conf_path()
+    text = server_conf_text()
+    try:
+        current = path.read_text(encoding="utf-8")
+    except OSError:
+        current = None
+    if current != text:
+        paths.ensure_dir(path.parent)
+        paths.write_atomic(path, text, mode=0o644)
+    return path
+
+
+def create_session(
+    name: str,
+    cwd: Path,
+    *,
+    history_limit: int = 50_000,
+    size: str = "",
+    server: TmuxServer = DEFAULT_SERVER,
+) -> None:
     """Create a detached tmux session rooted at `cwd`. Idempotent if it already exists.
 
     ``size`` is the starting geometry (see ``TmuxConfig.detached_size``). It is
@@ -434,22 +598,36 @@ def create_session(name: str, cwd: Path, *, history_limit: int = 50_000, size: s
     reads the session before anyone does — the agent's first screen, and every
     `capture-pane` consumer, which never attaches a client at all and would
     otherwise read 80x24 forever.
+
+    ``server`` names which tmux server to create it on; a private one is
+    started here, reading Grove's own config (:func:`server_conf_path`).
     """
-    server = _server()
-    if has_session(name):
+    if server.socket and not server.conf:
+        server = TmuxServer(socket=server.socket, conf=str(server_conf_path()))
+    tmux_server = _server(server)
+    if has_session(name, server):
         raise TmuxError(f"tmux session already exists: {name}")
     geometry = parse_size(size)
     try:
-        session = server.new_session(
-            session_name=name,
-            start_directory=str(cwd),
-            attach=False,
-            x=geometry[0] if geometry else None,
-            y=geometry[1] if geometry else None,
-        )
+        if server.socket:
+            # A private server is STARTED by this first session, so it is started
+            # inside the workspace's own cgroup scope: everything the agent ever
+            # spawns, double-forked or not, stays where `kill` can end it.
+            _start_scoped(name, cwd, geometry, server)
+            session = tmux_server.sessions.get(session_name=name, default=None)
+            if session is None:
+                raise TmuxError(f"session {name} did not survive its start")
+        else:
+            session = tmux_server.new_session(
+                session_name=name,
+                start_directory=str(cwd),
+                attach=False,
+                x=geometry[0] if geometry else None,
+                y=geometry[1] if geometry else None,
+            )
     except Exception as exc:
         raise TmuxError(
-            f"failed to create tmux session {name}: {diagnose_server_failure(str(exc))}"
+            f"failed to create tmux session {name}: {diagnose_server_failure(str(exc), server)}"
         ) from exc
     try:
         session.set_option("history-limit", str(history_limit))
@@ -466,26 +644,62 @@ def create_session(name: str, cwd: Path, *, history_limit: int = 50_000, size: s
         logger.warning("could not set tmux options on {}: {}", name, exc)
 
 
-def kill_session(name: str, *, wait_for_exit: bool = False) -> None:
-    """Kill a session; optionally verify its old processes cannot overlap a relaunch."""
-    if not has_session(name):
+def _start_scoped(
+    name: str, cwd: Path, geometry: tuple[int, int] | None, server: TmuxServer
+) -> None:
+    """Start a private server with its first session, inside the server's systemd scope."""
+    size = ["-x", str(geometry[0]), "-y", str(geometry[1])] if geometry else []
+    argv = [*server.command, "-f", server.conf, "new-session", "-d", "-s", name, "-c", str(cwd)]
+    subprocess.run(
+        Scope.for_socket(server.socket).wrap([*argv, *size]),
+        check=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+
+def kill_server(server: TmuxServer) -> None:
+    """End a PRIVATE workspace server and every session on it.
+
+    Refuses the shared default server outright: it holds the user's own
+    sessions and every pre-isolation workspace. Raises `TmuxError` when nothing
+    answered, which is also what a socket with no server behind it reports.
+    """
+    if not server.socket:
+        raise TmuxError("refusing to kill the shared default tmux server")
+    try:
+        _run_tmux(["kill-server"], command=server.command, label=f"kill-server {server.socket}")
+    finally:
+        # The scope holds whatever the agent detached from tmux's own tree.
+        Scope.for_socket(server.socket).stop()
+
+
+def kill_session(
+    name: str, *, wait_for_exit: bool = False, server: TmuxServer = DEFAULT_SERVER
+) -> None:
+    """Kill a session; optionally verify its old processes cannot overlap a relaunch.
+
+    On a private server the session is its only one, so ``exit-empty`` ends
+    the server with it and a killed workspace leaves no tmux process behind.
+    """
+    if not has_session(name, server):
         return
     # Enumerate BEFORE the kill. `list-panes -s -t <name>` against a session
     # that no longer exists fails, so a sweep that reads the pane list
     # afterwards can only ever find nothing -- which is why the post-hoc reap
     # below never reclaimed the survivors it was written for.
-    survivor_pids = _session_pane_pids(name)
+    survivor_pids = session_pane_pids(name, server)
     try:
-        server = _server()
+        tmux_server = _server(server)
         if wait_for_exit:
-            panes = server.cmd("list-panes", "-s", "-t", name, "-F", "#{pane_pid}")
+            panes = tmux_server.cmd("list-panes", "-s", "-t", name, "-F", "#{pane_pid}")
             if panes.stderr or not panes.stdout:
                 raise TmuxError("could not identify native session processes")
             tree = ProcessTree.capture(tuple(int(pid) for pid in panes.stdout), include_roots=False)
             tree.terminate_and_wait()
         # Keep the recording shells and pane handles until every captured
         # descendant is gone: a stop timeout must remain retryable.
-        server.kill_session(target_session=name)
+        tmux_server.kill_session(target_session=name)
     except Exception as exc:
         raise TmuxError(f"failed to kill tmux session {name}: {exc}") from exc
     # `kill-session` sends SIGHUP to each pane's own process group and returns.
@@ -503,12 +717,18 @@ def kill_session(name: str, *, wait_for_exit: bool = False) -> None:
     # set that flag. Best-effort by construction, because a session that is
     # already gone is exactly the success case.
     _reap_session_survivors(survivor_pids)
+    if server.socket:
+        # The tree walk above is an approximation: a process that double-forked
+        # out of a pane is in nobody's tree. It is still in the server's scope,
+        # and a private server holds exactly one session, so ending the scope
+        # ends everything this workspace ever started.
+        Scope.for_socket(server.socket).stop()
 
 
-def _session_pane_pids(name: str) -> tuple[int, ...]:
+def session_pane_pids(name: str, server: TmuxServer = DEFAULT_SERVER) -> tuple[int, ...]:
     """Every pane pid of a LIVE session. Never raises."""
     try:
-        panes = _server().cmd("list-panes", "-s", "-t", name, "-F", "#{pane_pid}")
+        panes = _server(server).cmd("list-panes", "-s", "-t", name, "-F", "#{pane_pid}")
         return tuple(int(pid) for pid in (panes.stdout or ()) if str(pid).strip().isdigit())
     except Exception as exc:
         logger.debug("could not enumerate panes of {}: {}", name, exc)
@@ -559,6 +779,7 @@ def build_workspace_layout(
     env_unset: Sequence[str] = (),
     exit_suffix: str = "",
     shell_command: str = "",
+    server: TmuxServer = DEFAULT_SERVER,
 ) -> None:
     """Set up windows inside an existing session: shell + agent.
 
@@ -591,8 +812,7 @@ def build_workspace_layout(
     is `unset` first to drop any leaked ambient value, then `env` is exported.
     Unset-before-export means a key in both ends up exported — `env` wins.
     """
-    server = _server()
-    sessions = server.sessions.filter(session_name=session_name)
+    sessions = _server(server).sessions.filter(session_name=session_name)
     if not sessions:
         raise TmuxError(f"tmux session not found: {session_name}")
     session = sessions[0]
@@ -1116,7 +1336,7 @@ def _pane_holds_residual_text(snapshot: str, text: str) -> bool:
     return tail in lines[-1]
 
 
-def pane_activity_seconds_ago(target: str) -> int | None:
+def pane_activity_seconds_ago(target: str, server: TmuxServer = DEFAULT_SERVER) -> int | None:
     """Seconds since `target`'s window last produced output, per tmux.
 
     `target` is a tmux target spec (`session:window` or `session:window.pane`).
@@ -1136,7 +1356,7 @@ def pane_activity_seconds_ago(target: str) -> int | None:
         return None
     try:
         result = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", target, "-F", "#{window_activity}"],
+            [*server.command, "display-message", "-p", "-t", target, "-F", "#{window_activity}"],
             capture_output=True,
             text=True,
             check=False,
@@ -1158,7 +1378,7 @@ def pane_activity_seconds_ago(target: str) -> int | None:
     return delta if delta >= 0 else None
 
 
-def list_windows(session: str) -> list[str]:
+def list_windows(session: str, server: TmuxServer = DEFAULT_SERVER) -> list[str]:
     """Names of windows in `session`, in tmux index order. Empty on failure.
 
     Mechanism — not policy. Picking *which* window to capture from when
@@ -1170,10 +1390,10 @@ def list_windows(session: str) -> list[str]:
     session, or any subprocess error returns ``[]`` rather than raising,
     so callers in the peek hot path keep rendering.
     """
-    return _list_window_field(session, "#{window_name}")
+    return _list_window_field(session, "#{window_name}", server)
 
 
-def fit_window_to_client(session: str) -> None:
+def fit_window_to_client(session: str, server: TmuxServer = DEFAULT_SERVER) -> None:
     """Hand sizing of every window in `session` back to tmux. Call before attach.
 
     This is what an attach does INSTEAD of ``tmux resize-window -x/-y``, which
@@ -1203,10 +1423,10 @@ def fit_window_to_client(session: str) -> None:
     Best-effort like this module's other read helpers: a missing tmux or a dead
     session leaves sizing alone rather than blocking the attach.
     """
-    for window_id in _list_window_field(session, "#{window_id}"):
+    for window_id in _list_window_field(session, "#{window_id}", server):
         try:
             subprocess.run(
-                ["tmux", "set-option", "-w", "-t", window_id, "window-size", "latest"],
+                [*server.command, "set-option", "-w", "-t", window_id, "window-size", "latest"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -1217,7 +1437,9 @@ def fit_window_to_client(session: str) -> None:
             logger.debug("fit_window_to_client({}) failed: {}", window_id, exc)
 
 
-def attach_instruction(session_name: str, *, read_only: bool = False) -> HostAttach:
+def attach_instruction(
+    session_name: str, *, read_only: bool = False, server: TmuxServer = DEFAULT_SERVER
+) -> HostAttach:
     """Build the structured instruction for attaching to a HOST session.
 
     Detects whether we're already inside an outer tmux client by checking
@@ -1229,13 +1451,14 @@ def attach_instruction(session_name: str, *, read_only: bool = False) -> HostAtt
         tmux_session=session_name,
         inside_outer_tmux=bool(os.environ.get("TMUX")),
         read_only=read_only,
+        tmux_socket=server.socket,
     )
 
 
 # ─── internal ───────────────────────────────────────────────────────────────
 
 
-def _list_window_field(session: str, field: str) -> list[str]:
+def _list_window_field(session: str, field: str, server: TmuxServer = DEFAULT_SERVER) -> list[str]:
     """One `field` value per window in `session`, in tmux index order.
 
     The shared body behind :func:`list_windows` (which wants ``#{window_name}``)
@@ -1250,7 +1473,7 @@ def _list_window_field(session: str, field: str) -> list[str]:
         return []
     try:
         result = subprocess.run(
-            ["tmux", "list-windows", "-t", session, "-F", field],
+            [*server.command, "list-windows", "-t", session, "-F", field],
             capture_output=True,
             text=True,
             check=False,

@@ -229,6 +229,16 @@ class FakeGroveClient(GroveClient):
         self.calls.append(("detach_ticket_by_ref", {"ws_id": ws_id, "ref": ref}))
         return make_state(ws_id, ticket_refs=[])
 
+    async def attach_artifact(
+        self, ws_id: str, target: str, title: str | None = None
+    ) -> WorkspaceStateView:
+        self.calls.append(("attach_artifact", {"ws_id": ws_id, "target": target, "title": title}))
+        return make_state(ws_id)
+
+    async def detach_artifact(self, ws_id: str, ref: str) -> WorkspaceStateView:
+        self.calls.append(("detach_artifact", {"ws_id": ws_id, "ref": ref}))
+        return make_state(ws_id)
+
     async def list_agents(self, repo: Path) -> list[AgentSummaryView]:
         self.calls.append(("list_agents", {"repo": repo}))
         return [

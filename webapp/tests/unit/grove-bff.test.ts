@@ -28,6 +28,22 @@ afterEach(() => {
 });
 
 describe("authenticated Grove BFF", () => {
+  it.each([
+    ["events", ["events"]],
+    ["workspaces/workspace-id/live", ["workspaces", "workspace-id", "live"]],
+  ])("streams %s and translates the replay cursor", async (path, parts) => {
+    globalThis.fetch = vi.fn(async () => new Response("data: {}\n\n")) as unknown as typeof fetch;
+    const response = await GET(
+      new NextRequest(`http://localhost/api/grove/${path}?last_event_id=42`),
+      context(parts),
+    );
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ headers: expect.objectContaining({ "last-event-id": "42" }) }),
+    );
+  });
   it("streams a JSON response without consuming its body", async () => {
     const read = vi.fn();
     const stream = new ReadableStream<Uint8Array>({

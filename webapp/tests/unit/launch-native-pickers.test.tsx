@@ -248,12 +248,14 @@ describe("an option that reveals a field keeps its menu open", () => {
 
   it("declares the modes that need a panel, and NOT the one that does not", () => {
     const branch = code(`${CONTROLS_DIR}/branch-pill.tsx`);
-    const modes = branch.slice(branch.indexOf("BRANCH_MODES"), branch.indexOf("function branchNameError"));
+    const modes = branch.slice(branch.indexOf("const PLACEMENTS"), branch.indexOf("function branchNameError"));
 
     // `auto` is the whole answer — Grove names the branch — so selecting it
     // should dismiss the menu like any other complete choice.
     expect(modes.slice(modes.indexOf("auto:"), modes.indexOf("new:"))).not.toContain("opensPanel");
-    for (const mode of ["new", "existing", "remote", "root"]) {
+    // `root` is a complete answer too: the current checkout needs nothing typed.
+    expect(modes.slice(modes.indexOf("root: {"), modes.indexOf("auto: {"))).not.toContain("opensPanel");
+    for (const mode of ["new", "existing", "remote"]) {
       const start = modes.indexOf(`${mode}: {`);
       expect(start, `${mode} is not a BRANCH_MODES entry`).toBeGreaterThan(-1);
       expect(modes.slice(start, start + 260), mode).toContain("opensPanel: true");

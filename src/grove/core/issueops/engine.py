@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from loguru import logger
 
+from grove.core.contracts.branch_plan import AutoBranch
 from grove.core.contracts.issueops import IssueOpsAction, IssueOpsEvent, IssueOpsOutcome
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import TicketSelector
@@ -64,7 +65,7 @@ _WRITE_PERMISSIONS: frozenset[str] = frozenset({"write", "admin", "maintain", "o
 _DEDUPE_CAPACITY = 1024
 
 
-class _RecentKeys:
+class RecentKeys:
     """A bounded, thread-safe LRU set for at-least-once dedupe.
 
     ``check_and_add`` is atomic: it records the key and reports whether it was
@@ -127,7 +128,7 @@ class IssueOpsEngine:
         self._registry = registry
         self._status = status_publisher or _NullStatusPublisher()
         self._parser = CommandParser()
-        self._recent = _RecentKeys(dedupe_capacity)
+        self._recent = RecentKeys(dedupe_capacity)
 
     def handle(self, event: IssueOpsEvent) -> IssueOpsOutcome:  # noqa: PLR0911
         """Run one event through the pipeline and report the terminal outcome.
@@ -281,6 +282,8 @@ class IssueOpsEngine:
             agent_name=ic.agent,
             title=event.issue_title.strip()[:120] or f"issue-{event.issue_number}",
             ticket=TicketSelector(provider=event.provider, id=str(event.issue_number)),
+            # An issue gets its own branch, never the operator's checkout.
+            branch_plan=AutoBranch(),
             initial_prompt=self._render_prompt(mgr, ic, event, text),
         )
         try:
@@ -358,4 +361,4 @@ class IssueOpsEngine:
             )
 
 
-__all__ = ["IssueOpsEngine", "StatusPublisher"]
+__all__ = ["IssueOpsEngine", "RecentKeys", "StatusPublisher"]

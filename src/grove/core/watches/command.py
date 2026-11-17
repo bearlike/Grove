@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Final
 
 from grove.core.contracts.watches import CommandPredicate, WatchOutcome
+from grove.core.errors import CapabilityUnavailable, PaneNotFound
 from grove.core.watches.watcher import Watcher
-from grove.core.workspace import Runtime, WorkspaceState
+from grove.core.workspace import WorkspaceState
+from grove.core.workspace_runtime import RemoteRuntime, WorkspaceRuntime
 
 
 class CommandWatcher(Watcher[CommandPredicate]):
@@ -23,7 +25,9 @@ class CommandWatcher(Watcher[CommandPredicate]):
 
     A command has to observe the workspace which registered it, not the daemon's
     ambient environment. The workspace lookup is injected so this boundary never
-    imports the manager and a vanished workspace can settle honestly.
+    imports the manager and a vanished workspace can settle honestly. Where the
+    argv runs is the workspace runtime's answer (``runtime_for``), never a
+    branch here.
     """
 
     kind = "command"
@@ -34,8 +38,13 @@ class CommandWatcher(Watcher[CommandPredicate]):
     _REAP_GRACE_SECONDS: Final[float] = 5.0
     OUTPUT_LIMIT_BYTES: Final[int] = 2_048
 
-    def __init__(self, workspace_lookup: Callable[[str], WorkspaceState | None]) -> None:
+    def __init__(
+        self,
+        workspace_lookup: Callable[[str], WorkspaceState | None],
+        runtime_for: Callable[[WorkspaceState], WorkspaceRuntime],
+    ) -> None:
         self._workspace_lookup = workspace_lookup
+        self._runtime_for = runtime_for
 
     def observe(self, predicate: CommandPredicate, now: datetime) -> WatchOutcome | None:
         """Run one bounded command observation, or wait for its expected status."""
@@ -46,9 +55,19 @@ class CommandWatcher(Watcher[CommandPredicate]):
                 ok=False,
                 summary="The workspace that registered this command watch no longer exists.",
             )
-        argv = self._argv_for(workspace, predicate)
-        if argv is None:
+        runtime = self._runtime_for(workspace)
+        if isinstance(runtime, RemoteRuntime):
+            return self._observe_remote(runtime, workspace, predicate)
+        return self._observe_local(runtime, workspace, predicate)
+
+    def _observe_local(
+        self, runtime: WorkspaceRuntime, workspace: WorkspaceState, predicate: CommandPredicate
+    ) -> WatchOutcome | None:
+        """Run the argv in a worktree this host can reach, as the runtime translates it."""
+        translate = runtime.worktree_reader(workspace)
+        if translate is None:
             return None
+        argv = translate(predicate.argv)
         try:
             process = subprocess.Popen(
                 argv,
@@ -88,6 +107,38 @@ class CommandWatcher(Watcher[CommandPredicate]):
             ok=True,
             summary=self._summary(
                 f"The command exited with terminal status {returncode}.", output, truncated[0]
+            ),
+        )
+
+    def _observe_remote(
+        self, runtime: RemoteRuntime, workspace: WorkspaceState, predicate: CommandPredicate
+    ) -> WatchOutcome | None:
+        """The same observation, run by the remote worker in its own worktree.
+
+        An unreachable worker is no observation, never a settled outcome: the
+        workspace may simply be reconnecting.
+        """
+        try:
+            answered = runtime.run_in_worktree(
+                workspace, predicate.argv, timeout=self.TIMEOUT_SECONDS
+            )
+        except (CapabilityUnavailable, PaneNotFound):
+            return None
+        output = bytearray(answered.output.encode()[: self.OUTPUT_LIMIT_BYTES])
+        truncated = len(answered.output.encode()) > self.OUTPUT_LIMIT_BYTES
+        if answered.returncode == -1:
+            return WatchOutcome(
+                ok=False,
+                summary=self._summary(
+                    "The command timed out in the remote worktree.", output, truncated
+                ),
+            )
+        if answered.returncode not in predicate.terminal_exit_codes:
+            return None
+        return WatchOutcome(
+            ok=True,
+            summary=self._summary(
+                f"The command exited with terminal status {answered.returncode}.", output, truncated
             ),
         )
 
@@ -186,15 +237,6 @@ class CommandWatcher(Watcher[CommandPredicate]):
         if truncated:
             parts.append("Output truncated at the command-watch limit.")
         return " ".join(parts)
-
-    @staticmethod
-    def _argv_for(workspace: WorkspaceState, predicate: CommandPredicate) -> list[str] | None:
-        """Build the host or in-container argv without reinterpreting user tokens."""
-        if workspace.runtime is not Runtime.CONTAINER:
-            return list(predicate.argv)
-        if workspace.container is None:
-            return None
-        return workspace.container.exec_argv(predicate.argv)
 
 
 __all__ = ["CommandWatcher"]

@@ -24,6 +24,7 @@ from grove.core.contracts.activity import (
     WorkspaceActivityView,
 )
 from grove.core.contracts.agents import AgentSummaryView, ModelOptionView
+from grove.core.contracts.artifacts import ArtifactAttachRequest, ArtifactKind, ArtifactRef
 from grove.core.contracts.assignment_events import (
     AssignmentLifecycleEvent,
     AssignmentTicketEvent,
@@ -31,10 +32,12 @@ from grove.core.contracts.assignment_events import (
 )
 from grove.core.contracts.auth import (
     AuthErrorEnvelope,
+    OidcExchangeRequest,
     PairingChallengeView,
     PairRequest,
     PairResultView,
     SessionView,
+    SignInView,
 )
 from grove.core.contracts.branch_info import BranchInfo
 from grove.core.contracts.branch_plan import (
@@ -149,6 +152,9 @@ __all__ = [
     "AgentQuestionView",
     "AgentSessionView",
     "AgentSummaryView",
+    "ArtifactAttachRequest",
+    "ArtifactKind",
+    "ArtifactRef",
     "AssignmentLifecycleEvent",
     "AssignmentTicketEvent",
     "AssignmentTicketIdentity",
@@ -188,6 +194,7 @@ __all__ = [
     "ModelOptionView",
     "MoneyView",
     "NewNamedBranch",
+    "OidcExchangeRequest",
     "PairRequest",
     "PairResultView",
     "PairingChallengeView",
@@ -211,6 +218,7 @@ __all__ = [
     "SessionView",
     "SharePolicyUpdateRequest",
     "SharePolicyView",
+    "SignInView",
     "SourceHealth",
     "SubscriptionWindowView",
     "TicketProviderName",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -66,3 +67,27 @@ def test_create_root_workspace_over_http(daemon: TestClient, tmp_repo: Path) -> 
     assert body["placement"] == "root"
     assert Path(body["worktree_path"]).resolve() == tmp_repo.resolve()
     assert body["branch"] == "main"  # adopts the live checkout
+
+
+def test_create_by_project_identity_resolves_this_nodes_own_path(
+    tmp_state_dir: Path, tmp_repo: Path, fake_tmux: FakeTmux
+) -> None:
+    """A hub names a project by remote; each node resolves its own path for it."""
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://git.example.com/org/repo.git"],
+        cwd=tmp_repo,
+        check=True,
+    )
+    cfg = daemon_test_config().model_copy(update={"projects": [str(tmp_repo)]})
+    with TestClient(build_app(cfg=cfg, store=JsonWorkspaceStore())) as client:
+        named = {"remote": "git.example.com/org/repo", "default_branch": "main"}
+        payload = {"agent_name": "claude", "title": "by identity", "project": named}
+        created = client.post("/workspaces", json=payload)
+        assert created.status_code == 200, created.text
+        assert created.json()["repo_root"] == str(tmp_repo)
+        missing = client.post(
+            "/workspaces",
+            json={**payload, "project": {**named, "remote": "git.example.com/org/other"}},
+        )
+        assert missing.status_code == 404
+        assert missing.json()["detail"]["error"] == "project_not_on_node"

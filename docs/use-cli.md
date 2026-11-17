@@ -203,19 +203,38 @@ grove create "add cache" --agent claude --prompt "add an LRU cache in front of t
 grove create "add endpoint" --agent claude --cwd services/api
 ```
 
-### Steer, pause, resume, respawn, kill, attach, shell
+### Steer, pause, resume, respawn, fork, kill, attach, shell
 
 ```bash
 grove message a1b2 "now add a test for the empty case"   # a direction to a running agent
 grove pause a1b2 --force        # drop worktree and session, keep the branch; --force discards uncommitted changes
 grove resume a1b2               # rebuild a paused workspace from its branch
 grove respawn a1b2              # recreate a vanished tmux session over the worktree
+grove fork a1b2                 # copy the conversation into a new workspace on its own worktree
 grove kill a1b2 --keep-branch -y   # remove the workspace; --delete-branch or --keep-branch override provenance, -y skips the prompt
 grove attach a1b2               # hand your terminal to the session
 grove shell a1b2                # an interactive shell inside the container
 ```
 
 A native workspace attaches read only. Its pane is Grove's worker printing one protocol frame per line, so steer it with `grove message` or the dashboards.
+
+`grove fork` copies the conversation, not the files. The new workspace branches from the source's branch, so uncommitted changes stay behind, and the source keeps running. It works for Claude Code and Codex workspaces on the host. OpenCode is refused because its fork stays tied to the source directory. The web app offers the same action as **Fork conversation** in a workspace's options menu.
+
+### `grove control`
+
+Triggers a running session's own controls: a compaction, a model switch, a slash command, a skill, or a configured [Grove command](configure-agents.md#grove-commands). With no `-w` it addresses the caller's own session, so an agent can compact itself; a person passes a workspace id.
+
+```bash
+grove control ls [-w WORKSPACE] [--json]     # what this session can be sent
+grove control run NAME [-w WORKSPACE]        # compact, a slash command, a skill, or grove:<name>
+grove control model ID [-w WORKSPACE]        # switch the running session's model
+
+grove control run compact
+grove control run grove:compact-fast -w a1b2
+grove control model anthropic-sonnet -w a1b2
+```
+
+Each one returns once the session has the command, not once it has finished; the result lands in the session's transcript. A `grove:` command runs on native Claude Code sessions only, and a terminal workspace refuses it rather than type its steps into the pane.
 
 ### `grove agent`
 
@@ -256,6 +275,24 @@ grove diagram stop --revision HASH --session-id ID
 
 - Use the latest revision and session identity for `update` or `stop`.
 - Stopping leaves it readable. See [Diagram collaboration](features-diagrams.md).
+
+### `grove artifacts`
+
+Attaches files and links a workspace hands back.
+
+```bash
+grove artifacts attach TARGET [--title/-t TEXT] [--workspace/-w ID]
+grove artifacts list [--workspace/-w ID]
+grove artifacts detach REF [--workspace/-w ID]
+
+grove artifacts attach docs/plan.md --title "Plan"      # cwd-inferred workspace
+grove artifacts attach https://example.com/design-doc
+grove artifacts detach docs/plan.md
+```
+
+- `TARGET` is an `http(s)` link or a path to an existing file, relative to where you stand.
+- `REF` is the artifact's id, or the same link or path it was attached with.
+- See [Artifacts](features-artifacts.md) for which directories are allowed.
 
 ### `grove tickets`
 

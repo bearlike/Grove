@@ -1,7 +1,14 @@
 import { GroveProtocolError } from "@/lib/grove/api";
 
 /** What the user was trying to do when the daemon refused. */
-export type SteeringAction = "send" | "interrupt" | "answer" | "attach" | "rate";
+export type SteeringAction =
+  | "send"
+  | "interrupt"
+  | "answer"
+  | "attach"
+  | "rate"
+  | "dictate"
+  | "speak";
 
 const REFUSAL: Record<SteeringAction, string> = {
   send: "Couldn't deliver that message",
@@ -9,6 +16,8 @@ const REFUSAL: Record<SteeringAction, string> = {
   answer: "Couldn't submit that answer",
   attach: "Couldn't attach that file",
   rate: "Couldn't record that rating",
+  dictate: "Couldn't transcribe that recording",
+  speak: "Couldn't read that aloud",
 };
 
 /**

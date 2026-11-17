@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { branchPlanFor, buildCreateRequest, deriveTitle, newTitleSalt } from "@/lib/grove/adapters/launch";
+import { branchPlanFor, buildCreateRequest } from "@/lib/grove/adapters/launch";
 import type { LaunchState, LaunchValues } from "@/components/grove/launch/launch-state";
 
 const values: LaunchValues = {
@@ -8,9 +8,12 @@ const values: LaunchValues = {
   projectCwd: "/repos/grove/webapp",
   selectedProjectCwd: "/repos/grove/webapp",
   agentName: "claude",
+  agentKind: null,
   model: "sonnet",
   customModel: false,
+  effort: null,
   runtime: "container",
+  node: null,
   brief: true,
   native: null,
   branchMode: "auto",
@@ -25,67 +28,23 @@ const values: LaunchValues = {
 };
 
 function state(touched: readonly (keyof LaunchValues)[] = []): LaunchState {
-  return { values, touched: new Set(touched) };
+  return { values, touched: new Set(touched), seededRepo: values.repoRoot };
 }
 
-describe("deriveTitle", () => {
-  it("uses an untitled fallback when the brief is blank", () => {
-    expect(deriveTitle("   \n  ")).toBe("Untitled task");
-    expect(deriveTitle("")).toBe("Untitled task");
+describe("buildCreateRequest title", () => {
+  it("omits an untyped title so the engine names the workspace, never the prompt", () => {
+    const request = buildCreateRequest(state(), "Build the landing page");
+    expect("title" in request).toBe(false);
   });
 
-  it("is a short hex digest, never a slice of the brief", () => {
-    const title = deriveTitle("Build the landing page");
-    expect(title).toMatch(/^t[0-9a-f]{9}$/);
-    expect(title).not.toContain("Build");
+  it("omits a whitespace-only override the same way", () => {
+    const request = buildCreateRequest({ ...state(), values: { ...values, titleOverride: "   " } }, "Ship it");
+    expect("title" in request).toBe(false);
   });
 
-  it("can never be read as a ticket number by the branch grammar", () => {
-    // The incident's own input shape: "brief 69" digests to 9195625517, and a
-    // bare digit run at the head of an auto branch is exactly what the numeric
-    // ticket providers claim as an issue id. One workspace shipped attached to
-    // issue #3153869546 this way, with a scoping claim seeded and recorded.
-    const title = deriveTitle("brief 69");
-    expect(title).toBe("t919562551");
-    expect(title).not.toMatch(/^\d/);
-  });
-
-  it("is stable for the same brief and different for a different one", () => {
-    expect(deriveTitle("Build the landing page")).toBe(deriveTitle("Build the landing page"));
-    expect(deriveTitle("Build the landing page")).not.toBe(deriveTitle("Build the fleet page"));
-  });
-
-  it("digests the WHOLE brief, not just its first line", () => {
-    // A first-line rule made these two collide, which is exactly the failure a
-    // digest removes: two workspaces named the same thing for different work.
-    expect(deriveTitle("Fix the bug\nin the parser")).not.toBe(
-      deriveTitle("Fix the bug\nin the renderer"),
-    );
-  });
-
-  it("stays inside the wire limit however long the brief is", () => {
-    expect(deriveTitle("x".repeat(50_000)).length).toBeLessThanOrEqual(120);
-  });
-
-  it("gives the SAME brief a different name under a different salt", () => {
-    // Two launches of one brief used to share a title, so a second "fix the
-    // tests" was indistinguishable from the first on every list.
-    const first = deriveTitle("Fix the tests", newTitleSalt());
-    const second = deriveTitle("Fix the tests", newTitleSalt());
-    expect(first).toMatch(/^t[0-9a-f]{9}$/);
-    expect(second).not.toBe(first);
-    // A salt is a draft's identity: one draft previews and submits one name.
-    expect(deriveTitle("Fix the tests", "s1")).toBe(deriveTitle("Fix the tests", "s1"));
-  });
-
-  it("submits the name the preview showed, salt included", () => {
-    const request = buildCreateRequest(state(), "Fix the tests", [], "draft-salt");
-    expect(request.title).toBe(deriveTitle("Fix the tests", "draft-salt"));
-    expect(request.title).not.toBe(deriveTitle("Fix the tests"));
-  });
-
-  it("ignores surrounding whitespace so a stray newline is not a new name", () => {
-    expect(deriveTitle("  Ship it  ")).toBe(deriveTitle("Ship it"));
+  it("sends a title the user typed, trimmed", () => {
+    const request = buildCreateRequest({ ...state(), values: { ...values, titleOverride: "  parser fix " } }, "Ship it");
+    expect(request.title).toBe("parser fix");
   });
 });
 
@@ -104,14 +63,9 @@ describe("buildCreateRequest", () => {
     expect(buildCreateRequest(state(), "Build the landing page\nwith the new composer")).toEqual({
       repo_root: "/repos/grove",
       project_cwd: "/repos/grove/webapp",
-      agent_name: "claude",
-      // The default name is a digest of the whole brief, so it is asserted
-      // by shape: pinning the literal would just re-encode md5 in a test.
-      title: expect.stringMatching(/^t[0-9a-f]{9}$/),
+      // No agent and no branch plan: both are untouched, so the engine's
+      // resolver answers them exactly as `GET /defaults` displayed them.
       initial_prompt: "Build the landing page\nwith the new composer",
-      // Always present, even untouched — see the next test for why this one
-      // field cannot follow the rule the rest of them do.
-      branch_plan: { kind: "auto", base_ref: "main" },
       ticket: { provider: "gitea", id: "42", kind: "issue" },
     });
   });
@@ -121,7 +75,7 @@ describe("buildCreateRequest", () => {
     // the wire path recorded by an existing workspace.
     expect(
       buildCreateRequest(
-        { values: { ...values, projectCwd: "packages/api" }, touched: new Set(["projectCwd"]) },
+        { values: { ...values, projectCwd: "packages/api" }, touched: new Set(["projectCwd"]), seededRepo: values.repoRoot },
         "Build it",
       ).project_cwd,
     ).toBe("packages/api");
@@ -135,7 +89,7 @@ describe("buildCreateRequest", () => {
           projectCwd: null,
           selectedProjectCwd: "/repos/grove",
         },
-        touched: new Set(),
+        touched: new Set(), seededRepo: "/repos/grove",
       },
       "Use the configured working directory",
     );
@@ -146,43 +100,50 @@ describe("buildCreateRequest", () => {
   it("lets an explicit repository-root choice override a nested project", () => {
     expect(
       buildCreateRequest(
-        { values: { ...values, projectCwd: null }, touched: new Set(["projectCwd"]) },
+        { values: { ...values, projectCwd: null }, touched: new Set(["projectCwd"]), seededRepo: "/repos/grove" },
         "Start in the root",
       ).project_cwd,
     ).toBeNull();
   });
 
-  it("sends the branch plan the pill DISPLAYS, even when the user never touched it", () => {
-    // The regression: branch_plan is the one field whose omission is not
-    // "resolve it from the cascade later". CreateWorkspaceRequest defaults it
-    // to AutoBranch() and nothing engine-side reads defaults.branch_mode, so a
-    // user whose saved default is `root` would see the pill say "Work in place"
-    // and get an ordinary worktree — the display and the behaviour disagreeing
-    // silently, on the one control that decides whether isolation exists.
+  it("omits an untouched placement, so the engine resolves the saved one", () => {
+    // Since #1093 the engine reads the saved branch mode itself; sending what
+    // the pill displays would pin today's default onto this create, and the
+    // forced send it replaced was the window where a placeholder `auto` beat a
+    // saved `root`.
     const seeded = state();
     const request = buildCreateRequest(
-      { values: { ...seeded.values, branchMode: "root" }, touched: seeded.touched },
+      { values: { ...seeded.values, branchMode: "root" }, touched: seeded.touched, seededRepo: "/repos/grove" },
       "Work in the root",
     );
 
-    expect(request.branch_plan).toEqual({ kind: "root" });
+    expect(request).not.toHaveProperty("branch_plan");
+  });
+
+  it("sends a chosen placement, and the chosen agent", () => {
+    const chosen = state(["branchMode", "agentName"]);
+    const request = buildCreateRequest(
+      { ...chosen, values: { ...chosen.values, branchMode: "root" } },
+      "Work in the root",
+    );
+
+    expect(request).toMatchObject({ branch_plan: { kind: "root" }, agent_name: "claude" });
   });
 
   it("rejects an invalid explicit custom model before it can enter a request", () => {
     expect(() =>
       buildCreateRequest(
-        { values: { ...values, model: "invalid model", customModel: true }, touched: new Set(["model"]) },
+        { values: { ...values, model: "invalid model", customModel: true }, touched: new Set(["model"]), seededRepo: "/repos/grove" },
         "Build it",
       ),
     ).toThrow("Use ASCII letters");
   });
 
   it("pins fields only after the user touches their controls", () => {
-    expect(buildCreateRequest(state(["model", "runtime", "brief", "skipInit", "branchMode"]), "Build it")).toEqual({
+    expect(buildCreateRequest(state(["model", "runtime", "brief", "skipInit", "branchMode", "agentName"]), "Build it")).toEqual({
       repo_root: "/repos/grove",
       project_cwd: "/repos/grove/webapp",
       agent_name: "claude",
-      title: expect.stringMatching(/^t[0-9a-f]{9}$/),
       initial_prompt: "Build it",
       model: "sonnet",
       runtime: "container",
@@ -203,5 +164,26 @@ describe("the session mode rides the request only when touched", () => {
     const touched = state(["native"]);
     const values = { ...touched.values, native: false };
     expect(buildCreateRequest({ ...touched, values }, "Build it")).toMatchObject({ native: false });
+  });
+});
+
+describe("buildCreateRequest runtime and node", () => {
+  it("names a remote block as runtime remote plus its block, and only when touched", () => {
+    const remote = { ...values, runtime: "sandbox", node: "edge-1" };
+    const touched = buildCreateRequest(
+      { values: remote, touched: new Set(["runtime", "node"]), seededRepo: "/repos/grove" },
+      "work",
+    );
+    expect(touched).toMatchObject({ runtime: "remote", remote_runtime: "sandbox", node: "edge-1" });
+    const untouched = buildCreateRequest({ values: remote, touched: new Set(), seededRepo: "/repos/grove" }, "work");
+    expect(untouched).not.toHaveProperty("runtime");
+    expect(untouched).not.toHaveProperty("remote_runtime");
+    expect(untouched).not.toHaveProperty("node");
+  });
+
+  it("keeps host and container as plain runtimes with no remote block", () => {
+    const request = buildCreateRequest(state(["runtime"]), "work");
+    expect(request.runtime).toBe("container");
+    expect(request).not.toHaveProperty("remote_runtime");
   });
 });

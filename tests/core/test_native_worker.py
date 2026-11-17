@@ -10,7 +10,13 @@ import httpx
 import pytest
 
 from grove.core.agents.native_owner import NativeAnswer, NativeSubmission
-from grove.core.native_worker import NativeWorker, NativeWorkerConfig, _run
+from grove.core.native_worker import (
+    _BOOT_PROMPT,
+    _PEER_PREAMBLE,
+    NativeWorker,
+    NativeWorkerConfig,
+    _run,
+)
 
 
 def _once_then_revoked(handler):
@@ -304,6 +310,10 @@ async def test_worker_relays_operator_controls_and_never_acks_them(
             self.calls.append(("set_model", model))
             return True
 
+        async def set_effort(self, effort: str) -> bool:
+            self.calls.append(("set_effort", effort))
+            return True
+
         async def wait_closed(self) -> None:
             await asyncio.Future()
 
@@ -317,6 +327,7 @@ async def test_worker_relays_operator_controls_and_never_acks_them(
         'event: registered\ndata: {"generation":"test"}\n\n'
         'event: delivery\ndata: {"op":"interrupt","message_id":"","text":""}\n\n'
         'event: delivery\ndata: {"op":"set_model","message_id":"","text":"opus"}\n\n'
+        'event: delivery\ndata: {"op":"set_effort","message_id":"","text":"xhigh"}\n\n'
         'event: delivery\ndata: {"op":"steer","message_id":"","text":"do this"}\n\n'
         'event: delivery\ndata: {"message_id":"mbx_' + "1" * 32 + '","text":"peer mail"}\n\n'
     )
@@ -347,6 +358,7 @@ async def test_worker_relays_operator_controls_and_never_acks_them(
     assert [call for call in native.calls if call[0] != "send"] == [
         ("interrupt", ""),
         ("set_model", "opus"),
+        ("set_effort", "xhigh"),
     ]
     sent = [text for op, text in native.calls if op == "send"]
     assert sent[0].endswith("do the thing")
@@ -471,7 +483,9 @@ async def test_reader_termination_ends_worker_even_while_daemon_is_unavailable(
             base_url="http://localhost", transport=httpx.MockTransport(handler)
         ),
     )
-    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
+    config = NativeWorkerConfig(
+        workspace_id="a" * 32, provider="claude_code", command=["unused"], resume=True
+    )
     expected = ValueError if failure is not None else RuntimeError
     with pytest.raises(expected, match=r"reader failed|provider output closed"):
         await asyncio.wait_for(NativeWorker(config).run(), timeout=1)
@@ -549,6 +563,8 @@ async def test_interrupt_bypasses_slow_input_and_preserves_queued_text(
         provider="claude_code",
         command=["unused"],
         initial_prompt="first" if kind == "initial" else "",
+        # A worker with no task to submit is a resumed one in production.
+        resume=kind != "initial",
     )
     await asyncio.wait_for(NativeWorker(config).run(), timeout=1)
     assert interrupted.is_set()
@@ -614,7 +630,9 @@ async def test_reconnect_reserves_unacknowledged_input_without_resending_it(
             base_url="http://localhost", transport=httpx.MockTransport(handler)
         ),
     )
-    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
+    config = NativeWorkerConfig(
+        workspace_id="a" * 32, provider="claude_code", command=["unused"], resume=True
+    )
     await asyncio.wait_for(NativeWorker(config).run(), timeout=1)
     assert connections == [[], [message_id], []]
     assert sent == ["once"]
@@ -640,7 +658,9 @@ async def test_entrypoint_signals_cancel_worker_and_remove_handlers(
             closed.set()
 
     monkeypatch.setattr(NativeWorker, "run", run)
-    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
+    config = NativeWorkerConfig(
+        workspace_id="a" * 32, provider="claude_code", command=["unused"], resume=True
+    )
     entry = asyncio.create_task(_run(config))
     await asyncio.sleep(0)
     await asyncio.sleep(0)
@@ -674,21 +694,30 @@ def test_a_frame_renders_as_one_stamped_bounded_pane_line() -> None:
 
 
 def test_trace_prints_the_frame_line(capsys: pytest.CaptureFixture[str]) -> None:
-    NativeWorker.trace("send", {"type": "control_request", "request": {"subtype": "interrupt"}})
+    worker = NativeWorker(
+        NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
+    )
+    worker.trace("send", {"type": "control_request", "request": {"subtype": "interrupt"}})
     out = capsys.readouterr().out
     assert out.count("\n") == 1
     assert '→ {"type":"control_request","request":{"subtype":"interrupt"}}' in out
 
 
 @pytest.mark.asyncio
-async def test_a_resumed_worker_sends_no_boot_prompt_and_no_task(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("resume", "provider"),
+    [(True, "claude_code"), (False, "claude_code")],
+)
+async def test_only_a_resume_skips_the_boot_prompt_and_the_preamble(
+    monkeypatch: pytest.MonkeyPatch, resume: bool, provider: str
 ) -> None:
-    """An empty `initial_prompt` IS the respawn signal: continue, do not greet.
+    """`resume` is the respawn signal; an empty prompt is not.
 
-    `respawn` composes no prompt because the conversation it resumes already
-    holds the work, so the worker must neither ask the session to "reply READY"
-    (interrupting whatever it is mid-task) nor deliver a fresh workspace brief.
+    A resumed conversation already holds the work, so the worker must neither
+    ask it to "reply READY" (interrupting whatever it is mid-task) nor deliver
+    a fresh preamble. A FRESH session with no task is the opposite case wearing
+    the same empty prompt: without a first user turn the provider writes no
+    transcript, so the session reads as nonexistent everywhere.
     """
 
     class Native:
@@ -722,11 +751,21 @@ async def test_a_resumed_worker_sends_no_boot_prompt_and_no_task(
         "grove.core.native_worker.httpx.AsyncClient",
         lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
     )
-    config = NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
+    config = NativeWorkerConfig(
+        workspace_id="a" * 32,
+        provider=provider,
+        command=["unused"],
+        resume=resume,
+        initial_prompt="",
+    )
     await NativeWorker(config).run()
 
-    assert native.started == [""]  # no boot prompt on a resume
-    assert native.sent == []  # and no workspace brief either
+    if resume:
+        assert native.started == [""]  # no boot prompt on a resume
+        assert native.sent == []  # and no preamble either
+    else:
+        assert native.started == [_BOOT_PROMPT]
+        assert native.sent == [_PEER_PREAMBLE]  # the preamble alone, no dangling separator
 
 
 @pytest.mark.asyncio
@@ -793,6 +832,7 @@ async def test_worker_routes_compact_and_command_to_dedicated_native_operations(
             workspace_id="a" * 32,
             provider="claude_code",
             command=["unused"],
+            resume=True,
         )
     ).run()
 
@@ -874,3 +914,301 @@ async def test_a_second_grove_command_while_one_runs_is_refused(
     await worker._macro
     assert native.ran == ["/compact"]
     assert "/grove:b refused" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("watched", [True, False])
+async def test_the_live_pulse_is_posted_only_while_the_daemon_says_someone_watches(
+    monkeypatch: pytest.MonkeyPatch, watched: bool
+) -> None:
+    """The fold runs on every frame; the POST happens only after a `watch on`.
+
+    An unwatched session must cost the daemon nothing, so the negative case
+    asserts that not a single `/mailboxes/pulse` request was made.
+    """
+
+    class Native:
+        async def start(self, prompt: str) -> str:
+            return "native-session"
+
+        async def send(self, message_id: str, text: str) -> NativeSubmission:
+            worker._observe(
+                "recv", {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 300}
+            )
+            return NativeSubmission(stage="delivered", evidence=message_id)
+
+        async def wait_closed(self) -> None:
+            await asyncio.Future()
+
+        async def close(self) -> None:
+            pass
+
+    pulses: list[dict[str, object]] = []
+    posted = asyncio.Event()
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/mailboxes/pulse":
+            pulses.append(json.loads(request.content))
+            posted.set()
+            return httpx.Response(200, json={"status": "ok"})
+        assert request.url.params.get("live") == "1"
+        watch = 'event: delivery\ndata: {"op":"watch","message_id":"","text":"on"}\n\n'
+        head = 'event: registered\ndata: {"generation":"test"}\n\n' + (watch if watched else "")
+
+        async def body():  # a daemon connection stays open; its end clears the watch
+            yield head.encode()
+            await asyncio.Future()
+
+        return httpx.Response(200, content=body())
+
+    native = Native()
+    monkeypatch.setattr(NativeWorker, "transport", lambda self: native)
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(route)
+    monkeypatch.setattr(
+        "grove.core.native_worker.httpx.AsyncClient",
+        lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
+    )
+    config = NativeWorkerConfig(
+        workspace_id="a" * 32, provider="claude_code", command=["unused"], initial_prompt="go"
+    )
+    worker = NativeWorker(config)
+    run = asyncio.create_task(worker.run())
+    try:
+        if watched:
+            await asyncio.wait_for(posted.wait(), 5)
+            assert pulses[-1]["step"] == "thinking"
+            assert pulses[-1]["thinking_tokens"] == 300
+        else:
+            await asyncio.sleep(0.3)
+            assert pulses == []
+    finally:
+        run.cancel()
+        await asyncio.gather(run, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_watch_turned_off_stops_the_posts_even_with_frames_still_flowing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each gate alone must hold: a viewer leaving mid-thought ends the posts.
+
+    Drives the publisher directly with a watch that was ON (so a change is
+    already pending) and is then turned OFF while frames keep arriving.
+    """
+    posts: list[object] = []
+
+    class Client:
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def post(self, path: str, **kwargs: object) -> httpx.Response:
+            posts.append(kwargs.get("json"))
+            return httpx.Response(200, request=httpx.Request("POST", path))
+
+    monkeypatch.setattr("grove.core.native_worker._PULSE_INTERVAL_SECONDS", 0.01)
+    worker = NativeWorker(
+        NativeWorkerConfig(workspace_id="a" * 32, provider="claude_code", command=["unused"])
+    )
+    monkeypatch.setattr(worker, "_client", lambda **_: Client())
+    publisher = asyncio.create_task(worker._publish_pulse())
+    try:
+        worker._set_watched(True)
+        await asyncio.sleep(0.05)
+        seen = len(posts)
+        assert seen >= 1
+
+        worker._set_watched(False)
+        for tokens in range(10, 200, 10):
+            worker._observe(
+                "recv", {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": tokens}
+            )
+            await asyncio.sleep(0.01)
+        assert len(posts) == seen
+    finally:
+        publisher.cancel()
+        await asyncio.gather(publisher, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_create_that_resumes_with_a_task_delivers_the_task_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A create may resume a session AND carry a task. The task is the first
+    input to the continued conversation: no boot prompt, no preamble (the
+    session already has one), and never silently dropped."""
+
+    class Native:
+        def __init__(self) -> None:
+            self.started: list[str] = []
+            self.sent: list[str] = []
+
+        async def start(self, prompt: str) -> str:
+            self.started.append(prompt)
+            return "native-session"
+
+        async def send(self, message_id: str, text: str) -> NativeSubmission:
+            self.sent.append(text)
+            return NativeSubmission(stage="delivered", evidence=message_id)
+
+        async def wait_closed(self) -> None:
+            await asyncio.Future()
+
+        async def close(self) -> None:
+            pass
+
+    native = Native()
+    monkeypatch.setattr(NativeWorker, "transport", lambda self: native)
+    monkeypatch.setattr("grove.core.native_worker._RECONNECT_FLOOR_SECONDS", 0.01)
+    real_client = httpx.AsyncClient
+    stream = 'event: registered\ndata: {"generation":"test"}\n\n'
+    transport = httpx.MockTransport(
+        _once_then_revoked(lambda request: httpx.Response(200, text=stream))
+    )
+    monkeypatch.setattr(
+        "grove.core.native_worker.httpx.AsyncClient",
+        lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
+    )
+    config = NativeWorkerConfig(
+        workspace_id="a" * 32,
+        provider="claude_code",
+        command=["unused"],
+        resume=True,
+        initial_prompt="now add the tests",
+    )
+    await NativeWorker(config).run()
+
+    assert native.started == [""]
+    assert native.sent == ["now add the tests"]
+
+
+@pytest.mark.parametrize(
+    ("found", "flag", "resume"), [(True, "--resume", True), (False, "--session-id", False)]
+)
+def test_a_woken_remote_worker_resumes_only_a_transcript_it_holds(
+    monkeypatch: pytest.MonkeyPatch, found: bool, flag: str, resume: bool
+) -> None:
+    from grove.core import native_worker  # noqa: PLC0415
+
+    class Adapter:
+        def locate_transcripts(self, cwd: object, session_id: str) -> list[str]:
+            return ["t.jsonl"] if found else []
+
+    monkeypatch.setattr(native_worker, "get_adapter", lambda kind: Adapter())
+    sid = "6f1d1b8e-0000-4000-8000-000000000001"
+    config = native_worker.NativeWorkerConfig(
+        workspace_id="a" * 32,
+        provider="claude_code",
+        command=["claude", "--resume", sid],
+        resume=True,
+        repo_url="https://git.example.test/acme/app.git",
+        branch="grove/a",
+    )
+    result = native_worker._resumable(config)
+    assert result.command == ["claude", flag, sid] and result.resume is resume
+
+
+def _remote_spool_harness(
+    monkeypatch: pytest.MonkeyPatch, first_status: int
+) -> tuple[NativeWorker, list[tuple[str, dict[str, object]]], asyncio.Event]:
+    """A remote worker whose daemon answers the FIRST spool post with ``first_status``."""
+
+    class Native:
+        async def start(self, prompt: str) -> str:
+            return "native-session"
+
+        async def send(self, message_id: str, text: str) -> NativeSubmission:
+            return NativeSubmission(stage="delivered", evidence=message_id)
+
+        async def wait_closed(self) -> None:
+            await asyncio.Future()
+
+        async def close(self) -> None:
+            pass
+
+    landed: list[tuple[str, dict[str, object]]] = []
+    refusals = [first_status]
+    stop_landed = asyncio.Event()
+
+    def route(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/mailboxes/spool":
+            if refusals:
+                return httpx.Response(refusals.pop())
+            assert request.url.params["generation"] == "g" * 32
+            body = json.loads(request.content)
+            landed.append((request.url.params["suffix"], body))
+            if body.get("hook_event_name") == "Stop":
+                stop_landed.set()
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/mailboxes/connection":
+            head = 'event: registered\ndata: {"generation":"' + "g" * 32 + '"}\n\n'
+
+            async def body():
+                yield head.encode()
+                await asyncio.Future()
+
+            return httpx.Response(200, content=body())
+        return httpx.Response(200, json={"status": "ok"})
+
+    native = Native()
+    monkeypatch.setattr(NativeWorker, "transport", lambda self: native)
+    monkeypatch.setattr("grove.core.native_worker._RECONNECT_FLOOR_SECONDS", 0.01)
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(route)
+    monkeypatch.setattr(
+        "grove.core.native_worker.httpx.AsyncClient",
+        lambda **kwargs: real_client(base_url="http://localhost", transport=transport),
+    )
+    worker = NativeWorker(
+        NativeWorkerConfig(
+            workspace_id="a" * 32,
+            provider="claude_code",
+            command=["unused"],
+            resume=True,
+            repo_url="http://forge.example/acme/widgets.git",
+            branch="grove/x",
+        )
+    )
+    return worker, landed, stop_landed
+
+
+async def _two_turn_edges(worker: NativeWorker, landed_stop: asyncio.Event) -> None:
+    run = asyncio.create_task(worker.run())
+    try:
+        await asyncio.sleep(0.05)
+        assert worker._asks is not None
+        worker._asks.bind("native-session")
+        worker._asks.turn("UserPromptSubmit")
+        worker._asks.turn("Stop")
+        await asyncio.wait_for(landed_stop.wait(), 5)
+    finally:
+        run.cancel()
+        await asyncio.gather(run, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_remote_worker_posts_its_spool_drops_in_order_and_retries_a_refused_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remote worker shares no filesystem with the host, so its drops ride the
+    daemon connection (#1030). The first post meets a restarting daemon (503):
+    if the sender dropped it, the turn would never read as started."""
+    worker, landed, stop_landed = _remote_spool_harness(monkeypatch, 503)
+    await _two_turn_edges(worker, stop_landed)
+    assert [body["hook_event_name"] for _, body in landed] == ["UserPromptSubmit", "Stop"]
+    assert {suffix for suffix, _ in landed} == {".turn.json"}
+
+
+@pytest.mark.asyncio
+async def test_a_permanently_refused_drop_is_discarded_so_the_next_edge_still_lands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 413 will answer the same drop forever. Retrying it would hold every
+    later edge behind it, so the turn end would never land and the session would
+    read WORKING: the refused drop must go, and the `Stop` behind it must arrive."""
+    worker, landed, stop_landed = _remote_spool_harness(monkeypatch, 413)
+    await _two_turn_edges(worker, stop_landed)
+    assert [body["hook_event_name"] for _, body in landed] == ["Stop"]

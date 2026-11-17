@@ -191,9 +191,13 @@ test.describe("fleet status marks", () => {
       await expect(noPhase.getByTestId("fleet-row-attention-mark")).toHaveCount(0);
       await expect(noPhase.getByTestId("fleet-row-phase-mark")).toHaveCount(0);
       await waiting.locator("a").hover();
-      const details = page.getByRole("tooltip").filter({ hasText: "Waiting and verifying" });
-      await expect(details).toContainText("Waiting for you — the agent asked a question");
-      await expect(details).toContainText("Verify — step 4 of 6");
+      // The overview carries no title since 8c038368; it is the tooltip
+      // holding the session-overview body.
+      const details = page.getByRole("tooltip").filter({ has: page.getByTestId("session-overview") });
+      // The glance states the two axes as fields; the glossary sentences are
+      // the pills' own aria-labels, asserted above.
+      await expect(details).toContainText("Waiting for you");
+      await expect(details).toContainText("Verify");
       await page.keyboard.press("Escape");
 
       await page.screenshot({ path: `test-results/status-marks-${theme}.png` });

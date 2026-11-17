@@ -72,7 +72,7 @@ from grove.core import paths
 from grove.core.activity import DashboardDelta, SessionActivity, WorkspaceActivity
 from grove.core.agents import get_adapter
 from grove.core.config import AgentKind, TelemetryConfig, UsagePricingConfig
-from grove.core.otel_resource import project_name
+from grove.core.otel_resource import node_name, project_name
 from grove.core.registry import RepoRegistry
 from grove.core.telemetry.semconv import (
     ChatMessage,
@@ -81,7 +81,9 @@ from grove.core.telemetry.semconv import (
     LangfuseAttr,
     TraceIdentity,
 )
+from grove.core.telemetry_backfill import LiveAcknowledgements
 from grove.core.trace import (
+    AcknowledgedTraces,
     AttributeValue,
     SpanRecord,
     SpanSink,
@@ -167,8 +169,13 @@ class TraceForwarder:
         registry: RepoRegistry,
         sink: SpanSink,
         pricing: UsagePricingConfig | None = None,
+        acknowledged: AcknowledgedTraces | None = None,
     ) -> None:
-        """``sink`` is the injection seam a test drives with an in-memory
+        """``acknowledged`` persists which turns the collector accepted, so a
+        daemon restart re-sends none of them (#905); ``None`` keeps the gate
+        in-memory, which is what a test without a ledger wants.
+
+        ``sink`` is the injection seam a test drives with an in-memory
         processor (:func:`~grove.core.trace.sink_from_processor`), so the whole
         span-construction path production takes is exercised without an
         exporter. The instrumentor is built *over the same sink* rather than
@@ -198,7 +205,10 @@ class TraceForwarder:
             if resolved_pricing is not None
             else None
         )
-        self._instrumentor = TraceInstrumentor(cfg, sink=sink, cost_estimator=cost_estimator)
+        self._acknowledged = acknowledged
+        self._instrumentor = TraceInstrumentor(
+            cfg, sink=sink, cost_estimator=cost_estimator, acknowledged=acknowledged
+        )
         # Per-session last-emitted context attributes — the change gate. A quiet
         # fleet emits no deltas at all, so this only guards the case where a
         # session is busy (a delta per tick) while its CONTEXT has not moved.
@@ -235,7 +245,13 @@ class TraceForwarder:
         sink = build_span_sink(cfg)
         if sink is None:
             return None
-        return cls(cfg=cfg, registry=registry, sink=sink, pricing=pricing)
+        return cls(
+            cfg=cfg,
+            registry=registry,
+            sink=sink,
+            pricing=pricing,
+            acknowledged=LiveAcknowledgements.from_config(cfg),
+        )
 
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
@@ -267,6 +283,10 @@ class TraceForwarder:
             self._pool = None
         with contextlib.suppress(Exception):
             self._sink.flush()
+        close_ledger = getattr(self._acknowledged, "close", None)
+        if close_ledger is not None:
+            with contextlib.suppress(Exception):
+                close_ledger()
 
     # ─── pure decision ───────────────────────────────────────────────────────
 
@@ -501,6 +521,8 @@ class TraceForwarder:
             orchestrator_version=__version__,
             ticket_ids=tuple(ref.id for ref in state.ticket_refs),
             user=_HOST_USER,
+            principal=state.created_by,
+            node=node_name(),
             phase=row.phase.phase if row.phase is not None else "",
         )
 

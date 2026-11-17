@@ -152,6 +152,24 @@ describe("buildTrajectory", () => {
     expect(spans.find((s) => s.id === "c:kid:k1")).toMatchObject({ parentSpanId: "a:kid", status: "completed" });
   });
 
+  it("nests a child spawned by another child under that child's own call", () => {
+    // Child c1 asks its own question, spawning c1.c1. The
+    // nested link names c1's call, whose span is keyed by c1, not the root.
+    const turns = [turn("fan out", 0, [call("ask", 1, "ok", 9000, "ask")])];
+    const childTurns = new Map([
+      ["c1", [turn("Where?", 2, [call("c1:k1", 3, "ok", 4000, "ask")])]],
+      ["c1.c1", [turn("Nested?", 4, [])]],
+    ]);
+    const fleet = {
+      sessions: [child("c1", "waiting", 2, "ask"), child("c1.c1", "waiting", 4, "c1:k1")],
+      subagents: [],
+      supported: true,
+    } as unknown as SubagentFleetView;
+    const { spans } = buildTrajectory(input({ turns, fleet, childTurns }));
+    expect(spans.find((s) => s.id === "a:c1")?.parentSpanId).toBe("c:root:ask");
+    expect(spans.find((s) => s.id === "a:c1.c1")?.parentSpanId).toBe("c:c1:c1:k1");
+  });
+
   it("falls back to the turn a child started in when no spawn link was recorded", () => {
     const turns = [turn("one", 0, []), turn("two", 10, [])];
     const fleet = { sessions: [child("kid", "working", 12, null)], subagents: [], supported: true } as unknown as SubagentFleetView;

@@ -26,10 +26,6 @@ Four atomic pieces live here:
   poll tick. It never replaces the sidecar file — that stays the offline truth a
   restarted daemon (or a client with no live connection) still reads correctly.
 
-The ``UserPromptSubmit`` hook also carries the ONE thing that travels the other
-way — Claude Code injects that event's stdout into the model's context — which
-is how the first-turn brief reaches the agent (:mod:`grove.core.agents.brief`).
-
 **A containerized agent has none of this by default.** ``grove-agent-hook`` is
 a console script of a package the project's own
 image never installed, and the daemon's loopback is another namespace's
@@ -58,7 +54,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeGuard
 from loguru import logger
 
 from grove.core import paths
-from grove.core.agents.brief import AgentBrief
 from grove.core.agents.model import (
     AgentActivityState,
     AgentQuestion,
@@ -66,6 +61,7 @@ from grove.core.agents.model import (
     NativeFacts,
     NativeOperation,
 )
+from grove.hook_producer import tmux_pane_identity
 from grove.statusline import context_usage
 
 if TYPE_CHECKING:
@@ -1493,59 +1489,21 @@ def run_hook_from_stdin(argv: Sequence[str] | None = None) -> int:
         ClaudeHook.record_statusline(
             payload,
             sidecar_dir=paths.agent_sidecar_dir(),
-            tmux_pane=_opt_str(os.environ.get("TMUX_PANE")),
+            tmux_pane=tmux_pane_identity(),
             now=datetime.now(tz=UTC),
         )
         return 0
     ClaudeHook.record_event(
         payload,
         sidecar_dir=paths.agent_sidecar_dir(),
-        tmux_pane=_opt_str(os.environ.get("TMUX_PANE")),
+        tmux_pane=tmux_pane_identity(),
         now=datetime.now(tz=UTC),
     )
     # After the sidecar, never before: the file is the offline truth and the
     # push only asks the daemon to look at it sooner.
     if daemon_url:
         ClaudeHook.push(payload, daemon_url=daemon_url)
-    _emit_brief(payload)
     return 0
-
-
-def _emit_brief(payload: dict[str, Any]) -> None:
-    """Print the first-turn brief, at most once per session. See `brief.py`.
-
-    ``UserPromptSubmit`` is the ONE event whose stdout Claude Code injects into
-    the model's context, which is why this is the only event that emits
-    anything — and why the emit sits at the very end, after the two side effects
-    that must not be able to put a byte on stdout ahead of it.
-
-    Everything here is best-effort in the strongest sense: no env var, no
-    readable brief, or a session already briefed all print nothing, and the
-    caller still returns 0. **Exit 2 BLOCKS the user's prompt outright**, so a
-    raise from a decorative feature would cost the user their turn.
-
-    Deliberately no config load and no cwd→workspace resolution — this process
-    runs on every hook event of every session in the fleet, so the whole
-    decision is one env read plus at most two file operations.
-    """
-    if payload.get("hook_event_name") != "UserPromptSubmit":
-        return
-    brief_path = os.environ.get(AgentBrief.PATH_ENV)
-    session_id = payload.get("session_id")
-    if not brief_path or not isinstance(session_id, str):
-        return
-    text = AgentBrief.consume(
-        session_id, brief_path=Path(brief_path), sidecar_dir=paths.agent_sidecar_dir()
-    )
-    if not text:
-        return
-    try:
-        print(text)
-    except OSError as exc:
-        # A closed or broken stdout is the reader's business, never this
-        # process's: the brief is already marked delivered, and raising here
-        # would exit non-zero and block the prompt.
-        logger.debug("could not emit the first-turn brief: {}", exc)
 
 
 def _opt_str(value: Any) -> str | None:

@@ -58,6 +58,8 @@ class NativeSteerClient(Protocol):
 
     def set_model(self, state: WorkspaceState, model: str) -> None: ...
 
+    def set_effort(self, state: WorkspaceState, effort: str) -> None: ...
+
     def compact(self, state: WorkspaceState) -> None: ...
 
     def invoke_control(self, state: WorkspaceState, name: str) -> None: ...
@@ -125,6 +127,13 @@ class ChannelSteerClient:
         self._session_id(state)
         raise SteeringUnsupported(
             f"the channel receiver carries messages only; switching to {model!r} "
+            "needs a native session"
+        )
+
+    def set_effort(self, state: WorkspaceState, effort: str) -> None:
+        self._session_id(state)
+        raise SteeringUnsupported(
+            f"the channel receiver carries messages only; changing effort to {effort!r} "
             "needs a native session"
         )
 
@@ -202,6 +211,9 @@ class DaemonSteerClient:
 
     def set_model(self, state: WorkspaceState, model: str) -> None:
         self._post(state, "controls/model", {"model": model})
+
+    def set_effort(self, state: WorkspaceState, effort: str) -> None:
+        self._post(state, "controls/effort", {"effort": effort})
 
     def compact(self, state: WorkspaceState) -> None:
         self._post(state, "controls/invoke", {"name": "compact"})

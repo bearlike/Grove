@@ -225,12 +225,12 @@ async def test_runtime_picker_offers_two_options_default_host(
 
 
 @pytest.mark.asyncio
-async def test_create_modal_submits_the_resolved_concrete_runtime(
+async def test_create_modal_leaves_an_untouched_runtime_to_the_engine(
     tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """Submitting without touching the Runtime picker sends the cascade's own
-    default as a concrete value — never ``None`` — since the picker no longer
-    offers a "let the cascade decide" sentinel option."""
+    """Submitting without touching the Runtime picker omits the runtime, because an
+    inherited runtime and an explicit one differ at create time (an explicit
+    container is refused when unavailable); picking the other one sends it."""
     del fake_tmux
     manager = _manager(tmp_repo, tmp_path, container_enabled=False)
     captured: dict[str, CreateWorkspaceRequest] = {}
@@ -248,9 +248,8 @@ async def test_create_modal_submits_the_resolved_concrete_runtime(
 
     req = captured["req"]
     assert isinstance(req, CreateWorkspaceRequest)
-    from grove.core.workspace import Runtime  # noqa: PLC0415
-
-    assert req.runtime == Runtime.HOST
+    assert req.runtime is None
+    assert "runtime" not in req.model_fields_set
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from grove.core.agents import MODEL_CATALOG_CAP, resolve_models
-from grove.core.agents.registry import CONTEXT_VARIANT_SUFFIX
+from grove.core.agents.registry import CONTEXT_VARIANT_SUFFIX, ModelProbeMemo
 
 
 @pytest.fixture
@@ -131,3 +131,44 @@ def test_discovered_context_pairs_are_folded_without_losing_models(
     offered = resolve_models(kind="claude_code", command="claude", configured=())
 
     assert offered == tuple(f"gw-model-{i}{CONTEXT_VARIANT_SUFFIX}" for i in range(6))
+
+
+def _counting(monkeypatch: pytest.MonkeyPatch, answer: tuple[str, ...]) -> list[str]:
+    """Replace OpenCode's live probe with one that records each fork it would make."""
+    probes: list[str] = []
+
+    def probe(self: object, command: str) -> tuple[str, ...]:
+        probes.append(command)
+        return answer
+
+    monkeypatch.setattr("grove.core.agents.opencode.OpencodeAdapter.available_models", probe)
+    return probes
+
+
+def test_two_reads_within_the_window_probe_each_profile_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probes = _counting(monkeypatch, ("a/model",))
+    for _ in range(2):
+        resolve_models(kind="opencode", command="opencode", configured=())
+        resolve_models(kind="opencode", command="wrapped opencode", configured=())
+    assert probes == ["opencode", "wrapped opencode"]
+
+
+def test_a_stale_window_or_an_empty_answer_probes_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    probes = _counting(monkeypatch, ())
+    resolve_models(kind="opencode", command="opencode", configured=())
+    resolve_models(kind="opencode", command="opencode", configured=())
+    assert len(probes) == 2, "an empty catalog must not be remembered"
+
+    probes = _counting(monkeypatch, ("a/model",))
+    monkeypatch.setattr(ModelProbeMemo, "ttl_seconds", 0.0)
+    resolve_models(kind="opencode", command="opencode", configured=())
+    resolve_models(kind="opencode", command="opencode", configured=())
+    assert len(probes) == 2, "a zero window asks every time"
+
+
+def test_a_curated_catalog_never_reaches_the_memo(monkeypatch: pytest.MonkeyPatch) -> None:
+    probes = _counting(monkeypatch, ("a/model",))
+    assert resolve_models(kind="opencode", command="opencode", configured=("x",)) == ("x",)
+    assert probes == []

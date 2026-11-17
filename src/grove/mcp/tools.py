@@ -22,7 +22,6 @@ from grove._skills import SkillLibrary, SkillSummary
 from grove.client import GroveClient, ProtocolError
 from grove.core.contracts import (
     AgentSummaryView,
-    AutoBranch,
     BranchPlan,
     CreateWorkspaceRequest,
     DiagramDocumentView,
@@ -39,6 +38,11 @@ from grove.core.contracts import (
     WorkspaceStateView,
 )
 from grove.core.contracts.activity import DashboardSnapshotView
+from grove.core.contracts.fleet import (
+    FleetDigestView,
+    MailboxBatchReceipt,
+    MailboxBatchRequest,
+)
 from grove.core.contracts.mailboxes import (
     MailboxDirectory,
     MailboxReceipt,
@@ -58,10 +62,6 @@ from grove.mcp.models import (
     SendMessageResult,
 )
 
-# Shared frozen instance, not a call-in-default (B008): the model is
-# immutable so one instance serves every call safely.
-_AUTO_BRANCH = AutoBranch()
-
 
 class GroveTools:
     """The MCP tool surface, bound to one ``GroveClient``."""
@@ -75,6 +75,31 @@ class GroveTools:
         self._client = client
 
     # ─── read tools ──────────────────────────────────────────────────────────
+
+    async def get_fleet_digest(
+        self,
+        since: str | None = None,
+        page: str | None = None,
+        workspaces: list[str] | None = None,
+    ) -> FleetDigestView:
+        """Read the fleet in ONE bounded call: a page of small rows,
+        one per workspace, plus counts over the whole selection. Start here, and
+        drill into a single workspace only when a row says it needs you.
+
+        The result is bounded and paged: if ``next_page`` is set, pass it back
+        as ``page`` to continue the same read. ``cursor`` names this read;
+        pass it as ``since`` next time to receive only rows that changed after
+        it, plus ``removed`` ids that left the fleet. ``resync_required`` means
+        the cursor is stale (daemon restarted, or the selection changed):
+        discard what you held and read again with no ``since``. ``workspaces``
+        narrows to explicit ids.
+
+        Keep two kinds of fact apart. ``phase`` and ``phase_note`` are CLAIMS the
+        worker made about itself; ``status`` and ``agent`` are what Grove
+        OBSERVED. A missing value means "not reported", never zero. Neither
+        is verified evidence: a PR, CI result or commit is. Read-only.
+        """
+        return await self._client.get_fleet_digest(since=since, page=page, workspaces=workspaces)
 
     async def list_workspaces(
         self,
@@ -214,7 +239,9 @@ class GroveTools:
         """List the agents available for a repo — the valid `agent_name`
         values for grove_create_workspace — each with its offered `models`
         (up to 10) for the optional `model` argument. `model` is a hint, not a
-        whitelist: any id the tool understands is accepted. Read-only."""
+        whitelist: any id the tool understands is accepted. `efforts` lists
+        the reasoning-effort levels the optional `effort` argument accepts,
+        and that list IS enforced. Read-only."""
         return await self._client.list_agents(Path(repo_root))
 
     async def peek_workspace(self, workspace_id: str) -> WorkspacePeekView:
@@ -324,6 +351,23 @@ class GroveTools:
         """
         return await self._client.send_mailbox_message(request)
 
+    async def send_mailbox_batch(self, request: MailboxBatchRequest) -> MailboxBatchReceipt:
+        """Send the SAME message to an explicit list of agents in one call.
+
+        Name the ``recipients`` yourself: the list is frozen when you call, there
+        is no "everyone" wildcard, and duplicates collapse. Each recipient gets
+        its own receipt, in order, and partial success is normal: read every
+        receipt, not just the first. ``delivered`` means Grove handed the text
+        to that session, never that the agent read, agreed or acted; write what
+        outcome you expect and ask for evidence back.
+
+        ``request_id`` makes a retry safe: reuse the SAME id with the SAME
+        payload after a timeout and Grove returns the recorded receipts
+        (``replayed=true``) instead of delivering twice. A new payload needs a
+        new id. Use ``grove_send_mailbox_message`` for a single recipient.
+        """
+        return await self._client.send_mailbox_batch(request)
+
     async def attach_instruction(self, workspace_id: str) -> AttachInstructionResult:
         """Get the command a human runs to attach to a workspace's agent
         session — for handing live control of an agent over to a person.
@@ -346,24 +390,31 @@ class GroveTools:
     async def create_workspace(
         self,
         repo_root: str,
-        title: str,
-        agent_name: str,
+        title: str | None,
+        agent_name: str | None = None,
         description: str | None = None,
-        branch_plan: BranchPlan = _AUTO_BRANCH,
-        skip_init: bool = False,
+        branch_plan: BranchPlan | None = None,
+        skip_init: bool | None = None,
         initial_prompt: str | None = None,
         resume_session_id: str | None = None,
         model: str | None = None,
+        effort: str | None = None,
         runtime: str | None = None,
         brief: bool | None = None,
         native: bool | None = None,
         project_cwd: str | None = None,
+        node: str | None = None,
     ) -> WorkspaceStateView:
         """Create a Grove workspace: a git worktree plus a tmux session
-        running the named agent. ``branch_plan`` defaults to ``auto`` (Grove
-        names a fresh branch off HEAD); other kinds: ``new_named``,
-        ``existing_local``, ``track_remote``, or ``root`` (run in the repo
-        root on the current branch, no worktree). ``initial_prompt`` is the
+        running the named agent. ``title`` may be null: Grove then names the
+        workspace ``wk-`` plus random hex, and asks the agent to rename it once
+        it knows the task. Omit any launch field (``agent_name``,
+        ``branch_plan``, ``runtime``, ``skip_init``…) to take the project's
+        saved default, then the user's, then Grove's built-in: the first agent,
+        on the host, in the current checkout. ``branch_plan`` kinds: ``auto``
+        (an isolated worktree on a fresh branch named from the title),
+        ``new_named``, ``existing_local``, ``track_remote``, or ``root`` (the
+        repo root on the current branch, no worktree). ``initial_prompt`` is the
         agent's first task, delivered race-free as the session boots so the
         workspace starts working immediately instead of idling at the prompt —
         omit it to boot the agent idle (then drive it with
@@ -378,10 +429,17 @@ class GroveTools:
         interprets the id, so ANY value the tool understands is accepted, not
         just a fixed list. Omit it to use the tool's own default model. Call
         ``grove_list_agents`` to see each agent's offered models (up to 10) as
-        a hint before choosing one. ``runtime`` is ``"host"`` or
-        ``"container"``; omit it to use the configured default
-        (``container.enabled``). Create-time only, never editable — a
-        workspace that falls back from container to host names the reason on
+        a hint before choosing one. ``effort`` sets the reasoning effort for
+        the launch (claude ``--effort``, codex ``model_reasoning_effort``);
+        it must be one of the agent's ``efforts`` from ``grove_list_agents``,
+        and an agent that lists none refuses any value. Omit it for the
+        tool's own default. ``runtime`` is ``"host"``, ``"container"``, or the
+        name of a configured remote runtime (a ``runtimes.<name>`` block; an
+        unknown name is refused before any side effect, naming the configured
+        ones); omit it to use the configured default (``container.enabled``).
+        ``node`` names the connected node a federation hub creates on; omit it
+        to let the hub pick. Create-time only, never editable — a workspace
+        that falls back from container to host names the reason on
         ``WorkspaceStateView.runtime_fallback_reason``; promote it later with
         ``grove_respawn_workspace``. ``brief`` hands the new agent Grove's
         first-turn brief, a short note pointing it at the ``working-in-grove``
@@ -402,14 +460,16 @@ class GroveTools:
         """
         req = CreateWorkspaceRequest(
             agent_name=agent_name,
-            title=title,
+            **({"title": title} if title else {}),
             description=description,
             branch_plan=branch_plan,
             skip_init=skip_init,
             initial_prompt=initial_prompt,
             resume_session_id=resume_session_id,
             model=model,
-            runtime=runtime,
+            effort=effort,
+            **CreateWorkspaceRequest.runtime_fields(runtime),
+            node=node,
             brief=brief,
             native=native,
             repo_root=Path(repo_root),
@@ -538,6 +598,28 @@ class GroveTools:
         that was never attached is a no-op. Returns the workspace's updated
         state."""
         return await self._client.detach_ticket_by_ref(workspace_id, ref)
+
+    async def attach_artifact(
+        self, workspace_id: str, target: str, title: str | None = None
+    ) -> WorkspaceStateView:
+        """Attach a deliverable to a workspace so a person can open it from
+        the dashboard: a plan or report file, a ``.drawio`` diagram, or a link
+        to an external document. ``target`` is an ``http(s)`` URL or a file
+        path; a relative path resolves against the workspace checkout. A file
+        must exist and sit under the workspace checkout, the project root or
+        an allowed host directory (``/tmp`` by default). Grove stores only the
+        pointer, so keep editing the file and the dashboard shows the current
+        content. ``title`` is an optional label. Idempotent: the same target
+        again is a no-op, and a new title renames it. Returns the workspace's
+        updated state, including ``artifact_refs``.
+        """
+        return await self._client.attach_artifact(workspace_id, target, title)
+
+    async def detach_artifact(self, workspace_id: str, ref: str) -> WorkspaceStateView:
+        """Remove an artifact from a workspace. ``ref`` is the artifact's id
+        or the same URL or path it was attached with. Idempotent. Returns the
+        workspace's updated state."""
+        return await self._client.detach_artifact(workspace_id, ref)
 
     async def set_workspace_phase(
         self,

@@ -1,6 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
+import { CircleDotIcon, CircleIcon, DiscIcon, OrbitIcon } from "lucide-react";
 
 import type { ModelOption } from "@/components/assistant-ui/model-selector";
 import type { ModelOptionView } from "@/lib/grove/api/types";
@@ -10,9 +12,24 @@ import {
   modelIconSlug,
   modelLabel,
   modelNamespace,
+  modelTier,
+  type ModelTier,
 } from "@/lib/grove/adapters/model";
 
-/** The brand mark for one model id; a key glyph when no family is recognised. */
+/**
+ * One glyph per routing tier, an ordinal ladder the way the effort marks are:
+ * a dot, a filled dot, a disc, an orbit — more mass, bigger class. A tier
+ * proxies across vendors, so a brand mark would claim a provenance the id
+ * does not carry; the theme colours the ladder by `data-tier`.
+ */
+const TIER_ICON: Readonly<Record<ModelTier, LucideIcon>> = {
+  small: CircleIcon,
+  medium: CircleDotIcon,
+  large: DiscIcon,
+  xlarge: OrbitIcon,
+};
+
+/** The mark for one model id: its tier glyph, its brand, or a key when neither is known. */
 export function ModelMark({
   id,
   className,
@@ -20,6 +37,11 @@ export function ModelMark({
   readonly id: string;
   readonly className?: string;
 }): ReactNode {
+  const tier = modelTier(id);
+  if (tier) {
+    const Icon = TIER_ICON[tier];
+    return <Icon aria-hidden className={className} data-testid="model-mark" data-tier={tier} />;
+  }
   return <AppIcon slug={modelIconSlug(id)} className={className} data-testid="model-mark" />;
 }
 

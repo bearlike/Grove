@@ -34,7 +34,7 @@ describe("fleetGroups", () => {
     expect(fleetGroups(rows, "none")).toEqual([{ key: "all", repoName: null, rows }]);
   });
 
-  it("merges nested project rows by root, orders project names, and retains recency within each group", () => {
+  it("merges nested project rows by root, leads with the most recently active project, and retains recency within each group", () => {
     const nested = snapshot([
       project("Zebra", "/repos/zebra", [workspace({ id: "zebra", lastEventAt: "2026-08-02T00:00:00Z" })]),
       project("Alpha", "/repos/alpha", [workspace({ id: "alpha-old", lastEventAt: "2026-08-01T00:00:00Z" })]),
@@ -49,16 +49,32 @@ describe("fleetGroups", () => {
         ids: ids(group.rows),
       })),
     ).toEqual([
+      // Alpha's newest row (08-04) moved after Zebra's (08-02), so Alpha leads.
+      // Alphabetical order would pass here too, which is why the next test exists.
       { key: "/repos/alpha", repoName: "Alpha", ids: ["alpha-new", "alpha-old"] },
       { key: "/repos/zebra", repoName: "Zebra", ids: ["zebra"] },
     ]);
   });
 
-  it("keeps same-named projects distinct and breaks their name tie by root", () => {
-    const rows = fleetRows(
+  it("puts the project whose workspace moved most recently first, whatever its name (#919)", () => {
+    const rows = sortedFleetRows(
       snapshot([
-        project("Grove", "/repos/second", [workspace({ id: "second" })]),
-        project("Grove", "/repos/first", [workspace({ id: "first" })]),
+        project("Agents", "/repos/agents", [workspace({ id: "stale", lastEventAt: "2026-08-01T00:00:00Z" })]),
+        project("Grove", "/repos/grove", [workspace({ id: "fresh", lastEventAt: "2026-08-09T00:00:00Z" })]),
+      ]),
+    );
+
+    expect(fleetGroups(rows, "project").map(({ repoName, rows: group }) => [repoName, ids(group)])).toEqual([
+      ["Grove", ["fresh"]],
+      ["Agents", ["stale"]],
+    ]);
+  });
+
+  it("keeps same-named projects distinct, ordered by their rows", () => {
+    const rows = sortedFleetRows(
+      snapshot([
+        project("Grove", "/repos/second", [workspace({ id: "second", lastEventAt: "2026-08-01T00:00:00Z" })]),
+        project("Grove", "/repos/first", [workspace({ id: "first", lastEventAt: "2026-08-02T00:00:00Z" })]),
       ]),
     );
 

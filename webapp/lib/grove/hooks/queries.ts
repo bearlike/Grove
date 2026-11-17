@@ -29,6 +29,7 @@ import type {
   TicketRef,
   TodoListView,
   WatchList,
+  SessionView,
   WhoamiView,
   WorkspaceActivityView,
   WorkspaceDiffView,
@@ -110,6 +111,8 @@ export function useWorkspaceActivity(
     queryKey: groveKeys.workspaceActivity(id ?? ""),
     queryFn: () => groveClient.getWorkspaceActivity(id!),
     enabled: id !== null,
+    staleTime: connected ? Infinity : undefined,
+    refetchOnWindowFocus: connected ? false : undefined,
     refetchInterval: backstopInterval(connected, POLL_MS.peek),
   });
 }
@@ -201,6 +204,7 @@ export function useWorkspaceWatches(id: string | null): UseQueryResult<WatchList
     refetchInterval: POLL_MS.watches,
   });
 }
+
 
 /**
  * Every name, progress claim and ticket this workspace has recorded — the
@@ -418,7 +422,7 @@ export function useProvisionProgress(
  *
  * The stream carries the changed session set but not this route's richer
  * `SessionSummaryView` fields (`title`, prompts, `modified_at`, `size_bytes`).
- * Its `session_activity` edge therefore invalidates the richer read, and the
+ * Its `session_activity` membership changes invalidate the richer read, and the
  * interval remains a disconnected-stream backstop.
  */
 export function useWorkspaceSessions(
@@ -750,6 +754,15 @@ export function useBranches(
 
 export function useHealth(): UseQueryResult<HealthView> {
   return useQuery({ queryKey: groveKeys.health, queryFn: () => groveClient.getHealth() });
+}
+
+/** Who the signed-in caller is; fetched once per visit, since a sign-in does not change mid-page. */
+export function useMe(): UseQueryResult<SessionView> {
+  return useQuery({
+    queryKey: groveKeys.me,
+    queryFn: () => groveClient.getMe(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
 }
 
 export function useWhoami(): UseQueryResult<WhoamiView> {

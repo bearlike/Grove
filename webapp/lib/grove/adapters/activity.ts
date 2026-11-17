@@ -87,20 +87,28 @@ export function findWorkspaceActivity(
  * host on 2026-08-11: a live, actively-working workspace whose record said
  * `updated_at` was 4h 07m old.
  *
- * The agent's own `last_event_at` is the truest signal; the record's stamps
- * back it up so a brand-new, session-less workspace still reports an age
- * instead of nothing.
+ * The agent's own `last_event_at` is the truest signal; `created_at` backs it
+ * up so a brand-new, session-less workspace still ranks where its creator is
+ * looking. `updated_at` is deliberately NOT a fallback: a rename or a ticket
+ * attach would otherwise lift a workspace whose agent has been silent for days
+ * above one that replied a minute ago (measured 2026-10-04, #919).
  *
  * Returns the STRING, not a parsed instant, because callers both display and
  * sort by this — and those must be the same value, or a list prints ages that
  * disagree with the order they are printed in.
  */
 export function lastActivityIso(workspace: WorkspaceActivityView): string | null {
-  return newestActivityIso(
-    workspace.sessions,
-    workspace.state.updated_at,
-    workspace.state.created_at,
-  );
+  return newestActivityIso(workspace.sessions, workspace.state.created_at);
+}
+
+/**
+ * When the workspace's TRANSCRIPT last moved, or `null` when no session has
+ * reported. Unlike {@link lastActivityIso} this never falls back to a record
+ * stamp, because it is DISPLAYED as "last update" and a creation time printed
+ * there would claim activity that did not happen.
+ */
+export function lastTranscriptIso(workspace: WorkspaceActivityView): string | null {
+  return newestActivityIso(workspace.sessions);
 }
 
 /**
@@ -137,6 +145,22 @@ export function newestActivityIso(
     }
   }
   return newestIso;
+}
+
+/**
+ * How many model responses the workspace's own sessions have produced — the
+ * counter the unread cue compares against what the reader last saw.
+ *
+ * Top-level sessions only: a sub-agent's replies are its parent's work in
+ * progress, not a response written to the person, and folding them in would
+ * light the cue on every internal tool loop.
+ */
+export function replyCount(workspace: WorkspaceActivityView): number {
+  return workspace.sessions.reduce(
+    (total, entry) =>
+      entry.session.parent_session_id ? total : total + entry.activity.assistant_replies,
+    0,
+  );
 }
 
 /** The same instant as {@link lastActivityIso}, in epoch milliseconds, for sorting. */
@@ -281,6 +305,25 @@ const LIFECYCLE_EVENTS: Readonly<Record<string, "drop" | "resync" | "queue" | "i
   message_sent: "queue",
   question_answered: "ignore",
 };
+
+/**
+ * Add a just-registered project to the snapshot, as an empty group.
+ *
+ * The daemon makes a new project visible through its user-config watch, which
+ * lands a second or two AFTER `POST /projects` answers — so a refetch fired on
+ * success reads the old list and a picker stays empty until the next push (and
+ * forever, with the stream down). The response IS the registered project, so it
+ * is folded in directly; the next snapshot replaces this wholesale. Returns
+ * `null` when the project is already listed, so nothing is ever duplicated.
+ */
+export function withProject(
+  snapshot: DashboardSnapshotView,
+  project: { readonly repo_root: string; readonly repo_name: string; readonly cwd: string },
+): DashboardSnapshotView | null {
+  if (snapshot.projects.some((p) => p.cwd === project.cwd)) return null;
+  const group = { ...project, workspaces: [], error: null };
+  return { ...snapshot, projects: [...snapshot.projects, group] };
+}
 
 /** Remove a workspace from the snapshot, keeping the derived counts honest. */
 export function dropWorkspace(

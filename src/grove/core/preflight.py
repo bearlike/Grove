@@ -42,7 +42,7 @@ RequiredFor = Literal["container", "host", "all", "optional"]
 
 ``optional`` exists because a reported fact and a required one are different
 things, and conflating them here would be actively destructive: every
-``container``-scoped failure is what :meth:`RuntimeResolver._unavailable_reason`
+``container``-scoped failure is what :meth:`RuntimeResolver.unavailable_reason`
 turns into a fall back to the HOST runtime. So filing "Grove's in-container tmux
 bundle is not built yet" under ``container`` would silently strip a workspace of
 its isolation over a missing *convenience*. An ``optional`` row is rendered, is
@@ -99,6 +99,30 @@ class HostPreflight:
     def host_ready(self) -> list[CheckResult]:
         """The ``host`` subset — a host-mode create only needs these."""
         return [c for c in self.all_checks() if c.required_for in ("host", "all")]
+
+    def host_launch_checks(self) -> list[CheckResult]:
+        """The checks a host launch cannot run without: git and tmux, nothing else.
+
+        Narrower than :meth:`host_ready`, which also runs the docker,
+        devcontainer and agent probes it then filters out; the runtime catalog
+        asks this per repo and must not pay for container probes to answer a
+        host question.
+        """
+        return [self._git(), self._tmux()]
+
+    @staticmethod
+    def first_failure(checks: list[CheckResult], runtime: str) -> str | None:
+        """The sentence a failing check set reports, or ``None`` when every check passed.
+
+        The FIRST failure, with its own detail and hint, so what a user is shown
+        is the row ``grove doctor`` prints rather than a paraphrase.
+        """
+        for check in checks:
+            if check.ok:
+                continue
+            hint = f" — {check.hint}" if check.hint else ""
+            return f"{runtime} runtime unavailable: {check.name}: {check.detail}{hint}"
+        return None
 
     def default_runtime_checks(self) -> list[CheckResult]:
         """``all`` checks plus whichever runtime this config launches by default.

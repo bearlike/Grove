@@ -22,9 +22,13 @@ from grove.tui.cli_agent import register as register_agent_commands
 from grove.tui.cli_code import register as register_code_commands
 from grove.tui.cli_complete import Complete
 from grove.tui.cli_complete import register as register_completion_commands
+from grove.tui.cli_control import register as register_control_commands
 from grove.tui.cli_diagram import register as register_diagram_commands
 from grove.tui.cli_doctor import doctor_app
+from grove.tui.cli_federation import federation_app
+from grove.tui.cli_login import register as register_login_commands
 from grove.tui.cli_mailbox import mailbox_app
+from grove.tui.cli_node import node_app
 from grove.tui.cli_onboarding import (
     AgentChoice,
     render_outcomes,
@@ -36,7 +40,8 @@ from grove.tui.cli_quota import register as register_quota_commands
 from grove.tui.cli_sessions import recollect_session, sessions_app
 from grove.tui.cli_shell import register as register_shell_commands
 from grove.tui.cli_usage import usage_app
-from grove.tui.cli_watch import watch_app
+from grove.tui.cli_vacuum import register as register_vacuum_commands
+from grove.tui.cli_watch import trigger_app, watch_app
 from grove.tui.cli_web import register as register_web_commands
 from grove.tui.cli_workspace import register as register_workspace_commands
 from grove.tui.cli_workspace import warn_if_store_disowns_caller
@@ -60,9 +65,11 @@ auth_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(auth_app, name="auth")
+register_login_commands(auth_app)
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(mailbox_app, name="mailbox")
 app.add_typer(watch_app, name="watch")
+app.add_typer(trigger_app, name="trigger")
 
 # `grove recollect` — the SAME function as `grove sessions recollect`, grafted
 # flat like `ls` and `version`. Not a second implementation: Typer registers the
@@ -76,6 +83,8 @@ app.add_typer(watch_app, name="watch")
 # alongside `list`/`show`/`dump`; the reasoning for that lives on the function.
 app.command("recollect")(recollect_session)
 app.add_typer(doctor_app, name="doctor")
+app.add_typer(federation_app, name="federation")
+app.add_typer(node_app, name="node")
 app.add_typer(usage_app, name="usage")
 
 # Flat workspace verbs (`grove create` / `grove message`) — grafted on like
@@ -102,10 +111,20 @@ register_code_commands(app)
 register_shell_commands(app)
 
 
+# `grove vacuum` — one reaper pass by hand; exit 1 when the host has leaks.
+register_vacuum_commands(app)
+
+
 # `grove agent …` — several agents in one container. Its own noun
 # rather than an `--agent` flag on every existing verb: a single-agent workspace
 # is the overwhelming case and keeps every verb's signature untouched.
 register_agent_commands(app)
+
+
+# `grove control …` — trigger a session's controls (compact, model, `grove:`
+# commands). Its own noun so the workspace can be an option: the common caller
+# is an agent addressing its OWN session, which `GROVE_PHASE_FILE` resolves.
+register_control_commands(app)
 
 
 # `grove web` — serve the dashboard the wheel ships, on the user's own Node.
@@ -370,7 +389,6 @@ def debug() -> None:
     except GroveError:
         cfg = None
         config_loaded = False
-    del cfg  # we only report whether load succeeded
 
     typer.echo(
         json.dumps(
@@ -386,6 +404,7 @@ def debug() -> None:
                 ),
                 "repo_root": str(repo_root) if repo_root else None,
                 "config_loaded": config_loaded,
+                "federation": cfg.federation.status if cfg is not None else None,
                 "path_overrides": paths.dir_overrides(),
             },
             indent=2,

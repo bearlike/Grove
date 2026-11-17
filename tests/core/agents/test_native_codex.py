@@ -56,6 +56,8 @@ for raw in sys.stdin:
         result = {"ok": True}
     elif method == "thread/start":
         result = {"thread": {"id": "thread-owned", "status": {"type": "idle"}}}
+    elif method == "thread/fork":
+        result = {"thread": {"id": "thread-forked", "status": {"type": "idle"}}}
     elif method == "turn/start":
         result = {"turn": {"id": "turn-started", "status": "inProgress"}}
     elif method == "turn/steer":
@@ -216,6 +218,29 @@ async def test_start_owns_a_new_thread_then_submits_initial_prompt_without_turn_
 
 
 @pytest.mark.asyncio
+async def test_a_forking_owner_copies_the_source_into_a_new_thread_at_its_own_cwd(
+    app_server: tuple[str, ...], tmp_path: Path
+) -> None:
+    """`thread/fork` replaces `thread/start`; the owned thread is the one Codex minted."""
+    trace = tmp_path / "requests.jsonl"
+    transport = CodexNativeOwner(
+        command=app_server,
+        cwd=tmp_path,
+        env={"GROVE_TEST_TRACE": str(trace)},
+        fork_from="thread-source",
+    )
+
+    try:
+        assert await transport.start("") == "thread-forked"
+
+        requests = _requests(trace)
+        assert [request["method"] for request in requests] == ["initialize", "thread/fork"]
+        assert requests[1]["params"] == {"threadId": "thread-source", "cwd": str(tmp_path)}
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
 async def test_send_steers_the_exact_active_turn_with_compare_and_swap(
     app_server: tuple[str, ...], tmp_path: Path
 ) -> None:
@@ -370,6 +395,30 @@ async def test_interrupt_names_the_active_turn_and_set_model_updates_thread_sett
             ("turn/interrupt", {"threadId": "thread-owned", "turnId": "turn-started"}),
             ("thread/settings/update", {"threadId": "thread-owned", "model": "gpt-5.5"}),
         ]
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_set_effort_updates_thread_settings_and_needs_a_started_thread(
+    app_server: tuple[str, ...], tmp_path: Path
+) -> None:
+    """Effort rides the same thread-settings verb as the model, keyed `effort`,
+    so it survives to every later turn; before `thread/start` there is no thread
+    to address and nothing is sent."""
+    trace = tmp_path / "requests.jsonl"
+    transport = CodexNativeOwner(
+        command=app_server, cwd=tmp_path, env={"GROVE_TEST_TRACE": str(trace)}
+    )
+    assert await transport.set_effort("high") is False
+    try:
+        await transport.start("initial work")
+        assert await transport.set_effort("xhigh") is True
+        method, params = [(r["method"], r["params"]) for r in _requests(trace)][-1]
+        assert (method, params) == (
+            "thread/settings/update",
+            {"threadId": "thread-owned", "effort": "xhigh"},
+        )
     finally:
         await transport.close()
 

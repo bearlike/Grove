@@ -50,7 +50,8 @@ test("composer reports the model, delivers catalog choices, and does not claim a
   });
   await openSharpSurface(page, "info", 300, "light");
   const trigger = page.getByTestId("composer-model-trigger");
-  await expect(trigger).toHaveAttribute("title", `Reported current model: ${reported}`);
+  // The reported model is the trigger's accessible description (and its tooltip).
+  await expect(trigger).toHaveAttribute("aria-description", `Reported current model: ${reported}`);
   await trigger.click();
   await expect(page.getByRole("dialog", { name: "Choose model" }).getByRole("combobox")).toBeVisible();
   await page.getByTestId("composer-model-item").click();
@@ -59,7 +60,7 @@ test("composer reports the model, delivers catalog choices, and does not claim a
   await expect(pending).toBeVisible();
   expect((await pending.boundingBox())!.width).toBeCloseTo(6, 0);
   expect((await pending.boundingBox())!.height).toBeCloseTo(6, 0);
-  // The label is `modelLabel`'s folded spelling; the id itself rides `title`.
+  // The label is `modelLabel`'s folded spelling of the requested id.
   await expect(trigger).toContainText(/catalog-model/i);
   await expect(trigger).not.toContainText("Running");
   await trigger.click();
@@ -84,8 +85,8 @@ test("composer marks only an exact reported catalog model as selected", async ({
   await openSharpSurface(page, "info", 300, "light");
   const trigger = page.getByTestId("composer-model-trigger");
   await expect(trigger).toHaveAttribute("aria-label", "Model");
-  // The visible label folds the shared namespace away; the id is the title.
-  await expect(trigger).toHaveAttribute("title", `Reported current model: ${currentModel}`);
+  // The visible label folds the shared namespace away; the id is in the description.
+  await expect(trigger).toHaveAttribute("aria-description", `Reported current model: ${currentModel}`);
   await trigger.click();
 
   const selected = page.getByTestId("composer-model-item").filter({ hasText: "fast" });

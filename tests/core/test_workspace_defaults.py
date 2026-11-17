@@ -1,5 +1,5 @@
-"""Workspace create defaults: user-first cascade, scoped persistence, and the
-one resolution both a create and a create FORM read.
+"""Workspace create defaults: ordinary cascade precedence, scoped persistence,
+and the one resolution both a create and a create FORM read.
 
 The second half of this file exists because those two used to be different
 code. `WorkspaceDefaultsView` honoured `defaults.runtime`; the engine read
@@ -33,10 +33,10 @@ from grove.core.workspace import Runtime
 from tests.conftest import FakeCli, FakePreflight, FakeTmux
 
 
-def test_user_default_field_outranks_project_without_hiding_other_project_default(
+def test_project_default_field_outranks_user_without_hiding_other_user_default(
     tmp_state_dir: Path, tmp_repo: Path
 ) -> None:
-    """A saved personal choice wins only its own field, not the whole section."""
+    """A project's saved launch answer beats the user's, field by field."""
     del tmp_state_dir
     user = paths_mod.user_config_path()
     user.parent.mkdir(parents=True, exist_ok=True)
@@ -45,20 +45,22 @@ def test_user_default_field_outranks_project_without_hiding_other_project_defaul
     project = paths_mod.project_config_path(tmp_repo)
     project.parent.mkdir(parents=True, exist_ok=True)
     project.write_text(
-        json.dumps({"defaults": {"agent": "codex", "runtime": "host"}}),
+        json.dumps({"defaults": {"runtime": "container"}}),
         encoding="utf-8",
     )
 
     cfg = load_config(tmp_repo, env={})
 
     assert cfg.defaults.agent == "claude"
-    assert cfg.defaults.runtime == "host"
+    assert cfg.defaults.runtime == "container"
+    assert cfg.default_source("agent") == "user"
+    assert cfg.default_source("runtime") == "project"
 
 
-def test_user_default_field_outranks_project_local_default(
+def test_project_local_default_field_outranks_user_default(
     tmp_state_dir: Path, tmp_repo: Path
 ) -> None:
-    """Machine-local project config cannot replace the user's saved form answer."""
+    """A deliberate user-first exception is gone: the project-local layer wins too."""
     del tmp_state_dir
     user = paths_mod.user_config_path()
     user.parent.mkdir(parents=True, exist_ok=True)
@@ -73,14 +75,15 @@ def test_user_default_field_outranks_project_local_default(
 
     cfg = load_config(tmp_repo, env={})
 
-    assert cfg.defaults.brief is True
+    assert cfg.defaults.brief is False
     assert cfg.defaults.branch_mode == "existing"
+    assert cfg.default_source("brief") == "project"
 
 
 def test_env_and_cli_defaults_still_outrank_user_defaults(
     tmp_state_dir: Path, tmp_repo: Path
 ) -> None:
-    """The inversion is only user versus project layers, never an env/CLI demotion."""
+    """Env and CLI layers keep their place above every saved file."""
     del tmp_state_dir
     user = paths_mod.user_config_path()
     user.parent.mkdir(parents=True, exist_ok=True)
@@ -95,10 +98,11 @@ def test_env_and_cli_defaults_still_outrank_user_defaults(
 
     assert from_env.defaults.agent == "codex"
     assert from_cli.defaults.agent == "shell"
+    assert from_env.default_source("agent") == "config"
 
 
-def test_project_still_outranks_user_outside_defaults(tmp_state_dir: Path, tmp_repo: Path) -> None:
-    """The create-form exception must not invert precedence for ordinary config."""
+def test_project_outranks_user_outside_defaults(tmp_state_dir: Path, tmp_repo: Path) -> None:
+    """Ordinary config keeps the same project-over-user precedence as defaults."""
     del tmp_state_dir
     user = paths_mod.user_config_path()
     user.parent.mkdir(parents=True, exist_ok=True)
@@ -190,7 +194,11 @@ def test_unknown_defaults_field_fails_config_load(tmp_state_dir: Path, tmp_repo:
 
 def _cfg(tmp_path: Path, *, models: tuple[str, ...] = (), **defaults: object) -> GroveConfig:
     """A config whose CONTAINER SECTION IS ON — the shipped default, and the
-    only setting under which the drift these tests pin was reachable."""
+    only setting under which the drift these tests pin was reachable.
+
+    `claude-alt` is a second entry of the SAME kind, so a saved model scoped by
+    kind rather than by roster name would still leak onto it.
+    """
     return GroveConfig.model_validate(
         {
             "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
@@ -203,7 +211,8 @@ def _cfg(tmp_path: Path, *, models: tuple[str, ...] = (), **defaults: object) ->
                     "command": "claude",
                     "kind": "claude_code",
                     "models": models,
-                }
+                },
+                {"name": "claude-alt", "command": "claude", "kind": "claude_code"},
             ],
             "defaults": defaults,
         }
@@ -221,18 +230,19 @@ def _manager(tmp_repo: Path, cfg: GroveConfig, tmp_path: Path) -> WorkspaceManag
     )
 
 
+@pytest.mark.launch_builtins
 @pytest.mark.parametrize(
     ("saved", "expected"),
-    [("host", Runtime.HOST), ("container", Runtime.CONTAINER), (None, Runtime.CONTAINER)],
+    [("host", Runtime.HOST), ("container", Runtime.CONTAINER), (None, Runtime.HOST)],
 )
 def test_a_create_naming_no_runtime_takes_the_saved_default_over_container_enabled(
     saved: str | None, expected: Runtime, tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
 ) -> None:
-    """`defaults.runtime` outranks `container.enabled` for an unopinionated create.
+    """`defaults.runtime` decides an unopinionated create; `container.enabled` never does.
 
-    The `None` row is the load-bearing control: with no saved answer the section
-    default still decides, so this honours a preference rather than disabling
-    containers-by-default.
+    The `None` row is the load-bearing control: with no saved answer the create
+    runs on the host even though the container section is on, because
+    configuring a runtime makes it available without selecting it.
     """
     cfg = _cfg(tmp_path, runtime=saved) if saved else _cfg(tmp_path)
     state = _manager(tmp_repo, cfg, tmp_path).create(
@@ -284,6 +294,62 @@ def test_a_create_naming_no_model_forwards_the_saved_one_to_the_agent(
 
     decorations = dict(fake_tmux.launch_decorations)
     assert decorations[state.tmux_session][-2:] == ["--model", "anthropic-opus-5[1m]"]
+
+
+def _model_flags(
+    tmp_repo: Path,
+    fake_tmux: FakeTmux,
+    tmp_path: Path,
+    cfg: GroveConfig,
+    request: CreateWorkspaceRequest,
+) -> list[str]:
+    """The `--model` pair the create appended, or ``[]`` when it named none."""
+    state = _manager(tmp_repo, cfg, tmp_path).create(request)
+    decoration = list(dict(fake_tmux.launch_decorations)[state.tmux_session])
+    if "--model" not in decoration:
+        return []
+    at = decoration.index("--model")
+    return decoration[at : at + 2]
+
+
+def test_the_saved_agent_inherits_the_saved_model(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    cfg = _cfg(tmp_path, runtime="host", agent="claude", model="anthropic-opus")
+    request = CreateWorkspaceRequest(agent_name="claude", title="saved")
+
+    flags = _model_flags(tmp_repo, fake_tmux, tmp_path, cfg, request)
+    assert flags == ["--model", "anthropic-opus"]
+
+
+def test_another_agent_does_not_inherit_the_saved_model(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    """The incident: a model saved for one entry reached another, which refused
+    it and failed the launch. Same kind on purpose; the scope is the entry."""
+    cfg = _cfg(tmp_path, runtime="host", agent="claude", model="anthropic-opus")
+    request = CreateWorkspaceRequest(agent_name="claude-alt", title="other")
+
+    assert _model_flags(tmp_repo, fake_tmux, tmp_path, cfg, request) == []
+
+
+def test_with_no_saved_agent_the_saved_model_stays_global(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    cfg = _cfg(tmp_path, runtime="host", model="anthropic-opus")
+    request = CreateWorkspaceRequest(agent_name="claude-alt", title="legacy")
+
+    flags = _model_flags(tmp_repo, fake_tmux, tmp_path, cfg, request)
+    assert flags == ["--model", "anthropic-opus"]
+
+
+def test_an_explicit_model_on_another_agent_is_forwarded_verbatim(
+    tmp_repo: Path, fake_tmux: FakeTmux, tmp_path: Path
+) -> None:
+    cfg = _cfg(tmp_path, runtime="host", agent="claude", model="anthropic-opus")
+    request = CreateWorkspaceRequest(agent_name="claude-alt", title="explicit", model="sonnet")
+
+    assert _model_flags(tmp_repo, fake_tmux, tmp_path, cfg, request) == ["--model", "sonnet"]
 
 
 def test_a_plain_saved_model_promotes_to_its_offered_context_variant(

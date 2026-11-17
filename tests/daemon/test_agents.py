@@ -42,11 +42,21 @@ def test_agents_lists_configured_agents(daemon: TestClient, tmp_repo: Path) -> N
 
 def test_agents_omits_command_and_env(daemon: TestClient, tmp_repo: Path) -> None:
     # command / env can carry host-private paths + secrets — they must not cross
-    # the wire. The summary view is name / kind / description / models / native.
+    # the wire. Exhaustive on purpose, so a new summary field needs a decision:
+    # launch_modes / runtimes are closed enums derived from the kind, never config.
     resp = daemon.get(f"/agents?repo={tmp_repo}")
     assert resp.status_code == 200, resp.text
     for item in resp.json():
-        assert set(item) == {"name", "kind", "description", "models", "native"}
+        assert set(item) == {
+            "name",
+            "kind",
+            "description",
+            "models",
+            "native",
+            "efforts",
+            "launch_modes",
+            "runtimes",
+        }
 
 
 @pytest.mark.usefixtures("native_roster")
@@ -86,6 +96,26 @@ def test_agents_resolves_per_kind_model_catalog(daemon: TestClient, tmp_repo: Pa
     assert by_name["claude"]["models"] == ["fable", "opus", "sonnet", "haiku"]
     assert by_name["codex"]["models"] == ["gpt-5.5", "gpt-5.4"]
     assert by_name["shell"]["models"] == []
+
+
+def test_agents_publish_each_kinds_effort_ladder(daemon: TestClient, tmp_repo: Path) -> None:
+    """The levels come off the adapter, so each kind answers in its own spelling
+    and a kind with no launch-time effort publishes none."""
+    resp = daemon.get(f"/agents?repo={tmp_repo}")
+    assert resp.status_code == 200, resp.text
+    by_name = {item["name"]: item for item in resp.json()}
+    assert by_name["claude"]["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+    assert by_name["codex"]["efforts"] == ["minimal", "low", "medium", "high", "xhigh"]
+    assert by_name["shell"]["efforts"] == []
+
+
+def test_create_with_an_unsupported_effort_is_a_422(daemon: TestClient, tmp_repo: Path) -> None:
+    resp = daemon.post(
+        "/workspaces",
+        json={"repo_root": str(tmp_repo), "agent_name": "shell", "effort": "high"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"]["error"] == "effort_not_supported"
 
 
 def test_a_repo_with_unparseable_config_returns_the_error_envelope(

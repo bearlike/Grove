@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from grove.core.agents.claude_code import _ClaudeHome
+from grove.core.agents.hook import ClaudeHook
 from grove.core.contracts.branch_plan import RootBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.manager import WorkspaceManager
@@ -378,13 +379,21 @@ def test_an_unshared_workspaces_tool_body_never_reaches_a_public_reader(
 
 
 def test_the_public_reader_selects_its_session_by_id_not_by_recency(
-    manager: WorkspaceManager, claude_home: Path
+    manager: WorkspaceManager,
+    claude_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    """The workspace's own listing leads with a NEWER session it legitimately
+    adopts (one live in its own pane), and the public reader still serves the
+    pinned minted session. A sibling root workspace's session is not that
+    newer session any more: birth no longer adopts it under ROOT placement
+    (#918)."""
+    sidecar_dir = tmp_path / "sidecars"
+    monkeypatch.setattr("grove.core.paths.agent_sidecar_dir", lambda: sidecar_dir)
     first = _root_workspace(manager, "shared root")
-    neighbour = _root_workspace(manager, "newer neighbour")
     assert first.agent_session_id is not None
-    assert neighbour.agent_session_id is not None
-    born_at = _born_after(first, neighbour)
+    born_at = _born_after(first)
     _write_transcript(
         claude_home,
         first.agent_session_id,
@@ -393,14 +402,22 @@ def test_the_public_reader_selects_its_session_by_id_not_by_recency(
         prompt="shared transcript",
         born_at=born_at,
     )
+    adopted = "66665555-4444-4333-8222-000011112222"
     _write_transcript(
         claude_home,
-        neighbour.agent_session_id,
-        neighbour.agent_cwd,
+        adopted,
+        first.agent_cwd,
         mtime=9_000,
-        prompt="newer neighbour transcript",
+        prompt="newer session in the same pane",
         born_at=born_at,
     )
+    for sid in (first.agent_session_id, adopted):
+        ClaudeHook.record_event(
+            {"hook_event_name": "SessionStart", "session_id": sid, "cwd": str(first.agent_cwd)},
+            sidecar_dir=sidecar_dir,
+            tmux_pane="%3",
+            now=first.created_at + timedelta(seconds=5),
+        )
     shared = manager.update(first.id, share=True)
     assert shared.share_token is not None
 
@@ -409,6 +426,6 @@ def test_the_public_reader_selects_its_session_by_id_not_by_recency(
         turns = client.get(f"/public/{shared.share_token}/turns")
 
     assert turns.status_code == 200, turns.text
-    assert newest.summary.session_id == neighbour.agent_session_id
+    assert newest.summary.session_id == adopted
     assert newest.summary.session_id != turns.json()["session"]["session_id"]
     assert turns.json()["session"]["session_id"] == first.agent_session_id

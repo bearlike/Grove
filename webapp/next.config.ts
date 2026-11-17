@@ -15,6 +15,14 @@ const bundled = process.env.GROVE_WEBAPP_BUNDLE === "1";
 const nextConfig: NextConfig = {
   ...(bundled ? { output: "standalone", images: { unoptimized: true } } : {}),
   /**
+   * The e2e suite drives `next dev`, and Next's floating dev badge sits in the
+   * bottom-left corner — over the collapsed rail's account menu, which is
+   * where `/fleet` leaves it. Playwright then reports `<nextjs-portal>
+   * intercepts pointer events` for a control production never covers. The
+   * badge is dev chrome, not the app, so the harness turns it off.
+   */
+  ...(process.env.GROVE_E2E ? { devIndicators: false } : {}),
+  /**
    * Next 16 blocks cross-origin requests for `/_next/*` dev resources, and it
    * counts a bare IP or hostname as cross-origin even when it is this same
    * server. Grove is routinely opened from somewhere other than `localhost` —
@@ -30,6 +38,16 @@ const nextConfig: NextConfig = {
    * Set `GROVE_DEV_ORIGINS` to a comma-separated list (wildcards allowed, e.g.
    * `*.example.internal`) wherever you run `next dev`.
    */
+  /**
+   * The file viewer's DWG/DWF renderer imports `@flyfish-dev/cad-viewer`, which
+   * is AGPL-3.0-only. Grove is MIT and ships its bundle in a wheel, so that one
+   * runtime is swapped for a stub and never reaches the build. Every other
+   * renderer is untouched. Delete this alias (and stop removing `wasm/cad` in
+   * `assets:viewer`) to turn CAD on in a deployment that accepts the licence.
+   */
+  turbopack: {
+    resolveAlias: { "@flyfish-dev/cad-viewer": "./lib/grove/cad-viewer-stub.ts" },
+  },
   allowedDevOrigins: [
     "127.0.0.1",
     "localhost",

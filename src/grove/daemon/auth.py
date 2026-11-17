@@ -14,6 +14,7 @@ Error envelope matches the rest of the daemon: ``{"detail": {"error":
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -31,13 +32,16 @@ from starlette.status import (
 from grove.core.agents.hook import ClaudeHook
 from grove.core.auth import Session, SessionStore
 from grove.core.contracts.auth import (
+    OidcExchangeRequest,
     PairingChallengeView,
     PairRequest,
     PairResultView,
     SessionView,
+    SignInView,
 )
 from grove.core.errors import (
     AuthInvalidToken,
+    AuthModeConflict,
     AuthRateLimited,
     AuthStoreUnreadable,
     GroveError,
@@ -45,6 +49,8 @@ from grove.core.errors import (
     PairingNotFound,
     SessionNotFound,
 )
+from grove.daemon.oidc import OidcVerifier
+from grove.daemon.principal import Principal
 
 
 def _envelope(code: str, message: str) -> dict[str, str]:
@@ -62,6 +68,7 @@ def _envelope(code: str, message: str) -> dict[str, str]:
 #: pair routes read a bare ``GroveError`` as bad caller input.
 _AUTH_ERROR_HTTP: tuple[tuple[type[GroveError], int, str], ...] = (
     (AuthInvalidToken, HTTP_401_UNAUTHORIZED, "auth_invalid"),
+    (AuthModeConflict, HTTP_409_CONFLICT, "auth_mode_conflict"),
     (PairingNotFound, HTTP_404_NOT_FOUND, "pair_not_found"),
     (PairingAlreadyResolved, HTTP_409_CONFLICT, "pair_already_resolved"),
     (AuthRateLimited, HTTP_429_TOO_MANY_REQUESTS, "rate_limited"),
@@ -79,6 +86,54 @@ def _http_for(exc: GroveError) -> HTTPException:
 
 
 # ─── dependency ─────────────────────────────────────────────────────────────
+
+
+def make_require_principal(
+    *,
+    auth_store: SessionStore,
+    enabled: bool,
+    oidc: OidcVerifier | None = None,
+    federated: bool = False,
+) -> Callable[[Request], Awaitable[Principal]]:
+    """Build the dependency every authenticated route takes: the caller, or a 401.
+
+    Two bearers are accepted. An OIDC ID token from the configured issuer is
+    verified against its JWKS. Anything else is a Grove session bearer from
+    ``auth.json``: a person's, minted by the OIDC exchange, or the local user's,
+    minted by pairing. In a federation the local user is refused, because a
+    paired bearer names a device rather than a person and the hub must know who.
+
+    The principal is also left on ``request.state.principal`` for a handler
+    that needs it without taking a second dependency.
+    """
+    require_session = make_require_session(auth_store=auth_store, enabled=enabled)
+
+    async def require_principal(request: Request) -> Principal:
+        header = request.headers.get("authorization", "")
+        token = header[len("Bearer ") :].strip() if header.lower().startswith("bearer ") else ""
+        if oidc is not None and oidc.enabled and OidcVerifier.looks_like_jwt(token):
+            try:
+                principal = await asyncio.to_thread(oidc.verify, token)
+            except AuthInvalidToken as exc:
+                raise HTTPException(
+                    HTTP_401_UNAUTHORIZED, _envelope("auth_invalid", str(exc))
+                ) from exc
+        else:
+            principal = Principal.of_session(await require_session(request))
+        if federated and principal.kind == "local":
+            raise _http_for(AuthModeConflict("in a federation a person signs in; pairing is off"))
+        request.state.principal = principal
+        return principal
+
+    return require_principal
+
+
+def principal_of(request: Request) -> Principal:
+    """The caller ``require_principal`` admitted, or the local user when auth is off."""
+    principal = getattr(request.state, "principal", None)
+    return (
+        principal if isinstance(principal, Principal) else Principal.of_session(_SENTINEL_SESSION)
+    )
 
 
 def make_require_session(
@@ -165,14 +220,22 @@ _SENTINEL_SESSION = Session(
 def build_auth_router(
     *,
     auth_store: SessionStore,
-    require_session: Callable[[Request], Awaitable[Session]],
+    require_principal: Callable[[Request], Awaitable[Principal]],
+    oidc: OidcVerifier | None = None,
+    federated: bool = False,
 ) -> APIRouter:
-    """Auth + pairing endpoints. Pair-init/poll are unauthenticated by design."""
+    """Auth endpoints. Pairing, its poll and the OIDC exchange are unauthenticated by design.
+
+    In a federation pairing refuses with ``auth_mode_conflict``: a paired bearer
+    names a device, and every daemon there needs to know which person is asking.
+    """
 
     router = APIRouter(prefix="/auth", tags=["auth"])
 
     @router.post("/pair", response_model=PairingChallengeView)
     async def pair_init(req: PairRequest, request: Request) -> PairingChallengeView:
+        if federated:
+            raise _http_for(AuthModeConflict("in a federation a person signs in; pairing is off"))
         try:
             challenge = auth_store.pair_init(
                 label=req.label,
@@ -212,10 +275,29 @@ def build_auth_router(
             return PairResultView.consumed(challenge, token=token, session=session)
         return PairResultView.pending(challenge)
 
+    @router.post("/oidc/session", response_model=SignInView)
+    async def oidc_session(req: OidcExchangeRequest) -> SignInView:
+        """Trade a verified ID token for a Grove bearer that names the same person.
+
+        What the CLI device flow and a browser sign-in call once, so neither has
+        to carry the ID token (and refresh it) on every request afterwards.
+        """
+        if oidc is None or not oidc.enabled:
+            raise HTTPException(
+                HTTP_404_NOT_FOUND, _envelope("oidc_not_configured", "no OIDC issuer is configured")
+            )
+        try:
+            person = await asyncio.to_thread(oidc.verify, req.id_token)
+            token = auth_store.mint_human(req.label, subject=person.subject, issuer=person.issuer)
+        except (AuthInvalidToken, AuthStoreUnreadable) as exc:
+            raise _http_for(exc) from exc
+        session = auth_store.validate(token)
+        return SignInView(token=token, expires_at=session.expires_at, subject=person.subject)
+
     @router.post("/pair/{challenge_id}/deny", status_code=204)
     async def pair_deny(
         challenge_id: UUID,
-        _session: Session = Depends(require_session),  # noqa: B008
+        _caller: Principal = Depends(require_principal),  # noqa: B008
     ) -> None:
         try:
             auth_store.pair_deny(challenge_id)
@@ -224,20 +306,27 @@ def build_auth_router(
 
     @router.get("/sessions", response_model=list[SessionView])
     async def list_sessions(
-        _session: Session = Depends(require_session),  # noqa: B008
+        _caller: Principal = Depends(require_principal),  # noqa: B008
     ) -> list[SessionView]:
         return [SessionView.from_engine(s) for s in auth_store.list_sessions()]
 
     @router.get("/sessions/me", response_model=SessionView)
     async def session_me(
-        session: Session = Depends(require_session),  # noqa: B008
+        caller: Principal = Depends(require_principal),  # noqa: B008
     ) -> SessionView:
-        return SessionView.from_engine(session)
+        """The caller's own session; a caller presenting an ID token directly has none, so it
+        is described from the token."""
+        for session in auth_store.list_sessions():
+            if str(session.session_id) == caller.token_id:
+                return SessionView.from_engine(session)
+        return SessionView.of_principal(
+            subject=caller.subject, token_id=caller.token_id, expires_at=caller.expires_at
+        )
 
     @router.delete("/sessions/{session_id}", status_code=204)
     async def revoke(
         session_id: UUID,
-        _session: Session = Depends(require_session),  # noqa: B008
+        _caller: Principal = Depends(require_principal),  # noqa: B008
     ) -> None:
         try:
             auth_store.revoke(session_id)
@@ -246,7 +335,7 @@ def build_auth_router(
 
     @router.get("/pending", response_model=list[PairingChallengeView])
     async def list_pending(
-        _session: Session = Depends(require_session),  # noqa: B008
+        _caller: Principal = Depends(require_principal),  # noqa: B008
     ) -> list[PairingChallengeView]:
         """Surface in-progress pairings to authorized clients (the webapp
         'pending devices' panel). Bare list — pending and approved
@@ -257,7 +346,10 @@ def build_auth_router(
 
 
 __all__ = [
+    "Principal",
     "build_auth_router",
     "make_require_hook_token",
+    "make_require_principal",
     "make_require_session",
+    "principal_of",
 ]

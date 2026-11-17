@@ -1,26 +1,25 @@
 import { describe, expect, it } from "vitest";
 
+import { agentSummary } from "@/tests/fixtures/agents";
 import { agentDescription } from "@/components/grove/launch/controls/agent-pill";
 
-/**
- * Two built-in entries per provider differ ONLY in launch mode, so the picker
- * row has to say which is which — with or without an operator description.
- */
+/** The tool label owns identity; rows do not repeat its transport mode. */
 describe("agentDescription", () => {
-  const base = { kind: "claude_code" as const, models: [] as string[] };
+  const base = agentSummary("base", "claude_code");
 
-  it("states the mode alone when the entry has no description", () => {
-    expect(agentDescription({ ...base, name: "claude", description: "", native: true })).toBe(
-      "Native session",
-    );
+  it("omits an empty description rather than restating the mode", () => {
+    expect(agentDescription({ ...base, name: "claude", description: "", native: true })).toBeUndefined();
     expect(
       agentDescription({ ...base, name: "claude-terminal", description: "", native: false }),
-    ).toBe("Terminal");
+    ).toBeUndefined();
   });
 
-  it("keeps the operator's description first and appends the mode", () => {
+  it("keeps at most five description words without a transport suffix", () => {
     expect(
       agentDescription({ ...base, name: "gw", description: "Claude via gateway", native: true }),
-    ).toBe("Claude via gateway · Native session");
+    ).toBe("Claude via gateway");
+    expect(
+      agentDescription({ ...base, name: "long", description: "one two three four five six", native: true }),
+    ).toBe("one two three four five");
   });
 });

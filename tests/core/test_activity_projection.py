@@ -22,10 +22,13 @@ from grove.core.activity_runtime import ActivityRuntime, WorkspaceInvalidated
 from grove.core.admission import Admission, AdmissionLimits
 from grove.core.agents import AgentActivityState
 from grove.core.config import GroveConfig
+from grove.core.errors import GitError
+from grove.core.git import GitRepo
 from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
+from grove.core.runtimes import RemoteHandle
 from grove.core.store import JsonWorkspaceStore
-from grove.core.workspace import WorkspaceState, WorkspaceStatus
+from grove.core.workspace import Runtime, WorkspaceState, WorkspaceStatus
 
 
 def test_coalescing_preserves_filesystem_content_invalidation() -> None:
@@ -147,6 +150,119 @@ async def test_source_changed_fires_for_every_filesystem_reason_not_only_worktre
     assert [d.kind for d in seen if d.kind == "workspace_source_changed"] == [
         "workspace_source_changed"
     ]
+
+
+@pytest.mark.asyncio
+async def test_worker_read_deadline_keeps_another_workspace_refreshing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker that ignores a read cannot occupy the projection behind its deadline."""
+    store = JsonWorkspaceStore(path=tmp_path / "state.json")
+    registry = RepoRegistry(cfg=GroveConfig(), store=store)
+    service = ActivityService(registry=registry)
+    slow_state = replace(
+        row(tmp_path, "one").state,
+        status=WorkspaceStatus.PAUSED,
+        runtime=Runtime.REMOTE,
+        remote=RemoteHandle("sandbox", "slow"),
+    )
+    fast_state = replace(row(tmp_path, "two").state, status=WorkspaceStatus.PAUSED)
+    store.save(slow_state)
+    store.save(fast_state)
+    previous_slow = replace(
+        _row_from_state(slow_state),
+        base_ahead=3,
+        base_behind=2,
+        diff_added=8,
+        diff_removed=5,
+        dirty_files=1,
+    )
+    service.apply_reconcile(
+        DashboardSnapshot(
+            projects=(
+                ProjectGroup(
+                    repo_root=str(tmp_path),
+                    repo_name=tmp_path.name,
+                    cwd=str(tmp_path),
+                    workspaces=(previous_slow, _row_from_state(fast_state)),
+                ),
+            ),
+            generated_at=datetime.now(UTC),
+        ),
+        emit=False,
+    )
+    entered = Event()
+    refreshed = Event()
+
+    def blocked_reader(_argv: list[str], timeout: float) -> object:
+        entered.set()
+        if not refreshed.wait(timeout):
+            raise GitError("worker read exceeded its deadline")
+        raise AssertionError("the blocked reader must not be released by another refresh")
+
+    manager = registry.get(tmp_path)
+
+    def git_for(state: WorkspaceState, *, runner_timeout: float | None = None) -> GitRepo:
+        if state.id == slow_state.id:
+            return GitRepo(
+                tmp_path / "remote", runner=blocked_reader, runner_timeout=runner_timeout
+            )
+        return GitRepo(tmp_path)
+
+    manager.git_for = git_for  # type: ignore[method-assign]
+    original_apply = service.apply_workspace_refresh
+
+    def applied(repo_root: str, workspace_id: str, refreshed_row: WorkspaceActivity | None) -> None:
+        original_apply(repo_root, workspace_id, refreshed_row)
+        if workspace_id == fast_state.id:
+            refreshed.set()
+
+    service.apply_workspace_refresh = applied  # type: ignore[method-assign]
+    monkeypatch.setattr(ActivityService, "PROJECTION_WORKER_TIMEOUT_SECONDS", 0.05)
+    runtime = ActivityRuntime(service, limits=AdmissionLimits(max_items=4, max_bytes=4096))
+    await runtime.start()
+    await runtime.wait_ready()
+    try:
+        assert (
+            runtime.invalidate(WorkspaceInvalidated(str(tmp_path), slow_state.id, "runtime"))
+            is Admission.ACCEPTED
+        )
+        assert (
+            runtime.invalidate(WorkspaceInvalidated(str(tmp_path), fast_state.id, "runtime"))
+            is Admission.ACCEPTED
+        )
+        async with asyncio.timeout(0.5):
+            while not refreshed.is_set():
+                await asyncio.sleep(0)
+        assert entered.is_set()
+        slow_row = service.workspace_row(str(tmp_path), slow_state.id)
+        assert slow_row is not None
+        assert (
+            slow_row.base_ahead,
+            slow_row.base_behind,
+            slow_row.diff_added,
+            slow_row.diff_removed,
+            slow_row.dirty_files,
+            slow_row.recent_commits,
+        ) == (3, 2, 8, 5, 1, ())
+    finally:
+        refreshed.set()
+        await runtime.close()
+
+
+def _row_from_state(state: WorkspaceState) -> WorkspaceActivity:
+    return WorkspaceActivity(
+        state=state,
+        sessions=(),
+        base_ahead=0,
+        base_behind=0,
+        diff_added=0,
+        diff_removed=0,
+        dirty_files=0,
+        pane_target=None,
+        recent_commits=(),
+        observed_at=datetime.now(UTC),
+    )
 
 
 def test_incremental_domains_reuse_retained_row_parts(tmp_path: Path) -> None:

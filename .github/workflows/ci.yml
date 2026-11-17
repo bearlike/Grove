@@ -137,7 +137,7 @@ jobs:
     if: needs.changes.outputs.daemon == 'true'
     uses: ./.github/workflows/_py-tests.yml
     with:
-      paths: tests/daemon
+      paths: tests/daemon tests/restart
       timeout: 12
 
   tui-tests:

@@ -30,6 +30,7 @@ from grove.core.admission import (
     InboxClosed,
 )
 from grove.core.process import die_with_parent
+from grove.core.tmux import OBSERVER_FLAGS
 
 
 def _open_pty() -> tuple[int, int]:
@@ -377,7 +378,9 @@ class TmuxControlPaneSource:
             return
         if self._pane_id is None:
             self._pane_id = await self._resolve_pane_id()
-        if self._command == ("tmux",):
+        # A host server — the default or a workspace's own (`tmux -L <socket>`) —
+        # is reached through a local pty; anything else is a `docker exec` prefix.
+        if self._command[:1] == ("tmux",):
             await self._start_host()
         else:
             await self._start_prefixed()
@@ -405,6 +408,7 @@ class TmuxControlPaneSource:
         try:
             self._process = await asyncio.create_subprocess_exec(
                 *self._command,
+                *OBSERVER_FLAGS,
                 "-CC",
                 "attach-session",
                 "-r",
@@ -432,6 +436,7 @@ class TmuxControlPaneSource:
     async def _start_prefixed(self) -> None:
         self._process = await asyncio.create_subprocess_exec(
             *self._prefixed_control_command(),
+            *OBSERVER_FLAGS,
             "-C",
             "attach-session",
             "-r",

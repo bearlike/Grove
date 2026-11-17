@@ -4,7 +4,7 @@
 # we do not own, so publishing under it is impossible and a bare
 # `uv tool install grove` fetches the wrong product entirely.
 name = "grove-factory"
-version = "0.0.12"
+version = "0.0.13"
 description = "Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace."
 # Built from README.md by the fancy-pypi-readme hook at the end of this file.
 dynamic = ["readme"]
@@ -51,6 +51,10 @@ dependencies = [
     # defensively so an older install keeps working rather than failing to
     # start.
     "truststore>=0.9,<1",
+    # Human sign-in to the daemon over OIDC: discovery, the browser PKCE code
+    # flow and the device flow, plus ID-token validation against the issuer's
+    # JWKS (joserfc, which it ships). Generic OIDC only, no vendor SDK.
+    "authlib>=1.9,<2",
     # ── Every surface ships in the base install ──────────────────────────────
     # A plain `uv tool install grove-factory` (or `uvx grove-factory`) must
     # give the daemon, the MCP server, the SSH client and telemetry with no
@@ -90,6 +94,11 @@ dependencies = [
     # 1.x line above: this package is the pre-stable convention distribution,
     # and its `_incubating` path is expected to move.
     "opentelemetry-semantic-conventions>=0.64b0,<1",
+    # Slack: the official SDK, for its Socket Mode client. Socket Mode dials OUT
+    # to Slack over a websocket, which is what lets a loopback-only daemon take
+    # @grove mentions with no public endpoint. Zero dependencies of its own.
+    # Inert until `slack.enabled`; `grove.core.slack.gateway` is its only importer.
+    "slack-sdk>=3.33,<4",
 ]
 
 # Empty on purpose: every one of these is now in the base install. They stay
@@ -298,6 +307,7 @@ testpaths = ["tests"]
 markers = [
     "integration: real tmux + git subprocesses; opt-in via -m integration",
     "requires_tmux: skipped on platforms without tmux (Windows-native CI)",
+    "launch_builtins: see the product launch built-ins (current checkout) instead of the suite's worktree pin",
 ]
 asyncio_mode = "auto"
 
@@ -332,6 +342,17 @@ forbidden_modules = [
 # import any client-facing module — the dependency direction is
 # clients → daemon → core, never the reverse. Catches accidental
 # UI/SDK leakage into the server process at CI time.
+# The manager reaches a workspace's runtime only through the WorkspaceRuntime
+# protocol (`core.workspace_runtime`); the concrete container verbs are that
+# module's business. `allow_indirect_imports` because the manager legitimately
+# reaches them THROUGH the protocol module.
+[[tool.importlinter.contracts]]
+name = "Manager names no concrete runtime"
+type = "forbidden"
+source_modules = ["grove.core.manager"]
+allow_indirect_imports = "true"
+forbidden_modules = ["grove.core.container_runtime"]
+
 [[tool.importlinter.contracts]]
 name = "Daemon depends only on grove.core"
 type = "forbidden"

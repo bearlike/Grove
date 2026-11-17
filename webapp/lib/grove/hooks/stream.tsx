@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -15,6 +15,7 @@ import {
 } from "@/lib/grove/api";
 import {
   applyWorkspaceState,
+  findWorkspaceActivity,
   peekFromActivity,
   streamAction,
   turnsProgressFingerprint,
@@ -94,13 +95,13 @@ export interface ActivityStream {
   connected: boolean;
   /** Reconnect attempts since the last healthy connection — 0 while healthy. */
   attempt: number;
-  /** Force a fresh connection; the daemon replies with a full snapshot. */
+  /** Reconnect the stream, resuming from its last event when possible. */
   reconnect: () => void;
   /** The fallback fetch's failure, for a surface that renders one. */
   error: Error | null;
   /** No snapshot has arrived from either the stream or the fallback yet. */
   isPending: boolean;
-  /** Re-read `/activity` by hand — what a "Retry" control calls. */
+  /** Request fresh activity by hand — what a "Retry" control calls. */
   refetch: () => void;
 }
 
@@ -150,6 +151,7 @@ function useStreamTransport(): ActivityStream {
   const [reconnectKey, setReconnectKey] = useState(0);
 
   const lastEventAtRef = useRef(0);
+  const lastEventIdRef = useRef("");
   const coalescing = useRef<ReturnType<typeof setTimeout> | null>(null);
   const everConnectedRef = useRef(false);
 
@@ -172,12 +174,13 @@ function useStreamTransport(): ActivityStream {
     if (connected) everConnectedRef.current = true;
   }, [connected]);
 
-  // The one read of `/activity`, and the disconnected backstop. It still runs
-  // once on mount: the cache starts empty, and waiting on the SSE handshake to
-  // paint would leave a browser with no `EventSource` showing nothing at all.
+  // The connect snapshot supplies the initial cache; the query is a backstop.
   const fallback = useQuery({
     queryKey: groveKeys.activity,
     queryFn: () => groveClient.getActivity(),
+    enabled: typeof EventSource === "undefined" || (!connected && attempt > 0),
+    staleTime: connected ? Infinity : undefined,
+    refetchOnWindowFocus: connected ? false : undefined,
     refetchInterval: backstopInterval(connected, FALLBACK_POLL_MS),
   });
 
@@ -186,12 +189,14 @@ function useStreamTransport(): ActivityStream {
       if (coalescing.current !== null) return;
       coalescing.current = setTimeout(() => {
         coalescing.current = null;
-        void queryClient.invalidateQueries({ queryKey: groveKeys.activity });
+        lastEventIdRef.current = "";
+        reconnect();
       }, REFETCH_COALESCE_MS);
     };
 
-    const onEvent = (event: DashboardEvent): void => {
+    const onEvent = (event: DashboardEvent, lastEventId: string): void => {
       lastEventAtRef.current = Date.now();
+      lastEventIdRef.current = lastEventId;
       const current = queryClient.getQueryData<DashboardSnapshotView>(groveKeys.activity) ?? null;
       const action = streamAction(current, event);
 
@@ -200,6 +205,12 @@ function useStreamTransport(): ActivityStream {
           return;
         case "adopt":
           queryClient.setQueryData(groveKeys.activity, action.snapshot);
+          for (const project of action.snapshot.projects) {
+            for (const workspace of project.workspaces) {
+              const key = groveKeys.workspaceActivity(workspace.state.id);
+              if (queryClient.getQueryData(key) !== undefined) queryClient.setQueryData(key, workspace);
+            }
+          }
           return;
         case "apply":
           queryClient.setQueryData(groveKeys.activity, action.snapshot);
@@ -208,7 +219,7 @@ function useStreamTransport(): ActivityStream {
             action.workspace,
           );
           refreshPeekFromStream(queryClient, action.workspace);
-          refreshWorkspaceQueries(queryClient, action.workspace.state.id);
+          refreshWorkspaceQueries(queryClient, action.workspace, findWorkspaceActivity(current, action.workspace.state.id));
           return;
         case "drop":
           queryClient.setQueryData(groveKeys.activity, action.snapshot);
@@ -236,7 +247,8 @@ function useStreamTransport(): ActivityStream {
       }
     };
 
-    const stream = subscribeToEventStream(`${GroveClient.basePath}/events`, {
+    const resume = lastEventIdRef.current ? `?last_event_id=${encodeURIComponent(lastEventIdRef.current)}` : "";
+    const stream = subscribeToEventStream(`${GroveClient.basePath}/events${resume}`, {
       onEvent,
       onOpen: () => {
         lastEventAtRef.current = Date.now();
@@ -283,15 +295,24 @@ function useStreamTransport(): ActivityStream {
     return () => clearTimeout(timer);
   }, [connected, attempt, reconnect]);
 
-  return {
+  const refetch = useCallback(() => {
+    if (connected) {
+      lastEventIdRef.current = "";
+      reconnect();
+    } else {
+      void fallback.refetch();
+    }
+  }, [connected, fallback.refetch, reconnect]);
+
+  return useMemo(() => ({
     snapshot: fallback.data ?? null,
     connected,
     attempt,
     reconnect,
     error: fallback.error,
     isPending: fallback.isPending,
-    refetch: () => void fallback.refetch(),
-  };
+    refetch,
+  }), [fallback.data, connected, attempt, reconnect, fallback.error, fallback.isPending, refetch]);
 }
 
 /**
@@ -322,18 +343,31 @@ async function resyncWorkspace(queryClient: QueryClient, workspaceId: string): P
  *
  * A `session_activity` row reports the changed working-tree counters, session
  * state and lifecycle status. It cannot carry a raw patch, a provision log, a
- * full session index or diagram XML, so their active observers re-read promptly
- * while their own query keys preserve the scope. The diff intentionally keeps
- * its interval too: editing an already-dirty file moves no streamed counter.
+ * full session index or diagram XML. The session index is re-read only when its
+ * membership changes; provision and diagram retain their existing invalidation.
  */
-function refreshWorkspaceQueries(queryClient: QueryClient, workspaceId: string): void {
+function refreshWorkspaceQueries(
+  queryClient: QueryClient,
+  workspace: WorkspaceActivityView,
+  previous: WorkspaceActivityView | null,
+): void {
+  const workspaceId = workspace.state.id;
+  if (sessionSetChanged(previous, workspace)) {
+    void queryClient.invalidateQueries({ queryKey: groveKeys.sessions(workspaceId) });
+  }
   for (const key of [
     groveKeys.provision(workspaceId),
-    groveKeys.sessions(workspaceId),
     groveKeys.diagram(workspaceId),
   ]) {
     void queryClient.invalidateQueries({ queryKey: key });
   }
+}
+
+/** Compare membership, not order or activity, before re-reading the session index. */
+export function sessionSetChanged(previous: WorkspaceActivityView | null, workspace: WorkspaceActivityView): boolean {
+  if (!previous) return true;
+  const ids = new Set(previous.sessions.map((entry) => entry.session.session_id));
+  return ids.size !== workspace.sessions.length || workspace.sessions.some((entry) => !ids.has(entry.session.session_id));
 }
 
 /**

@@ -239,11 +239,73 @@ instance, so a blank row is work that was recorded and cannot be found.
   there instead of in silence. **A best-effort swallow on the only path that
   exercises a seam turns an SDK upgrade into a silent outage; the test for such
   a seam must go through the swallowed path's real objects.**
-- **`langfuse.user.id` is the host account, set once per daemon.** Traces
-  reached Langfuse with no user, so "whose work is this" had no answer on the
-  vendor's own user axis. It is an attribute, never a tag (high cardinality),
-  and only Grove's own spans carry it — the tier-1 resource carries no
-  `langfuse.*` keys at all.
+- **A refusal on a SHARED span processor must fail only the flush after it.**
+  From 2026-10-01 21:20Z until this fix shipped, no Grove tool span reached
+  Langfuse. `_AcknowledgingSpanProcessor` remembered each admission-refused
+  span until that same span was re-offered, and the daemon holds one processor
+  for its whole life, shared by every session's replay and every context
+  revision. A superseded context span is never re-offered, so after one burst
+  of refusals every flush of every session reported failure: each session
+  re-sent its OLDEST unacknowledged turn every tick (one turn 867 times in 3
+  h, each copy a fresh evaluator job) and no newer turn was ever exported.
+  Nothing logged above debug, because each export succeeded. The existing
+  test pinned the poison ("a later empty flush stays false"), which is why it
+  shipped. **Ask of any refusal state on a long-lived shared object who clears
+  it, and whether that party is guaranteed to come back.**
+- **The live replay's once-only gate is DURABLE (`LiveAcknowledgements`, #905).**
+  It was an in-memory set, so every daemon restart re-sent every completed
+  turn of every live session. It now records each acknowledged turn as
+  `submitted` in the backfill's own `TelemetryCheckpointLedger`, keyed by the
+  same destination id the probe uses, so the live path and the backfill share
+  one row per trace and neither re-sends the other's turns. `submitted`, not
+  `completed`: the live path knows the collector accepted the turn, never that
+  Langfuse indexed it, and the backfill still verifies past its grace window.
+  The store is read once per turn per process; the in-memory set stays the
+  per-tick cache in front of it.
+- **A turn is delivered in chunks of `REPLAY_CHUNK` spans, one acknowledged
+  flush each.** One flush per turn meant a turn over the processor's admission
+  bounds (measured: 1,275 spans at ~10 KB each against the 8 MB cap, and turns
+  of up to 11,739 spans) was refused in part on EVERY tick. It was never
+  acknowledged, its admitted prefix was re-sent forever, and its tail never
+  arrived. After the refusal fix this was the remaining storm, and it hid
+  behind a healthy-looking 100% scored rate because the missing spans never
+  existed remotely to be counted. A retry resumes at the first unacknowledged
+  chunk (in memory; after a restart such a turn is re-sent whole once). The
+  backfill exporter chunks its remainder the same way.
+- **The reconciliation probe reads `/api/public/v2/observations?traceId=`,
+  never `/api/public/traces/{id}`.** On a v4 deployment in events_only mode the
+  v1 read answers 404 for EVERY trace (measured on 4.48.0), and the probe read
+  404 as "nothing remote", so the backfill re-sent every trace whole. An empty
+  trace is a 200 with no rows, so any non-200 is now "unavailable". The v2
+  list pages by cursor and a partial read counts as unavailable, because
+  understating what is remote re-sends the rest.
+- **`langfuse.user.id` is the PERSON behind the work: the workspace's
+  `created_by` principal when someone signed in, else the host account.** One
+  identity reaches all three tiers through one field each: tier 1 stamps
+  `grove.principal.subject` and `grove.node.name` into the launch resource,
+  and tiers 2 and 3 spend one `TraceIdentity` whose `principal` and `node` feed
+  both the `grove.*` attributes and the vendor's user axis. Only the opaque
+  subject is ever emitted: Grove carries no groups or emails at all, so there
+  is no allowlist to configure and nothing a residency rule has to chase. It is
+  an attribute, never a tag (high cardinality), and the tier-1 resource still
+  carries no `langfuse.*` keys.
+- **A request's id and trace context are set ONCE, at the daemon's outermost
+  layer, by rewriting the ASGI scope's headers (`daemon/request_audit.py`).**
+  Every layer below reads them from there, and the federation proxy forwards
+  headers untouched, so a node continues the hub's trace and logs the hub's
+  `X-Request-ID` with no code on either side passing them. The audit span is
+  emitted only for a request the auth gate admitted (no principal, no span),
+  parented to the caller's `traceparent` when one arrived. A malformed header
+  starts a fresh root rather than refusing the request.
+- **The daemon's own spans go through a durable, bounded outbox
+  (`telemetry/outbox.py`), because the exporter holds spans in memory and a
+  SIGKILL or a dead collector dropped them silently.** A span is written to
+  SQLite before it is exported and forgotten when a flush acknowledges it; a
+  new process sends what the last one left before anything new. Rows are keyed
+  `(trace_id, span_id)`, so re-enqueueing replaces rather than duplicates, and
+  `OutboxSink.CAPACITY` drops the OLDEST when a dead backend fills it, so a disk
+  cannot fill. The checkpoint ledger stays the BACKFILL's record: it stores
+  hashes, not spans, so it could never have been drained.
 - **Praise and complaint are two rubrics, and a flipped vote withdraws the old
   verdict's reasons.** `user-feedback-praise` exists beside
   `user-feedback-reason` because a category's meaning must not depend on which

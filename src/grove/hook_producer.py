@@ -27,6 +27,23 @@ _STATUSLINE_QUOTAS_FILE: Final = "statusline-quotas.json"
 LegacyHandler = Callable[[Sequence[str], bytes], int]
 
 
+def tmux_pane_identity() -> str | None:
+    """This process's tmux pane, unique across every tmux server on the host.
+
+    A pane id (``%3``) is numbered per SERVER, and each Grove workspace runs on
+    its own server, so a bare id names a different pane on every one of them —
+    and session adoption matches on it. The pane is therefore qualified by its
+    server's socket, read from ``$TMUX`` (``<socket path>,<pid>,<session>``).
+    The shared default server keeps the bare id, so every record written before
+    per-workspace servers still compares equal.
+    """
+    pane = os.environ.get("TMUX_PANE") or None
+    if pane is None:
+        return None
+    socket = Path(os.environ.get("TMUX", "").split(",", 1)[0]).name
+    return pane if socket in ("", "default") else f"{socket}:{pane}"
+
+
 class HookProducer:
     """Persist one ordinary hook callback for the daemon's filesystem intake.
 
@@ -126,7 +143,7 @@ class HookProducer:
             {
                 "grove_hook_envelope": 1,
                 "payload": payload,
-                "tmux_pane": os.environ.get("TMUX_PANE") or None,
+                "tmux_pane": tmux_pane_identity(),
             },
             separators=(",", ":"),
         ).encode()

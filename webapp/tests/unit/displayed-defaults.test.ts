@@ -61,7 +61,8 @@ describe("the launch model pill", () => {
     // pins that), so the pill was promising a model that would not be used.
     const text = code(MODEL_PILL);
 
-    expect(text).toContain("defaults.data?.model ?? null");
+    // Null when nothing is inherited for THIS agent (`inheritedModel`).
+    expect(text).toContain("values.model ?? inheritedModel(defaults.data, agentName)");
     expect(text).not.toMatch(/\?\?\s*catalog\[0\]/);
   });
 

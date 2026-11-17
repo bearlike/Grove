@@ -194,17 +194,16 @@ def test_the_optional_attachments_field_emits_no_schema_default() -> None:
     caller that builds a `CreateWorkspaceRequest` literal stopped typechecking
     on a field it has nothing to do with.
 
-    **Every other optional field on this model escapes that only by accident**:
-    Pydantic emits no `default` key for them at all — `branch_plan` is `{}` in
-    the schema despite defaulting to `AutoBranch()` — so nobody had met the trap
-    before. `default_factory` is what restores that, and it drops a shared
-    mutable default on the way past.
+    The other optional fields default to ``None``, which emits ``default: null``
+    and generates as an optional ``x?: T | null`` (the generated `model?` and
+    `branch_plan?` prove it), so the trap is specific to a NON-null default.
+    `default_factory` is what avoids it here, and it drops a shared mutable
+    default on the way past.
 
     Pinned as a SCHEMA assertion rather than a TS one because the schema is the
     boundary: this suite cannot run `openapi-typescript`, but it can hold the
-    input that tool reads. `branch_plan` rides along as the control — if
-    Pydantic ever starts emitting defaults for both, this test says so rather
-    than passing for the wrong reason.
+    input that tool reads. `branch_plan` rides along as the control: its
+    default must stay ``null``, never a concrete plan.
     """
     schema = CreateWorkspaceRequest.model_json_schema()
     attachments = schema["properties"]["attachments"]
@@ -214,4 +213,4 @@ def test_the_optional_attachments_field_emits_no_schema_default() -> None:
         "use `default_factory` for an optional collection"
     )
     assert "attachments" not in schema.get("required", [])
-    assert "default" not in schema["properties"]["branch_plan"]
+    assert schema["properties"]["branch_plan"].get("default") is None

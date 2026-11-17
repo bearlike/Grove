@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from grove.core.config import BranchMode, GroveConfig
+from grove.core.config import BranchMode, GroveConfig, LaunchSource
 from grove.core.container_runtime import ContainerRuntimeState
+from grove.core.contracts.artifacts import ArtifactRef
 from grove.core.contracts.diagrams import DiagramSessionView
 from grove.core.contracts.tickets import TicketRef
 from grove.core.tmux import AttachInstruction, ContainerAttach, HostAttach
@@ -86,6 +87,14 @@ class WorkspaceStateView(BaseModel):
     created_at: datetime
     updated_at: datetime
     paused_at: datetime | None = None
+    frozen_at: datetime | None = None
+    thawed_at: datetime | None = None
+    # Set while a frozen remote workspace is released to a snapshot; `frozen_at`
+    # stays set beside it, so a reader without this field still sees "frozen".
+    hibernated_at: datetime | None = None
+    # Optional on the wire, like every field added after the view shipped, so a
+    # client building a view by hand need not name it; the daemon always sends it.
+    created_by: str | None = None
     error_detail: str | None = None
     description: str | None = None
     init_status: InitStatus | None = None
@@ -93,11 +102,18 @@ class WorkspaceStateView(BaseModel):
     branch_provenance: BranchProvenance = BranchProvenance.GROVE_CREATED
     placement: Placement = Placement.WORKTREE
     ticket_refs: list[TicketRef] = []
+    # `default_factory`, not `= []`: an emitted `default` makes the generated
+    # TypeScript field required (see contracts/CLAUDE.md).
+    artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     # Runtime facts. Every one carries a default that means "an ordinary
     # host workspace", so a client built against the older schema decodes a
     # newer payload unchanged — the same defaulting discipline `placement` used.
     runtime: Runtime = Runtime.HOST
     runtime_fallback_reason: str | None = None
+    remote_runtime: str | None = None
+    """The ``runtimes.<name>`` block a remote workspace runs on; ``None`` for any other."""
+    project_subpath: str = ""
+    """Where the agent starts, relative to the worktree root; ``""`` is the root."""
     provision_status: ProvisionStatus | None = None
     provision_duration_ms: int | None = None
     # When the in-flight provision started. Every client renders "building for
@@ -176,6 +192,10 @@ class WorkspaceStateView(BaseModel):
             created_at=s.created_at,
             updated_at=s.updated_at,
             paused_at=s.paused_at,
+            frozen_at=s.frozen_at,
+            thawed_at=s.thawed_at,
+            hibernated_at=s.hibernated_at,
+            created_by=s.created_by,
             error_detail=s.error_detail,
             description=s.description,
             init_status=s.init_status,
@@ -185,6 +205,8 @@ class WorkspaceStateView(BaseModel):
             placement=s.placement,
             runtime=s.runtime,
             runtime_fallback_reason=s.runtime_fallback_reason,
+            remote_runtime=s.remote.runtime if s.remote is not None else None,
+            project_subpath=s.project_subpath,
             runtime_default_config=s.runtime_default_config,
             runtime_no_tmux=s.runtime_no_tmux,
             native=s.native,
@@ -199,6 +221,7 @@ class WorkspaceStateView(BaseModel):
             # TicketRef is frozen/immutable; the list is copied so the view can
             # never alias and mutate the engine record's refs.
             ticket_refs=list(s.ticket_refs),
+            artifact_refs=list(s.artifact_refs),
         )
 
 
@@ -358,6 +381,9 @@ class HostAttachView(BaseModel):
     """A native workspace: the pane is Grove's worker printing protocol frames,
     so the attach is a viewer (``-r``) and keystrokes never reach it. Defaults
     ``False`` so an older daemon's payload decodes as the writable attach it is."""
+    tmux_socket: str = ""
+    """The workspace's own tmux server (``tmux -L <socket>``); empty is the shared
+    default. Defaults empty so an older daemon's payload decodes unchanged."""
 
     def attach_argv(self) -> list[str]:
         """The argv a FRESH pty runs to attach (the daemon's xterm.js bridge).
@@ -367,7 +393,12 @@ class HostAttachView(BaseModel):
         about to fork. The variant still carries the flag because a wire client
         that hands the user a command to paste needs to warn them (MCP does).
         """
-        return ["tmux", "attach", *(("-r",) if self.read_only else ()), "-t", self.tmux_session]
+        return HostAttach(
+            tmux_session=self.tmux_session,
+            inside_outer_tmux=False,
+            read_only=self.read_only,
+            tmux_socket=self.tmux_socket,
+        ).attach_argv()
 
     @classmethod
     def from_instruction(cls, a: HostAttach) -> HostAttachView:
@@ -375,6 +406,7 @@ class HostAttachView(BaseModel):
             tmux_session=a.tmux_session,
             inside_outer_tmux=a.inside_outer_tmux,
             read_only=a.read_only,
+            tmux_socket=a.tmux_socket,
         )
 
 
@@ -469,22 +501,66 @@ class AgentCwdView(BaseModel):
     path: str
 
 
-class WorkspaceDefaultsView(BaseModel):
-    """Resolved answers a new-workspace form should pre-select.
+class RuntimeTargetView(BaseModel):
+    """One place a create may run: a daemon, and the remote runtimes it configures.
 
-    Unlike the raw ``WorkspaceDefaults`` config section, this fills values the
-    create path already resolves through the wider cascade. ``None`` remains
-    meaningful for agent and model: their providers decide when no saved answer
-    exists.
+    ``node`` is ``None`` for the daemon answering; on a federation hub every
+    reachable node follows by name. A client sends ``node`` as
+    ``CreateWorkspaceRequest.node`` and one of ``runtimes`` as its
+    ``remote_runtime`` with ``runtime: "remote"``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    node: str | None
+    runtimes: tuple[str, ...] = ()
+
+
+class LaunchProblemView(BaseModel):
+    """One reason a create would be refused, named by the request field that owns it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    field: str
+    error: str
+    message: str
+
+
+class LaunchAdjustmentView(BaseModel):
+    """One answer the engine changed so the draft can run, and why, in one sentence.
+
+    ``value`` is the answer taken, in the request's own vocabulary (a roster
+    name for ``agent_name``, a branch-plan kind for ``branch_plan``, a runtime
+    for ``runtime``). A form shows ``reason`` as-is and never re-derives it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    field: str
+    value: str
+    reason: str
+
+
+class WorkspaceDefaultsView(BaseModel):
+    """What an untouched create will launch, for a new-workspace form to pre-select.
+
+    Resolved by the engine's own ``LaunchResolver`` against an empty request, so
+    it is exactly what a create that omits every launch field gets. ``sources``
+    says where each answer came from, keyed by ``CreateWorkspaceRequest`` field
+    name: ``project`` or ``user`` for a saved default, ``config`` for another
+    configured source, ``builtin`` for Grove's own starting answer.
     """
 
     model_config = ConfigDict(frozen=True)
 
     agent: str | None
+    """The agent an untouched create launches; ``None`` only with no agents configured."""
     runtime: Literal["host", "container"]
     brief: bool
     model: str | None
+    """The model forwarded to ``agent``; ``None`` leaves the tool's own default."""
     branch_mode: BranchMode
+    """``root`` (current checkout) unless a saved default says otherwise."""
     base_ref: str | None
     skip_init: bool
     agent_cwds: tuple[AgentCwdView, ...] = ()
@@ -501,32 +577,59 @@ class WorkspaceDefaultsView(BaseModel):
     """The relative path an untouched create will actually use, or ``None`` for
     the worktree root — so a form can pre-select the right row rather than
     guessing which entry is the default."""
+    targets: tuple[RuntimeTargetView, ...] = ()
+    """Where a create may run: this daemon first, then each reachable node on a
+    hub. Read-only enrichment like ``agent_cwds``, and never a saved default:
+    ``runtime`` above stays host or container."""
+    sources: dict[str, LaunchSource] = Field(default_factory=dict)
+    """Where each answer above came from, by request field name
+    (``agent_name``, ``runtime``, ``branch_plan``, ``model``, ``brief``,
+    ``skip_init``, ``project_cwd``)."""
+    problems: tuple[LaunchProblemView, ...] = ()
+    """Why an untouched create would be refused, e.g. a saved branch mode that
+    needs a branch name. Empty when it would pass validation."""
 
     @classmethod
     def from_config(cls, cfg: GroveConfig) -> WorkspaceDefaultsView:
         """Resolve create-form answers from one repo's fully merged config.
 
-        Every resolution here is the ENGINE's own (``GroveConfig.default_*``),
-        never a second copy: this view's whole promise is that it shows what an
+        Every resolution here is the ENGINE's own (``LaunchResolver``), never a
+        second copy: this view's whole promise is that it shows what an
         untouched create will do, and it can only keep that promise by asking
         the same code the create asks. It answered `runtime` from its own copy
         of the rule once, and drifted from it the day `defaults.runtime` landed
         in the config and not in the resolver.
         """
-        defaults = cfg.defaults
+        # Deferred: the resolver imports the request contract, which sits
+        # beside this module in `contracts`.
+        from grove.core.contracts.requests import CreateWorkspaceRequest  # noqa: PLC0415
+        from grove.core.launch_resolution import LaunchResolver  # noqa: PLC0415
+
+        launch = LaunchResolver.resolve(cfg, CreateWorkspaceRequest())
+        plan = launch.branch_plan
+        if plan is None:
+            branch_mode: BranchMode = cfg.defaults.branch_mode or "root"
+        else:
+            branch_mode = "root" if plan.kind == "root" else "auto"
         return cls(
-            agent=defaults.agent,
-            runtime=cfg.default_runtime,
-            brief=cfg.default_brief,
-            model=defaults.model,
-            branch_mode=defaults.branch_mode or "auto",
-            base_ref=defaults.base_ref,
-            skip_init=cfg.default_skip_init,
+            agent=launch.agent.name if launch.agent is not None else None,
+            runtime="container" if launch.runtime.value == "container" else "host",
+            brief=launch.brief,
+            model=launch.model,
+            branch_mode=branch_mode,
+            base_ref=cfg.defaults.base_ref,
+            skip_init=launch.skip_init,
             agent_cwds=tuple(
                 AgentCwdView(label=label, path=path)
                 for label, path in cfg.agent_cwds.entries.items()
             ),
             agent_cwd=cfg.agent_cwds.default_path(),
+            targets=(RuntimeTargetView(node=None, runtimes=cfg.resident_runtimes),),
+            sources=dict(launch.sources),
+            problems=tuple(
+                LaunchProblemView(field=p.field, error=p.error, message=p.message)
+                for p in launch.problems
+            ),
         )
 
 
@@ -635,6 +738,13 @@ class WhoamiView(BaseModel):
     because a rating with nowhere to land is a button that lies. The daemon
     refuses any reason not listed here, so the rubric in Langfuse stays the
     one the config names."""
+    speech: bool = Field(default_factory=lambda: False)
+    """A speech provider key is configured, so ``/speech/*`` can answer. Clients
+    show the dictation microphone and the read-aloud speaker only when true."""
+    federation: str = Field(default_factory=lambda: "disabled")
+    """This daemon's federation state: ``disabled``, ``disabled (<reason>)`` when
+    an enabled block failed validation and was switched off, or the role it runs
+    as (``hub`` / ``node``)."""
 
 
 __all__ = [
@@ -644,6 +754,7 @@ __all__ = [
     "ContainerAttachView",
     "HealthView",
     "HostAttachView",
+    "LaunchProblemView",
     "ProjectView",
     "ProvisionProgressView",
     "WhoamiView",

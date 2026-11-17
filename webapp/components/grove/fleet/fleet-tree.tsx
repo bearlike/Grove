@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { MoreHorizontalIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { ExternalLinkIcon, FileTextIcon, GitForkIcon, MoreHorizontalIcon, PencilIcon, PinIcon, PinOffIcon, PlusIcon, Trash2Icon } from "lucide-react";
+
+import { useSidebarPins, useSetSidebarPin } from "@/lib/grove/hooks/sidebar-pins";
+import { pinsFirst } from "./sidebar-pins";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ConnectionState } from "@/components/elements/connection-state";
@@ -25,13 +28,13 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { CardShell } from "@/components/grove/card";
-import { BRANCH_GLYPH } from "@/components/grove/entity";
 import { LoopingText, MarqueePauseButton } from "@/components/grove/overflow-text";
 import { AgentMark } from "@/components/grove/agent-mark";
 import { WorkingMark } from "@/components/grove/working-loader";
-import { absoluteTime } from "@/components/grove/relative-time";
 import { KillDialog } from "@/components/grove/workspace/kill-dialog";
 import { useWorkspaceActions } from "@/lib/grove/hooks";
+import { replyCount } from "@/lib/grove/adapters";
+import { useHasUnread } from "./unread";
 import { FleetFilterMenu } from "./fleet-filter";
 import { ProjectHeading } from "./project-heading";
 import {
@@ -42,7 +45,9 @@ import {
   scopeFleetRows,
   type ProjectContextController,
 } from "./project-context";
-import { SessionMetadata, SessionMetricDetails } from "./workspace-metrics";
+import { SessionMetadata, UnreadDot } from "./workspace-metrics";
+import { SessionOverview } from "./session-overview";
+import { OVERVIEW_COLLISION_PADDING, overviewAlign, type OverviewAlign } from "./overview-placement";
 import {
   RenameWorkspaceDialog,
   type WorkspaceEditField,
@@ -52,7 +57,6 @@ import {
   agentStateOf,
   filterRows,
   fleetGroups,
-  lastActivityIso,
   type FleetFilter,
 } from "./filter";
 import {
@@ -81,11 +85,16 @@ export function FleetTree({
   search: FleetSearchController;
 }): React.ReactNode {
   const pathname = usePathname();
+  const pins = useSidebarPins();
+  const setPin = useSetSidebarPin();
+  const onPinChange = useCallback((id: string, pinned: boolean) => {
+    setPin.mutate({ id, pinned });
+  }, [setPin.mutate]);
   const projects = stream.snapshot?.projects ?? [];
   const rows = search.scopedRows;
-  const visible = search.visibleRows;
+  const workers = search.visibleRows;
   const groupBy = project.context.kind === "all" ? search.filter.groupBy : "none";
-  const groups = useMemo(() => fleetGroups(visible, groupBy), [visible, groupBy]);
+  const groups = useMemo(() => fleetGroups(workers, groupBy), [workers, groupBy]);
   const currentRow = search.allRows.find((row) => pathname === `/w/${row.workspace.state.id}`);
   const outsideContext = currentRow && project.context.kind !== "all" &&
     !rows.some((row) => row.workspace.state.id === currentRow.workspace.state.id);
@@ -153,6 +162,16 @@ export function FleetTree({
           />
         ) : null}
 
+        {pins.error ? (
+          <ErrorState
+            className="max-w-none"
+            title="Cannot load session pins"
+            detail={pins.error.message}
+            retrying={pins.isFetching}
+            onRetry={() => { void pins.refetch(); }}
+          />
+        ) : null}
+
         {outsideContext && !loading ? (
           <div className="flex flex-wrap items-center gap-1 text-xs text-content-tertiary" data-testid="rail-outside-context">
             <span>Open workspace is outside this view.</span>
@@ -164,7 +183,7 @@ export function FleetTree({
 
         {loading ? <FleetSkeleton /> : null}
 
-        {!loading && visible.length === 0 ? (
+        {!loading && workers.length === 0 ? (
           <div
             className="flex flex-col items-start gap-2 px-2.5 py-4"
             data-testid="fleet-empty-rail"
@@ -208,13 +227,16 @@ export function FleetTree({
                 <ProjectHeading name={group.repoName} count={group.rows.length} />
               </div>
             ) : null}
-            {group.rows.map((row) => (
+            {pinsFirst(group.rows, pins.data ?? []).map((row) => (
               <WorkspaceRow
                 key={row.workspace.state.id}
                 row={row}
                 active={pathname === `/w/${row.workspace.state.id}`}
                 launchHref={workspaceLaunchHref(projects, row.workspace.state.id) ?? "/"}
                 grouped={search.filter.groupBy === "project"}
+                pinned={pins.data?.includes(row.workspace.state.id) ?? false}
+                pinDisabled={pins.data === undefined || setPin.isPending}
+                onPinChange={onPinChange}
               />
             ))}
           </section>
@@ -284,17 +306,23 @@ const ROW_STATES = cn(
 );
 
 /** One workspace navigation card. */
-function WorkspaceRow({
+const WorkspaceRow = memo(function WorkspaceRow({
   row,
   active,
   launchHref,
   grouped,
+  pinned,
+  pinDisabled,
+  onPinChange,
 }: {
   row: FleetRow;
   active: boolean;
   /** A new workspace in this row's project — where deleting the open one lands. */
   launchHref: string;
   grouped: boolean;
+  pinned: boolean;
+  pinDisabled: boolean;
+  onPinChange(id: string, pinned: boolean): void;
 }): React.ReactNode {
   const { state, phase } = row.workspace;
   const router = useRouter();
@@ -302,7 +330,17 @@ function WorkspaceRow({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [killing, setKilling] = useState(false);
   const [editField, setEditField] = useState<WorkspaceEditField>("title");
-  const { kill } = useWorkspaceActions(state.id);
+  // Read where the card sits on the same event Radix opens on, so the panel
+  // grows toward the viewport's middle. `pointerenter` is not enough: a pointer
+  // already resting on a card after a navigation or scroll never re-enters it,
+  // and the panel then opened centred against a stale default. `setAlign` bails
+  // out when the edge is unchanged, so a move within a card costs no render.
+  const [align, setAlign] = useState<OverviewAlign>("center");
+  const placeOverview = (event: React.PointerEvent | React.FocusEvent): void => {
+    const card = event.currentTarget.getBoundingClientRect();
+    setAlign(overviewAlign(card.top + card.height / 2, window.innerHeight));
+  };
+  const { kill, fork } = useWorkspaceActions(state.id);
   const agentState = agentStateOf(row.workspace);
   const AttentionIcon = agentGlyph(agentState);
   const PhaseIcon = phase ? phaseGlyph(phase.phase) : null;
@@ -314,7 +352,7 @@ function WorkspaceRow({
     : undefined;
   const phaseText = phase ? phaseLabel(phase.phase) : undefined;
   const attentionText = row.workspace.needs_attention ? agentLabel(agentState) : undefined;
-  const updatedIso = lastActivityIso(row.workspace);
+  const unread = useHasUnread(state.id, replyCount(row.workspace)) && !active;
 
   const openEditor = (field: WorkspaceEditField): void => {
     setEditField(field);
@@ -337,6 +375,7 @@ function WorkspaceRow({
           data-testid="fleet-row"
           data-workspace-id={state.id}
           data-selected={active ? "true" : "false"}
+          data-pinned={pinned ? "true" : "false"}
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -346,9 +385,11 @@ function WorkspaceRow({
           <Tooltip>
             <TooltipTrigger asChild>
               <Link
+                onPointerMove={placeOverview}
+                onFocus={placeOverview}
                 href={`/w/${state.id}`}
                 aria-current={active ? "page" : undefined}
-                aria-label={`${state.title}. ${row.repoName}. ${state.agent_name}.`}
+                aria-label={`${state.title}.${pinned ? " Pinned session." : ""}${unread ? " New responses." : ""} ${row.repoName}. ${state.agent_name}.`}
                 className={cn("flex min-w-0 items-start gap-3 p-3 focus-visible:outline-none", ROW_STATES)}
               >
                 {/* The agent's mark on its own sunken tile, spanning the title
@@ -372,17 +413,13 @@ function WorkspaceRow({
                     <LoopingText className="min-w-0 flex-1 text-base font-medium text-content-primary">
                       {state.title}
                     </LoopingText>
+                    {pinned ? <PinIcon aria-hidden className="size-3.5 shrink-0" /> : null}
                     {!grouped ? <span className="sr-only">Project: {row.repoName}</span> : null}
                   </header>
                   <SessionMetadata
                     workspace={row.workspace}
                     context={
                       <div className="flex min-w-0 items-center gap-2" data-testid="rail-context">
-                        <span className="flex min-w-0 flex-[0_1_auto] items-center gap-1" data-testid="rail-branch">
-                          <BRANCH_GLYPH aria-hidden className="size-3.5 shrink-0" />
-                          <span className="sr-only">Branch: </span>
-                          <LoopingText className="min-w-0">{state.branch}</LoopingText>
-                        </span>
                         {attentionMarkLabel && attentionText ? (
                           <Badge
                             variant="outline"
@@ -428,14 +465,14 @@ function WorkspaceRow({
                 </div>
               </Link>
             </TooltipTrigger>
-            <TooltipContent side="left" sideOffset={8}>
-              <p>{state.title} — {row.repoName} ({state.agent_name})</p>
-              <p>Branch: {state.branch}</p>
-              {attentionMarkLabel ? <p>{attentionMarkLabel}</p> : null}
-              {phaseMarkLabel ? <p>{phaseMarkLabel}</p> : null}
-              <SessionMetricDetails workspace={row.workspace} />
-              <p>Created {absoluteTime(state.created_at)}</p>
-              {updatedIso ? <p>Updated {absoluteTime(updatedIso)}</p> : null}
+            <TooltipContent
+              side="right"
+              align={align}
+              sideOffset={12}
+              collisionPadding={OVERVIEW_COLLISION_PADDING}
+              className="session-overview-tooltip"
+            >
+              <SessionOverview workspace={row.workspace} unread={unread} />
             </TooltipContent>
           </Tooltip>
           {/* The left edge carries at most one claim, and selection wins:
@@ -455,6 +492,14 @@ function WorkspaceRow({
               className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-success"
             />
           ) : null}
+          {/* The unread cue: new model responses since this browser last had
+              the workspace open (#919). A mark in the corner, never a rank —
+              `sortedFleetRows` reads nothing from the unread store. */}
+          {unread ? (
+            <span aria-hidden className="pointer-events-none absolute top-1.5 left-1.5 flex" data-testid="fleet-row-unread">
+              <UnreadDot />
+            </span>
+          ) : null}
           {/* Visible at rest, in the quiet tier: an empty title corner that
               only fills on hover read as a card missing a piece, and touch
               already had to show it. */}
@@ -471,11 +516,34 @@ function WorkspaceRow({
           </DropdownMenuTrigger>
         </CardShell>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem asChild>
+            <a href={`/w/${state.id}`} target="_blank" rel="noopener noreferrer">
+              <ExternalLinkIcon aria-hidden />
+              Open in new tab
+            </a>
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={pinDisabled} onSelect={() => onPinChange(state.id, !pinned)}>
+            {pinned ? <PinOffIcon aria-hidden /> : <PinIcon aria-hidden />}
+            {pinned ? "Unpin session" : "Pin session"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => openEditor("title")}>
+            <PencilIcon aria-hidden />
             Rename…
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => openEditor("description")}>
+            <FileTextIcon aria-hidden />
             Edit description…
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={fork.isPending}
+            onSelect={() =>
+              fork.mutate(undefined, { onSuccess: (created) => router.push(`/w/${created.id}`) })
+            }
+            data-testid="fleet-row-fork"
+          >
+            <GitForkIcon aria-hidden />
+            Fork conversation
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -516,7 +584,18 @@ function WorkspaceRow({
       />
     </>
   );
-}
+// Flattening a new snapshot recreates row wrappers even when their contents are unchanged.
+}, (previous, next) =>
+  previous.row.workspace === next.row.workspace &&
+  previous.row.repoName === next.row.repoName &&
+  previous.row.repoRoot === next.row.repoRoot &&
+  previous.active === next.active &&
+  previous.launchHref === next.launchHref &&
+  previous.grouped === next.grouped &&
+  previous.pinned === next.pinned &&
+  previous.pinDisabled === next.pinDisabled &&
+  previous.onPinChange === next.onPinChange,
+);
 
 /** Loading rows follow the same card anatomy without shadcn's randomized sidebar skeleton. */
 function FleetSkeleton(): React.ReactNode {

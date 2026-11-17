@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from grove.core.config import OidcConfig
 from grove.tui import cli_web
 from grove.tui.cli import app
 from grove.tui.cli_web import WebappLauncher
@@ -127,3 +128,18 @@ def test_web_without_a_bundle_exits_cleanly(
     result = CliRunner().invoke(app, ["web"])
     assert result.exit_code != 0
     assert "make webapp-bundle" in result.output
+
+
+def test_the_dashboard_is_handed_its_identity_provider_and_an_exported_value_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GROVE_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("GROVE_OIDC_CLIENT_ID", raising=False)
+    launcher = WebappLauncher()
+    oidc = OidcConfig(issuer="https://id.example.com", client_id="grove-web")
+    env = launcher.env("127.0.0.1", 3000, "http://127.0.0.1:7421", oidc)
+    assert env["GROVE_OIDC_ISSUER"] == "https://id.example.com"
+    assert env["GROVE_OIDC_CLIENT_ID"] == "grove-web"
+    assert "GROVE_OIDC_ISSUER" not in launcher.env("h", 1, "u", OidcConfig())
+    monkeypatch.setenv("GROVE_OIDC_ISSUER", "https://override.example.com")
+    assert launcher.env("h", 1, "u", oidc)["GROVE_OIDC_ISSUER"] == "https://override.example.com"

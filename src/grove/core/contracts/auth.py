@@ -17,9 +17,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from grove.core.auth import ChallengeState, PairingChallenge, Session
+from grove.core.auth import LOCAL_SUBJECT, ChallengeState, PairingChallenge, Session
 
 _FROZEN = ConfigDict(frozen=True, extra="forbid")
 
@@ -84,6 +84,10 @@ class SessionView(BaseModel):
     expires_at: datetime
     last_seen_at: datetime
     revoked: bool = False
+    # Who the session stands for: the person an OIDC sign-in named, else
+    # ``local``. A client compares it with ``WorkspaceView.created_by`` to tell
+    # its own work from everyone else's.
+    subject: str = LOCAL_SUBJECT
 
     @classmethod
     def from_engine(cls, s: Session) -> SessionView:
@@ -94,7 +98,39 @@ class SessionView(BaseModel):
             expires_at=s.expires_at,
             last_seen_at=s.last_seen_at,
             revoked=s.revoked_at is not None,
+            subject=s.subject or LOCAL_SUBJECT,
         )
+
+    @classmethod
+    def of_principal(cls, *, subject: str, token_id: str, expires_at: datetime) -> SessionView:
+        """A caller that presented an ID token directly holds no Grove session; describe it."""
+        return cls(
+            session_id=UUID(int=0),
+            label=f"oidc:{token_id}" if token_id else "oidc",
+            created_at=expires_at,
+            expires_at=expires_at,
+            last_seen_at=expires_at,
+            subject=subject,
+        )
+
+
+class OidcExchangeRequest(BaseModel):
+    """``POST /auth/oidc/session`` body: an ID token to trade for a Grove bearer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id_token: str = Field(min_length=1, max_length=16_384)
+    label: str = Field(default="oidc", min_length=1, max_length=120)
+
+
+class SignInView(BaseModel):
+    """A bearer minted for a person by ``POST /auth/oidc/session``."""
+
+    model_config = _FROZEN
+
+    token: str
+    expires_at: datetime
+    subject: str
 
 
 class PairRequest(BaseModel):
@@ -119,5 +155,7 @@ class AuthErrorEnvelope(BaseModel):
         "pair_already_resolved",
         "rate_limited",
         "session_not_found",
+        "auth_mode_conflict",
+        "oidc_not_configured",
     ]
     message: str

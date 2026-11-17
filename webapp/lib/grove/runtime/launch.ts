@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -10,9 +10,10 @@ import {
   type StagedAttachment,
 } from "@/lib/grove/adapters";
 import type { CreateWorkspaceRequest, WorkspaceStateView } from "@/lib/grove/api";
-import { base64FromBytes } from "@/lib/grove/api";
+import { base64FromBytes, GroveProtocolError, type LaunchProblemView } from "@/lib/grove/api";
+import { launchVerdict, previewKey } from "@/lib/grove/adapters/launch";
 import { useCreateWorkspace } from "@/lib/grove/hooks";
-import { customModelError, newTitleSalt } from "@/lib/grove/adapters/launch";
+import { customModelError } from "@/lib/grove/adapters/launch";
 import { useLaunchControls, type LaunchState } from "@/components/grove/launch/launch-state";
 import {
   acknowledgeComposerDraft,
@@ -29,6 +30,7 @@ type RestorePrompt = (prompt: string) => void;
 type RestoreDraft = (prompt: string, attachments: readonly StagedAttachment[]) => void;
 type AcknowledgeDraft = () => void;
 type RejectDraft = () => void;
+type RecordRefusal = (request: string, problem: LaunchProblemView) => void;
 
 /** Submit a launch prompt through the single create request builder. */
 export async function submitLaunch(
@@ -41,12 +43,10 @@ export async function submitLaunch(
   restoreDraft?: RestoreDraft,
   acknowledgeDraft?: AcknowledgeDraft,
   rejectDraft?: RejectDraft,
-  titleSalt = "",
+  recordRefusal?: RecordRefusal,
 ): Promise<void> {
   try {
-    const workspace = await createWorkspace(
-      buildCreateRequest(state, prompt, attachments, titleSalt),
-    );
+    const workspace = await createWorkspace(buildCreateRequest(state, prompt, attachments));
     acknowledgeDraft?.();
     navigate(`/w/${workspace.id}`);
   } catch (error) {
@@ -56,15 +56,22 @@ export async function submitLaunch(
     // one thing the user would retry with is gone.
     restorePrompt(prompt);
     restoreDraft?.(prompt, attachments);
+    // A launch refusal names the request field it is about; hand it to the
+    // draft so the owning control says it, as a preview problem would.
+    if (error instanceof GroveProtocolError && error.field !== null) {
+      const key = previewKey(state);
+      if (key !== null) {
+        recordRefusal?.(key, { field: error.field, error: error.code, message: error.message });
+      }
+    }
     throw error;
   }
 }
 
 export interface LaunchSubmit {
   readonly prompt: string;
-  /** This draft's default-title salt: the preview and the submit read the same one. */
-  readonly titleSalt: string;
-  readonly setPrompt: (prompt: string) => void;
+  /** The state setter itself: dictation appends to the brief as it stands when the transcript lands. */
+  readonly setPrompt: Dispatch<SetStateAction<string>>;
   readonly submit: () => void;
   readonly canSubmit: boolean;
   readonly error: Error | null;
@@ -131,7 +138,6 @@ export function useLaunchSubmit(): LaunchSubmit {
   const create = useCreateWorkspace();
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
-  const [titleSalt, setTitleSalt] = useState(newTitleSalt);
   // The staged files sit BESIDE the draft, for the draft's own reason: the
   // composer is moved between an inline mount and a dialog one, so anything
   // held inside it is destroyed the moment the writer expands the box.
@@ -166,10 +172,20 @@ export function useLaunchSubmit(): LaunchSubmit {
     onAcknowledged: () => setPendingReAdd([]),
   });
 
+  // The newest staged list and reminders, for a batch that FINISHES after
+  // another one started. Reading a batch's bytes is async, so two picks (or a
+  // drop and a paste) overlap, and a closure captured at the first pick would
+  // append onto the list as it was then, silently dropping the batch that
+  // landed in between. Measured on the deployed composer: three overlapping
+  // adds staged two files. The ref is written as each batch commits and
+  // re-synced from state on every render, so `remove` and `submit` reach it too.
+  const latest = useRef({ attachments, pendingReAdd });
+  latest.current = { attachments, pendingReAdd };
+
   const addFiles = useCallback(
     async (files: readonly File[]) => {
       setRefusal(null);
-      const tooMany = attachmentCountError(attachments.length + files.length);
+      const tooMany = attachmentCountError(latest.current.attachments.length + files.length);
       if (tooMany) {
         setRefusal(tooMany);
         return;
@@ -186,10 +202,11 @@ export function useLaunchSubmit(): LaunchSubmit {
         staged.push(await stageFile(file));
       }
       if (staged.length > 0) {
-        const nextAttachments = [...attachments, ...staged];
-        const nextPendingReAdd = pendingReAdd.filter(
+        const nextAttachments = [...latest.current.attachments, ...staged];
+        const nextPendingReAdd = latest.current.pendingReAdd.filter(
           (name) => !staged.some((attachment) => attachment.name === name),
         );
+        latest.current = { attachments: nextAttachments, pendingReAdd: nextPendingReAdd };
         setAttachments(nextAttachments);
         setPendingReAdd(nextPendingReAdd);
         // A re-added file dismisses its reminder immediately: without this, a
@@ -211,7 +228,7 @@ export function useLaunchSubmit(): LaunchSubmit {
         });
       }
     },
-    [attachments, pendingReAdd, prompt],
+    [prompt],
   );
 
   const removeFile = useCallback((index: number) => {
@@ -260,13 +277,9 @@ export function useLaunchSubmit(): LaunchSubmit {
           ),
         );
       },
-      () => {
-        acknowledgeComposerDraft("launch");
-        // A landed create spends this salt; the next draft gets its own name.
-        setTitleSalt(newTitleSalt());
-      },
+      () => acknowledgeComposerDraft("launch"),
       () => rejectComposerDraftSubmission("launch"),
-      titleSalt,
+      controls.refused,
     ).catch((error: unknown) => {
       // A refusal from the BUILDER never reaches the mutation, so it has no
       // other way onto the screen. A mutation failure is already in
@@ -274,16 +287,21 @@ export function useLaunchSubmit(): LaunchSubmit {
       // rejection.
       if (error instanceof RangeError) setRefusal(error.message);
     });
-  }, [attachments, controls, create.isPending, create.mutateAsync, prompt, router, titleSalt]);
+  }, [attachments, controls, create.isPending, create.mutateAsync, prompt, router]);
+
+  // The engine's open verdict on this draft is a refusal BEFORE any press:
+  // shown at form level on both surfaces (the always-visible fallback, since
+  // the pill that owns a field may be hidden or may not exist), and Send is
+  // disarmed until it is answered. Pills additionally mark their own field.
+  const blocking = launchVerdict(controls);
 
   return {
     prompt,
-    titleSalt,
     setPrompt,
     submit,
-    canSubmit: prompt.trim() !== "" && !create.isPending,
+    canSubmit: prompt.trim() !== "" && !create.isPending && blocking === null,
     error: create.error,
-    refusal,
+    refusal: refusal ?? blocking,
     isPending: create.isPending,
     attachments,
     pendingReAdd: outstanding,

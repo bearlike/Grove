@@ -65,6 +65,9 @@ class FakeNativeSteer:
     def set_model(self, state: WorkspaceState, model: str) -> None:
         self.models.append((str(state.agent_session_id), model))
 
+    def set_effort(self, state: WorkspaceState, effort: str) -> None:
+        del state, effort
+
     def answer(self, state: WorkspaceState, plan: str) -> None:
         self.answers.append((str(state.agent_session_id), plan))
 

@@ -9,6 +9,23 @@ Grove starts `codex app-server --stdio`, initializes its JSON RPC connection and
 - **Interrupt targets the current turn.** With no turn running there is nothing to cancel, so Grove tells you instead of sending a request that means nothing.
 - **Approvals come to you.** Grove answers supported command and file change approvals with accept or decline.
 
+## Where Grove reads and writes
+
+Codex keeps its sessions under its own home and takes MCP servers as config overrides. Grove reads the first and supplies the second, and writes nothing into either.
+
+```mermaid
+flowchart LR
+    G["Grove worker"] -->|"JSON-RPC on stdio"| C["codex app-server"]
+    G -->|"-c mcp_servers.grove"| C
+    C -->|"writes"| T["CODEX_HOME/sessions/rollout.jsonl"]
+    T -->|"read by thread id"| D["Grove daemon"]
+```
+
+- **The transcript is Codex's own rollout file**, dated under `$CODEX_HOME/sessions`, and Grove finds it by thread id and confirms it from the file's own session record.
+- **The Grove MCP server is a `-c mcp_servers.grove` override** at launch, which forwards only the mailbox and API variables it needs. Your `config.toml` is left alone.
+- **Codex has no hooks**, so status comes from the app server's own events and the rollout file.
+- **The first-turn brief and every reminder arrive as messages**, fenced as Grove instructions.
+
 ## What Codex does not offer
 
 - **Delivery is queued, not confirmed.** Codex acknowledges submission, which is weaker evidence than Claude Code's replay. Treat a sent message as handed over rather than read.

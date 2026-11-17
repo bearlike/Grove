@@ -13,31 +13,45 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from grove.core.config import validate_model_id
+from grove.core.config import AgentKind, validate_model_id
 from grove.core.contracts.attachments import AttachmentUploadRequest
-from grove.core.contracts.branch_plan import AutoBranch, BranchPlan
+from grove.core.contracts.branch_plan import BranchPlan
+from grove.core.contracts.project_identity import ProjectIdentity
 from grove.core.contracts.tickets import TicketSelector
-from grove.core.workspace import Runtime
+from grove.core.workspace import Runtime, WorkspaceTitle
 
 
 class CreateWorkspaceRequest(BaseModel):
     """Payload for ``WorkspaceManager.create()``.
 
-    ``branch_plan`` defaults to ``AutoBranch()`` so callers that don't
-    care about branch semantics get the historical Grove behavior for
-    free — Grove generates ``{prefix}{slug(title)}-{ts}`` off ``HEAD``.
+    Every launch field may be omitted, and omitted means "resolve it": the
+    engine's ``LaunchResolver`` answers it from the request, then the project's
+    saved defaults, then the user's, then Grove's built-in (the first agent, on
+    the host, in the current checkout). A client sends only what the person
+    chose, so a pre-filled form never pins today's config onto the workspace.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
 
-    agent_name: str = Field(min_length=1)
+    agent_name: str | None = Field(default=None, min_length=1)
     """The agent to spawn in the workspace's tmux ``agent`` window. Must
-    match an entry in the merged ``cfg.agents`` list at create time."""
+    match an entry in the merged ``cfg.agents`` list at create time. ``None``
+    takes the saved ``defaults.agent``, else the first configured agent."""
 
-    title: str = Field(min_length=1, max_length=120)
+    agent_kind: AgentKind | None = None
+    """The tool to run when the caller chose a tool but not its profile. The engine
+    picks that tool's profile for the resolved runtime (``defaults.profiles``).
+    Ignored when ``agent_name`` is set."""
+
+    title: str = Field(default_factory=WorkspaceTitle.generate, min_length=1, max_length=120)
     """Human-readable workspace label. Drives the slug used by the worktree
     path and the tmux session name. Independent of the branch — the
-    branch name comes from ``branch_plan``."""
+    branch name comes from ``branch_plan``.
+
+    Omit it and the engine names the workspace ``wk-`` plus six random hex
+    characters, never anything derived from the prompt. Every client relies on
+    this one rule, and the agent is asked to replace the name once it knows the
+    task."""
 
     description: str | None = Field(default=None, max_length=2000)
     """Optional free-form text the user attaches to the workspace.
@@ -61,17 +75,25 @@ class CreateWorkspaceRequest(BaseModel):
         # default is admitted under a looser rule than the wire's.
         return validate_model_id(value)
 
-    branch_plan: BranchPlan = Field(default_factory=AutoBranch)
+    effort: str | None = Field(default=None, pattern=r"^[a-z]+$", max_length=16)
+    """Optional reasoning effort for this create only, forwarded as the agent's own
+    flag (``claude --effort <level>`` / ``codex -c model_reasoning_effort=<level>``).
+    ``None`` (the default) leaves the tool's own default in place. The level must be
+    one ``AgentSummaryView.efforts`` lists for the agent; anything else is refused
+    rather than dropped. The launch flag is create-time only, like ``model``; a
+    running native session changes it through ``POST .../controls/effort``."""
+
+    branch_plan: BranchPlan | None = None
     """How the workspace's branch and placement are sourced. See
     ``grove.core.contracts.branch_plan`` for the five variants — four produce a
-    worktree, ``RootBranch`` runs in the repo root."""
+    worktree, ``RootBranch`` runs in the repo root. ``None`` takes the saved
+    ``defaults.branch_mode``, else ``RootBranch``: the current checkout, with no
+    new branch or worktree."""
 
     runtime: Runtime | None = None
-    """Where this workspace's agent runs: ``"container"`` or ``"host"``.
-    ``None`` — the default — takes the cascade's answer
-    (``GroveConfig.default_runtime``: the saved ``defaults.runtime`` if there is
-    one, else ``container.enabled``), so a caller that does not care never has
-    to know the field exists.
+    """Where this workspace's agent runs: ``"container"``, ``"host"`` or ``"remote"``.
+    ``None`` — the default — takes the saved ``defaults.runtime``, else the
+    host. Configuring containers makes them available; it never selects them.
 
     Explicit ``"host"`` is the escape hatch, and it is a *recorded choice*, not
     a fallback: it is never warned about and a later ``respawn`` never
@@ -81,6 +103,11 @@ class CreateWorkspaceRequest(BaseModel):
     Persisted (unlike ``skip_init`` / ``model``): the answer selects a launch
     backend and every lifecycle verb needs it, so it lives on the record rather
     than being re-derived from a config default that may later flip."""
+
+    remote_runtime: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.-]+$", max_length=64)
+    """Which ``runtimes.<name>`` block runs a ``"remote"`` workspace. ``None``
+    takes the only resident block when exactly one is configured and is refused
+    otherwise; ignored for any other ``runtime``."""
 
     brief: bool | None = None
     """Hand this workspace's agent Grove's first-turn brief — one short note
@@ -172,11 +199,53 @@ class CreateWorkspaceRequest(BaseModel):
     ``AgentSessionNotFound`` (404) before any side effect — never a
     fully-provisioned workspace stranded on a bogus id."""
 
+    fork_session: bool | None = None
+    """Start from a COPY of ``resume_session_id`` instead of continuing it.
+    ``None`` and ``False`` both continue it, and the published schema keeps the
+    field optional, like every other launch flag here.
+
+    The source session is left untouched and keeps running; the new workspace
+    gets its own session id (``claude --resume <id> --fork-session``, ``codex
+    fork <id>`` or Codex ``thread/fork``). Unlike a plain resume this works for a
+    native session too. An agent whose tool cannot fork (OpenCode, mewbo
+    or generic) is refused with ``ResumeNotSupported`` (422) before any side
+    effect. Requires ``resume_session_id``. Create-only, never persisted."""
+
+    @model_validator(mode="after")
+    def _fork_needs_source(self) -> CreateWorkspaceRequest:
+        """Refuse a fork that names no session to copy.
+
+        Returns:
+            The request, unchanged.
+
+        Raises:
+            ValueError: ``fork_session`` is set without ``resume_session_id``.
+        """
+        if self.fork_session and self.resume_session_id is None:
+            raise ValueError("fork_session requires resume_session_id")
+        return self
+
     repo_root: Path | None = None
     """Repository root for the workspace. ``None`` for in-process callers
     (the TUI knows its own repo). The HTTP daemon requires this set so it
     can dispatch to the right ``WorkspaceManager`` — its handler returns
     422 when missing."""
+
+    project: ProjectIdentity | None = None
+    """The project by its cross-node name instead of a path. A daemon resolves it
+    to its own path for that remote and ignores it when ``repo_root`` is set;
+    this is how a hub names a project to a node that has never seen the hub's
+    paths. A node with no such repository refuses with ``project_not_on_node``."""
+
+    selector: dict[str, str] | None = None
+    """Node labels the new workspace requires on a federation hub, for example
+    ``{"residency": "eu"}``. Unset uses the project's ``scheduling.require``.
+    Ignored by a daemon that is not a hub."""
+
+    node: str | None = Field(default=None, min_length=1, max_length=128)
+    """The connected node a federation hub must place this create on, by name.
+    Unset lets the hub pick among the nodes that fit. Ignored by a daemon that
+    is not a hub."""
 
     project_cwd: Path | None = None
     """Absolute path the agent session should start in — a nested *project*
@@ -187,6 +256,21 @@ class CreateWorkspaceRequest(BaseModel):
     git worktree and branch are **always** anchored at the repo root regardless
     — this field separates "where the agent works" from "where the worktree
     lives", letting several subdirs of one repo be distinct projects."""
+
+    @staticmethod
+    def runtime_fields(value: str | None) -> dict[str, Runtime | str]:
+        """The ``runtime``/``remote_runtime`` pair one user-facing runtime name means.
+
+        ``host`` and ``container`` name a runtime; any other value names a
+        resident ``runtimes.<name>`` block and implies ``remote``. Whether that
+        block exists is the engine's refusal, so a shell never guesses. ``None``
+        leaves both unset for the cascade.
+        """
+        if value is None:
+            return {}
+        if value in (Runtime.HOST, Runtime.CONTAINER):
+            return {"runtime": Runtime(value)}
+        return {"runtime": Runtime.REMOTE, "remote_runtime": value}
 
 
 class UpdateWorkspaceRequest(BaseModel):

@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from loguru import logger
@@ -182,9 +182,19 @@ class TicketWatcher(Watcher[TicketPredicate]):
         added = after.comment_count - before.comment_count
         if added <= 0:
             return ()
-        newest = provider.list_comments(predicate.ticket_id)[-added:]
+        newest = self._thread(provider, predicate)[-added:]
         own = self._own_login(provider)
         return tuple(comment for comment in newest if self._is_human(comment, own))
+
+    @staticmethod
+    def _thread(provider: TicketProvider, predicate: TicketPredicate) -> list[TicketComment]:
+        """Everything ``comment_count`` counts, oldest first: a pull request's reviews included."""
+        comments = provider.list_comments(predicate.ticket_id)
+        if predicate.ticket_kind != "pull_request":
+            return comments
+        reviews = provider.list_reviews(predicate.ticket_id)
+        undated = datetime.min.replace(tzinfo=UTC)
+        return sorted([*comments, *reviews], key=lambda entry: entry.created_at or undated)
 
     @staticmethod
     def _is_human(comment: TicketComment, own_login: str | None) -> bool:

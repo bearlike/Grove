@@ -97,6 +97,15 @@ theme:
     "Claude Code": simple-icons:claude
     Codex: simple-icons:openai
     OpenCode: simple-icons:opencode
+    Remote Runtimes: lucide:cloud
+    Cloud Run Job: lucide:cloud-cog
+    Container Apps Job: lucide:server-cog
+    OpenFaaS: lucide:zap
+    Lambda MicroVM: lucide:cpu
+    Cloud Run Service: lucide:layers
+    "Lambda & Azure Functions": lucide:boxes
+    OpenSandbox: lucide:box
+    Verifying a Runtime: lucide:clipboard-check
     "Init Scripts": lucide:play
     "Ticket Providers": lucide:ticket
     "Configuration Reference": lucide:file-json
@@ -108,11 +117,16 @@ theme:
     "Authentication & Pairing": lucide:key-round
     "MCP Server": lucide:plug
     "Issue Ops": lucide:message-square-code
+    Slack: simple-icons:slack
     "Daily Workflow": lucide:workflow
 
     Capabilities: lucide:sparkles
     "Workspace Lifecycle": lucide:git-branch
     "Containerized Agents": lucide:container
+    Runtimes: lucide:cloud
+    Federation: lucide:network
+    Reaping: lucide:recycle
+    Idle Suspension: lucide:moon
     "Branch Provenance": lucide:shield-check
     "Agent Activity & Sessions": lucide:activity
     "Watches & Callbacks": lucide:alarm-clock
@@ -123,6 +137,7 @@ theme:
     "Configuration Cascade": lucide:layers
     "Diagram Collaboration": lucide:shapes
     "Attachments & Annotation": lucide:paperclip
+    "Artifacts": lucide:file-symlink
     "Capability Catalog": lucide:list-checks
 
     Architecture: lucide:blocks
@@ -235,13 +250,19 @@ nav:
           - Authentication & Pairing: use-auth.md
           - MCP Server: use-mcp.md
           - Issue Ops: issue-ops.md
+          - Slack: features-slack.md
           - Daily Workflow: use-workflow.md
       - Capabilities:
           - Capability Catalog: features-catalog.md
           - Attachments & Annotation: features-attachments.md
           - Diagram Collaboration: features-diagrams.md
+          - Artifacts: features-artifacts.md
           - Workspace Lifecycle: features-workspace-lifecycle.md
           - Containerized Agents: features-containers.md
+          - Runtimes: features-runtimes.md
+          - Federation: features-federation.md
+          - Reaping: features-reaping.md
+          - Idle Suspension: features-idle.md
           - Branch Provenance: features-branch-provenance.md
           - Ticket Providers: features-ticket-providers.md
           - Agent Activity & Sessions: features-activity.md
@@ -256,6 +277,15 @@ nav:
           - Claude Code: agents-claude-code.md
           - Codex: agents-codex.md
           - OpenCode: agents-opencode.md
+      - Remote Runtimes:
+          - Cloud Run Job: runtimes-cloud-run-job.md
+          - Container Apps Job: runtimes-aca-job.md
+          - OpenFaaS: runtimes-openfaas.md
+          - Lambda MicroVM: runtimes-lambda-microvm.md
+          - Cloud Run Service: runtimes-cloud-run-service.md
+          - Lambda & Azure Functions: runtimes-lambda-azure-functions.md
+          - OpenSandbox: runtimes-opensandbox.md
+          - Verifying a Runtime: runtimes-verification.md
       - Configure:
           - Project Setup: configure-project.md
           - Init Scripts: configure-init-scripts.md

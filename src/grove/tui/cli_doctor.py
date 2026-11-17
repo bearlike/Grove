@@ -74,7 +74,11 @@ def doctor(
     """
     cfg = load_config(repo_root=GitRepo.detect_root(Path.cwd()))
     preflight = HostPreflight(cfg)
-    checks = preflight.all_checks()
+    # Doctor-only: the create probe reads `all_checks`, and a leak must never
+    # be a reason to refuse a create. Deferred import, as for `grove vacuum`.
+    from grove.core.reaper.store import ReaperStore  # noqa: PLC0415
+
+    checks = [*preflight.all_checks(), ReaperStore().doctor_row()]
     required = preflight.default_runtime_checks()
     overall_ok = all(c.ok for c in required)
 

@@ -1,4 +1,4 @@
-"""HTTP over the watch scheduler. Three verbs and no logic of its own.
+"""HTTP over the watch scheduler and the trigger dispatch. No logic of its own.
 
 The router is deliberately thinner than the mailbox's: registration, listing and
 cancellation are all engine decisions, so every handler here resolves auth,
@@ -15,11 +15,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from grove.core.contracts.watches import (
+    TriggerFireRequest,
+    TriggerFireView,
     WatchList,
     WatchRegistration,
     WatchView,
 )
-from grove.core.watches import WatchScheduler
+from grove.core.errors import GroveError
+from grove.core.watches import TriggerDispatch, WatchScheduler
 
 
 class WatchRouter:
@@ -29,9 +32,11 @@ class WatchRouter:
         self,
         *,
         scheduler: WatchScheduler,
+        dispatch: TriggerDispatch,
         auth_dep: Callable[..., object],
     ) -> None:
         self._scheduler = scheduler
+        self._dispatch = dispatch
         self._auth_dep = auth_dep
 
     def router(self) -> APIRouter:
@@ -65,6 +70,17 @@ class WatchRouter:
             if settled is None:
                 raise HTTPException(status_code=404, detail={"error": "watch_not_found"})
             return settled
+
+        # Under /watches because a manual trigger advances the same standing
+        # watch the scheduler does: one cap, one delivery road, one lock.
+        @router.post("/triggers/fire", response_model=TriggerFireView)
+        async def fire(request: TriggerFireRequest, _: object = auth) -> TriggerFireView:
+            try:
+                return await asyncio.to_thread(self._dispatch.fire, request)
+            except GroveError as exc:
+                raise HTTPException(
+                    status_code=422, detail={"error": "invalid_trigger_target", "message": str(exc)}
+                ) from exc
 
         return router
 

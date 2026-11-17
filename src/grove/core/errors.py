@@ -76,7 +76,21 @@ class DevcontainerError(ContainerError):
         self.container_id = container_id
 
 
-class ContainerRequired(GroveError):
+class InvalidLaunch(GroveError):
+    """A create's resolved launch choices cannot run together, refused before any side effect.
+
+    Carries the request ``field`` that owns the conflict and a stable ``error``
+    code, the same pair the launch preview reports, so a refused create and a
+    preview that warned about it name the same control. Maps to 422.
+    """
+
+    def __init__(self, message: str, *, field: str, error: str) -> None:
+        super().__init__(message)
+        self.field = field
+        self.error = error
+
+
+class ContainerRequired(InvalidLaunch):
     """A host runtime was asked for in a project whose config forbids it.
 
     The refusal arm of the runtime decision tree: a committed
@@ -84,11 +98,20 @@ class ContainerRequired(GroveError):
     (a capability *request*, always allowed), so honoring ``--runtime host``
     there would silently hand back the runtime the project declared unsafe.
     Raised before any side effect, like every other create-time validation.
+    An :class:`InvalidLaunch` so it crosses the wire as a 422 on ``runtime``,
+    the control a person changes to satisfy it, exactly as the preview names it.
     """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, field="runtime", error="container_required")
 
 
 class WorkspaceNotFound(GroveError):
     """Lookup by id did not match any persisted workspace."""
+
+
+class ProjectNotOnNode(GroveError):
+    """No repository on this node has the requested project identity."""
 
 
 class WorkspaceStateError(GroveError):
@@ -101,6 +124,22 @@ class DiagramConflict(GroveError):
 
 class DiagramUnavailable(GroveError):
     """The persisted diagram descriptor or its authoritative file is unavailable."""
+
+
+class ArtifactInvalid(GroveError):
+    """An artifact target cannot be attached or read as asked.
+
+    A link that is not http(s), a path outside the allowed directories, a
+    file over the size limit. The caller can fix the request.
+    """
+
+
+class ArtifactUnavailable(GroveError):
+    """An attached artifact cannot be served right now.
+
+    No artifact with that id, or its file is gone or has left the allowed
+    directories since it was attached.
+    """
 
 
 class AgentSessionNotFound(GroveError):
@@ -229,6 +268,16 @@ class TicketNotAttached(GroveError):
     """
 
 
+class ProjectTargetRefused(GroveError):
+    """An add-project request names a target Grove will not create, clone or adopt.
+
+    Raised before anything is written: an existing directory for create/clone,
+    a name that is not one path segment, a relative location, or an adopt path
+    that is not a git repository. The message names the target and why, so a
+    form can show it inline beside the field.
+    """
+
+
 # ─── watch errors (raised by grove.core.watches) ────────────────────────────
 
 
@@ -335,7 +384,16 @@ class QuestionAnswerInvalid(GroveError):
     """
 
 
-# ─── resume validation (raised by WorkspaceManager.create) ──────────────────
+# ─── create validation (raised by WorkspaceManager.create) ──────────────────
+
+
+class EffortNotSupported(GroveError):
+    """A create named a reasoning ``effort`` the chosen agent cannot launch with.
+
+    Either the agent kind has no launch-time effort setting at all, or the level
+    is not one its adapter lists. Refused before any side effect rather than
+    dropped, because a dropped effort reads as applied. Maps to 422.
+    """
 
 
 class ResumeNotSupported(GroveError):
@@ -399,6 +457,10 @@ class AuthError(GroveError):
 
 class AuthInvalidToken(AuthError):
     """Bearer token missing, malformed, or not recognized by the store."""
+
+
+class AuthModeConflict(AuthError):
+    """Pairing a device is off because this daemon is in a federation, where only people sign in."""
 
 
 class PairingNotFound(AuthError):

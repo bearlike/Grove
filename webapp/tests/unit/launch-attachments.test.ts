@@ -23,9 +23,12 @@ const values: LaunchValues = {
   projectCwd: null,
   selectedProjectCwd: "/repos/grove",
   agentName: "claude",
+  agentKind: null,
   model: null,
   customModel: false,
+  effort: null,
   runtime: null,
+  node: null,
   brief: null,
   native: null,
   branchMode: "auto",
@@ -39,7 +42,7 @@ const values: LaunchValues = {
   ticket: null,
 };
 
-const state: LaunchState = { values, touched: new Set() };
+const state: LaunchState = { values, touched: new Set(), seededRepo: values.repoRoot };
 
 function staged(name: string, size = 12): StagedAttachment {
   return { name, size, content_base64: "Zm9v" };

@@ -33,7 +33,7 @@ make webapp-gate                      # typecheck, drift, styling, tests
 `GROVE_DAEMON_URL` points at the daemon (default `http://127.0.0.1:7421`). There is no model provider key: the browser never talks to an LLM, only to the daemon.
 
 > [!TIP]
-> In production `grove web` serves a **pre-built** bundle, so a merge is invisible until you rebuild and restart; `./reinstall.sh` does both. `make webapp-bundle` stages the new bundle beside the live one and swaps it in only on success. Building `.next` under a running `next start` still breaks that server: the live process keeps the old manifest and every dynamic route 500s with `ChunkLoadError`.
+> In production `grove web` serves a **pre-built** bundle, so a merge is invisible until you rebuild and restart; `./tools/reinstall.sh` does both. `make webapp-bundle` stages the new bundle beside the live one and swaps it in only on success. Building `.next` under a running `next start` still breaks that server: the live process keeps the old manifest and every dynamic route 500s with `ChunkLoadError`.
 
 ---
 

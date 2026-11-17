@@ -102,7 +102,7 @@ def test_channel_client_needs_a_recorded_session() -> None:
         native.ChannelSteerClient().send_message(_state(None), "hi")
 
 
-@pytest.mark.parametrize("op", ["interrupt", "set_model"])
+@pytest.mark.parametrize("op", ["interrupt", "set_model", "set_effort"])
 def test_channel_client_refuses_controls_loudly(op: str) -> None:
     """A channel carries text only; a control that silently did nothing would read
     as a working control, so the refusal is the typed 501 the daemon maps."""
@@ -110,6 +110,8 @@ def test_channel_client_refuses_controls_loudly(op: str) -> None:
     with pytest.raises(SteeringUnsupported):
         if op == "interrupt":
             client.interrupt(_state())
+        elif op == "set_effort":
+            client.set_effort(_state(), "high")
         else:
             client.set_model(_state(), "opus")
 
@@ -141,6 +143,7 @@ def local_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
         ("send_message", "message", {"text": "hi"}),
         ("interrupt", "interrupt", None),
         ("set_model", "controls/model", {"model": "opus"}),
+        ("set_effort", "controls/effort", {"effort": "high"}),
     ],
 )
 def test_daemon_client_posts_the_matching_steer_route(
@@ -159,6 +162,8 @@ def test_daemon_client_posts_the_matching_steer_route(
         client.send_message(state, "hi")
     elif op == "interrupt":
         client.interrupt(state)
+    elif op == "set_effort":
+        client.set_effort(state, "high")
     else:
         client.set_model(state, "opus")
     assert captured["url"] == f"http://127.0.0.1:7421/workspaces/{state.id}/{verb}"

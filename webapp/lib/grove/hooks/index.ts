@@ -13,7 +13,10 @@ export { usePublicDiff, usePublicTurns, usePublicWorkspace } from "./public";
 export { groveKeys } from "./keys";
 export { ToolBodyProvider, useToolBody, useToolBodySource } from "./tool-body";
 export type { ToolBodySource } from "./tool-body";
+export { useArtifactContent, useAttachArtifact, useDetachArtifact } from "./artifacts";
 export { useGallery, useGalleryDocument, useGalleryPreview, useSaveGalleryPreview } from "./gallery";
+export { useAddProject, useProjectCandidates } from "./projects";
+export type { AddProjectRequest } from "./projects";
 
 export {
   useAgents,
@@ -32,6 +35,7 @@ export {
   useSessionTurns,
   useTicketProviders,
   useTickets,
+  useMe,
   useWhoami,
   useWorkspace,
   useWorkspaceCommits,
@@ -71,12 +75,14 @@ export {
   useSendMessage,
   useSaveSharePolicy,
   useSendKey,
+  useSwitchEffort,
   useSwitchModel,
+  useBulkWorkspaceActions,
   useUpdateWorkspace,
   useWorkspaceActions,
   withOptimisticSend,
 } from "./mutations";
-export type { AnswerQuestionInput, SendMessageInput, WorkspaceActions } from "./mutations";
+export type { AnswerQuestionInput, BulkOutcome, BulkVerb, SendMessageInput, WorkspaceActions } from "./mutations";
 
 export {
   backstopInterval,

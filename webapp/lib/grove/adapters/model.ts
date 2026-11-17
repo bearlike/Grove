@@ -97,8 +97,16 @@ export function contextWindowLabel(tokens: number | null | undefined): string | 
  */
 const MODEL_MARKS: readonly (readonly [RegExp, string])[] = [
   [/claude|opus|sonnet|haiku|fable|mythos/i, "logos:claude-icon"],
-  [/gpt|codex|openai|o[1-9]-/i, "simple-icons:openai"],
+  // `sol`/`terra`/`luna`/`astra` are shorthand aliases for the GPT line
+  // (`gpt-6.1-sol`, `anthropic-luna`), so they match as whole words only.
+  [
+    /gpt|codex|openai|whisper|text-embedding|o[1-9]-|(?:^|[-/])(?:sol|terra|luna|astra)(?:$|[-[])/i,
+    "simple-icons:openai",
+  ],
   [/gemini|gemma/i, "logos:google-gemini-icon"],
+  [/nemotron|parakeet|nvidia/i, "selfhst:nvidia"],
+  [/minimax/i, "logos:minimax"],
+  [/deepgram|nova-3/i, "simple-icons:deepgram"],
   [/deepseek/i, "logos:deepseek-icon"],
   [/qwen/i, "logos:qwen-icon"],
   [/glm|zhipu/i, "thesvg-color:zhipu"],
@@ -107,7 +115,29 @@ const MODEL_MARKS: readonly (readonly [RegExp, string])[] = [
   [/grok/i, "logos:grok"],
 ];
 
-/** The icon slug for a model id, or `null` when no family is recognised. */
+export type ModelTier = "small" | "medium" | "large" | "xlarge";
+
+/**
+ * A gateway's ROUTING TIER, when the id is one: `small`, `medium`, `large` or
+ * `xlarge` as the whole family word (`anthropic-large[1m]`, `xlarge`). Such
+ * an id proxies across providers within one model class, so it has no vendor
+ * to borrow a mark from — the tier is its identity. A size word that merely
+ * qualifies a real model (`whisper-large-v3`, `qwen3.8-max`) is not a tier:
+ * the word must be the LAST family token before any `[…]` suffix, with
+ * nothing but a namespace before it.
+ */
+export function modelTier(id: string): ModelTier | null {
+  const match = /^(?:[a-z0-9]+-)?(small|medium|large|xlarge)(?:\[[^\]]*\])?$/i.exec(id);
+  return match ? (match[1]!.toLowerCase() as ModelTier) : null;
+}
+
+/**
+ * The icon slug for a model id, or `null` when no family is recognised.
+ *
+ * `null` is the honest answer for a gateway routing group (`fast-group`) or a
+ * self-hosted model with no vendor mark — borrowing a nearby logo would claim
+ * a provenance the id does not carry.
+ */
 export function modelIconSlug(id: string): string | null {
   return MODEL_MARKS.find(([pattern]) => pattern.test(id))?.[1] ?? null;
 }

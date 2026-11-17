@@ -218,6 +218,11 @@ class LaunchSpec:
     propagates the in-container exit code, so the record lands where the read
     side can see it without any mount. Only a backend that hosts a shell can
     honour this — see :class:`AgentExit`."""
+    tmux_socket: str = ""
+    """The workspace's private tmux server (``WorkspaceState.tmux_socket``).
+    Empty is the shared default server. Only :class:`TmuxLaunchBackend` reads
+    it; a container's pane-hosting arm keeps the default, because its record
+    persists no socket."""
 
 
 def _exit_suffix(spec: LaunchSpec) -> str:
@@ -330,15 +335,18 @@ class TmuxLaunchBackend(HostNamespaceBackend):
     provides_pane: ClassVar[bool] = True
 
     def launch(self, spec: LaunchSpec) -> None:
+        server = tmux.TmuxServer(socket=spec.tmux_socket)
         tmux.create_session(
             spec.session_name,
             cwd=spec.cwd,
             history_limit=spec.cfg.tmux.history_limit,
             size=spec.cfg.tmux.detached_size,
+            server=server,
         )
         tmux.build_workspace_layout(
             spec.session_name,
             cfg=spec.cfg,
+            server=server,
             # The window root is the AGENT cwd, not the worktree root — the two
             # differ for a nested project. The spec's `worktree` and `cwd`
             # fields are split apart precisely for the container backend's

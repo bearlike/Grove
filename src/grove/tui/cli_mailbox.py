@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -24,11 +25,16 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from grove.client import BackendConfig, GroveClient, GroveClientError
+from grove.core.contracts.fleet import MailboxBatchReceipt, MailboxBatchRequest
 from grove.core.contracts.mailboxes import MailboxAddress, MailboxSendRequest
 from grove.core.phase import PhaseFile
 
 DEFAULT_DAEMON_URL = "http://127.0.0.1:7421"
 _BODY_FILE_OPTION = typer.Option(None, "--body-file", help="Read the body from a file, or '-'.")
+# Module-level for ruff B008: a list-typed option is not an exempted primitive.
+_BATCH_TO_OPTION = typer.Option(
+    ..., "--to", help="Recipient workspace id. Repeat for each recipient."
+)
 mailbox_app = typer.Typer(
     name="mailbox",
     help=(
@@ -44,6 +50,8 @@ def mailbox_client() -> GroveClient:
     return GroveClient(
         BackendConfig(
             label="mailbox",
+            # A container agent carries its workspace credential; a host one mints.
+            daemon_token=os.environ.get("GROVE_API_TOKEN") or None,
             daemon_url=os.environ.get("GROVE_MAILBOX_URL", DEFAULT_DAEMON_URL),
             daemon_socket=(
                 Path(socket_path)
@@ -140,6 +148,45 @@ def send(
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(receipt.model_dump_json(indent=2))
+
+
+@mailbox_app.command("batch")
+def batch(
+    *,
+    to: list[str] = _BATCH_TO_OPTION,
+    subject: str = typer.Option(..., "--subject", help="What the message is about."),
+    sender: str | None = typer.Option(
+        None, "--from", help="Sender workspace id. Defaults to this workspace."
+    ),
+    body: str | None = typer.Option(None, "--body"),
+    body_file: Path | None = _BODY_FILE_OPTION,
+    request_id: str | None = typer.Option(
+        None,
+        "--request-id",
+        help="Idempotency key. Reuse it with the same payload to retry safely; "
+        "default is a fresh one per call.",
+    ),
+) -> None:
+    """Send one message to several agents; prints one receipt line per recipient."""
+    try:
+        request = MailboxBatchRequest(
+            request_id=request_id or uuid.uuid4().hex,
+            sender=MailboxAddress(workspace_id=sender or _own_workspace_id()),
+            recipients=[MailboxAddress(workspace_id=item) for item in to],
+            subject=subject,
+            body=_body(body, body_file),
+        )
+        result = _call(lambda client: client.send_mailbox_batch(request))
+    except (GroveClientError, OSError, ValidationError, ValueError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    assert isinstance(result, MailboxBatchReceipt)
+    if result.replayed:
+        typer.echo(f"request {result.request_id} replayed (recorded receipts)")
+    for receipt in result.receipts:
+        reason = f" ({receipt.reason})" if receipt.reason else ""
+        who = receipt.recipient.workspace_id if receipt.recipient else "?"
+        typer.echo(f"{who}\t{receipt.stage}{reason}")
 
 
 __all__ = ["mailbox_app"]

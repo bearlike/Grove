@@ -47,11 +47,13 @@ export interface WorkspaceActions {
   >;
   resume: UseMutationResult<WorkspaceStateView, Error, void>;
   respawn: UseMutationResult<WorkspaceStateView, Error, void>;
+  /** Resolves to the NEW workspace, not this one. */
+  fork: UseMutationResult<WorkspaceStateView, Error, void>;
   kill: UseMutationResult<void, Error, { deleteBranch: boolean | null }>;
 }
 
 /**
- * The four lifecycle verbs, bundled because they refresh identically.
+ * The lifecycle verbs, bundled because they refresh identically.
  *
  * `kill`'s `deleteBranch` is required and nullable rather than defaulted: null
  * means "let the engine resolve it from branch provenance", which is a
@@ -78,12 +80,69 @@ export function useWorkspaceActions(id: string): WorkspaceActions {
       mutationFn: () => groveClient.respawnWorkspace(id),
       onSuccess: settle,
     }),
+    fork: useMutation({
+      mutationFn: () => groveClient.forkWorkspace(id),
+      onSuccess: settle,
+    }),
     kill: useMutation({
       mutationFn: ({ deleteBranch }: { deleteBranch: boolean | null }) =>
         groveClient.killWorkspace(id, deleteBranch),
       onSuccess: settle,
     }),
   };
+}
+
+export type BulkVerb = "pause" | "resume" | "kill";
+
+export interface BulkOutcome {
+  readonly verb: BulkVerb;
+  readonly succeeded: readonly string[];
+  readonly failed: readonly { readonly id: string; readonly error: Error }[];
+}
+
+/**
+ * One lifecycle verb over many workspaces, settled per id.
+ *
+ * The requests fan out together and the outcome names every id that failed
+ * rather than throwing on the first: a fleet-wide pause that stopped at
+ * workspace three would leave the reader counting which rows it reached. A
+ * partial failure is therefore a RESOLVED mutation whose `failed` list is
+ * non-empty, and the caller states both halves. The global error toast is
+ * opted out for that reason — it would announce one id's message for a batch.
+ *
+ * `kill` sends `deleteBranch: null` so the engine resolves each workspace's
+ * branch from its own provenance, the same answer the single-workspace dialog
+ * opens on. A bulk verb never asks a per-row question.
+ */
+export function useBulkWorkspaceActions(): UseMutationResult<
+  BulkOutcome,
+  Error,
+  { verb: BulkVerb; ids: readonly string[] }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    meta: { toast: false },
+    mutationFn: async ({ verb, ids }) => {
+      const call = (id: string): Promise<unknown> =>
+        verb === "pause"
+          ? groveClient.pauseWorkspace(id, false)
+          : verb === "resume"
+            ? groveClient.resumeWorkspace(id)
+            : groveClient.killWorkspace(id, null);
+      const settled = await Promise.allSettled(ids.map(call));
+      const succeeded: string[] = [];
+      const failed: { id: string; error: Error }[] = [];
+      settled.forEach((result, index) => {
+        const id = ids[index]!;
+        if (result.status === "fulfilled") succeeded.push(id);
+        else failed.push({ id, error: result.reason instanceof Error ? result.reason : new Error(String(result.reason)) });
+      });
+      return { verb, succeeded, failed };
+    },
+    onSuccess: ({ succeeded }) => {
+      for (const id of succeeded) invalidateWorkspace(queryClient, id);
+    },
+  });
 }
 
 export function useCreateWorkspace(): UseMutationResult<
@@ -299,6 +358,23 @@ export function useInvokeControl(
     mutationFn: (name: string) => groveClient.invokeControl(workspaceId, name),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: groveKeys.activity });
+    },
+  });
+}
+
+/** Change the running native session's reasoning effort. Unlike the model id the
+ * level is validated by the engine against the agent's list, so a refusal here
+ * is real; a success only means the request reached the session's owner. */
+export function useSwitchEffort(
+  workspaceId: string,
+): UseMutationResult<void, Error, string> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (effort: string) => groveClient.switchEffort(workspaceId, effort),
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: groveKeys.controls(workspaceId),
+      });
     },
   });
 }

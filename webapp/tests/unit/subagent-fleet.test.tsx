@@ -242,8 +242,10 @@ describe("SubagentFleetPanel", () => {
     expect(html.indexOf("running-one")).toBeLessThan(html.indexOf("finished-one"));
   });
 
-  it("states an empty or unsupported fleet rather than treating either as a failure", () => {
-    expect(render(fleet([]))).toContain('data-testid="subagent-fleet-empty"');
+  it("renders NOTHING for an empty fleet, and states an unsupported one", () => {
+    // "No subagents yet" was chrome narrating an absence on every session
+    // that never spawned one; the card appears when there is a roster to show.
+    expect(render(fleet([]))).toBe("");
     expect(render({ ...described, supported: false })).toContain("Subagents unavailable");
   });
 

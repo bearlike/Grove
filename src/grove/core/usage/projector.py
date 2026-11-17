@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -19,10 +20,11 @@ from typing import Any, Protocol, cast
 from loguru import logger
 
 from grove.core.agents import AgentMessage, all_adapters, get_adapter
-from grove.core.agents.model import AgentActivity, SessionRef
+from grove.core.agents.model import AgentActivity, FileEdit, SessionRef
 from grove.core.agents.shell import SHELL_TOOL_NAMES, ShellCall
 from grove.core.config import AgentSpec, GroveConfig
 from grove.core.contracts.usage import UsageProvider
+from grove.core.errors import ConfigError
 from grove.core.git import detect_root
 from grove.core.manager import WorkspaceManager
 from grove.core.registry import RepoRegistry
@@ -340,7 +342,13 @@ class UsageProjector:
                 logger.debug("usage profile discovery skipped {}: {}", root, type(exc).__name__)
         for spec in specs:
             var = TranscriptContext.CONFIG_DIR_ENV.get(spec.kind)
-            raw = spec.env.get(var, "") if var else ""
+            try:
+                env = spec.launch_env(os.environ)
+            except ConfigError:
+                # A reference only that agent's own launch can supply: its
+                # persisted `TranscriptContext` above already names the root.
+                env = {}
+            raw = env.get(var, "") if var else ""
             for value in raw.split(",") if spec.kind == "claude_code" else (raw,):
                 if value.strip():
                     roots.add((spec.kind, Path(value.strip()).expanduser().resolve()))
@@ -578,6 +586,8 @@ def _same_fingerprints(rows: Iterable[Any], current: dict[Path, FileFingerprint]
 
 
 def _profile_root(kind: str, transcript: Path) -> Path:
+    # The directory one level above each provider's per-session store: a profile
+    # is the whole config home, never one session's own folder.
     marker = "projects" if kind == "claude_code" else "sessions" if kind == "codex" else None
     if marker is not None:
         for parent in transcript.parents:
@@ -662,7 +672,7 @@ def _session_row(
         str(target)
         for m in messages
         for b in m.content
-        if b.type == "tool_use" and b.tool_name in {"Edit", "Write", "MultiEdit", "apply_patch"}
+        if b.type == "tool_use" and FileEdit.recognizes(b.tool_name or "")
         for target in _tool_targets(b.tool_input)
     }
     start = min(timestamps) if timestamps else ref.birth
@@ -830,11 +840,7 @@ def _event_rows(
                     calls[block.tool_use_id] = _ToolCall(
                         tool_name, target, message.timestamp, background
                     )
-                event_kind = (
-                    "file_edit"
-                    if tool_name in {"Edit", "Write", "MultiEdit", "apply_patch"}
-                    else "tool_call"
-                )
+                event_kind = "file_edit" if FileEdit.recognizes(tool_name or "") else "tool_call"
             else:
                 event_kind = "tool_result"
                 call = calls.get(block.tool_use_id or "")

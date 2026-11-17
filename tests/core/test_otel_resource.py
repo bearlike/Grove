@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from grove import __version__
 from grove.core.config import AgentSpec
 from grove.core.contracts.tickets import TicketRef
@@ -48,7 +50,8 @@ def _parse(raw: str) -> dict[str, str]:
     return dict(part.split("=", 1) for part in raw.split(","))
 
 
-def test_composes_every_backed_attribute() -> None:
+def test_composes_every_backed_attribute(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("grove.core.otel_resource._NODE_NAME", "node-a")
     state = _state(agent_session_id="sess-123", ticket_refs=[TicketRef(provider="gitea", id="42")])
     result = compose_resource_attributes(
         state, _agent(), existing=None, agent_version="2.1.226 (Claude Code)"
@@ -72,6 +75,8 @@ def test_composes_every_backed_attribute() -> None:
         "grove.runtime": "host",
         "grove.ticket.ids": "42",
         "grove.session.id": "grove-fix-auth",
+        "grove.principal.subject": "local",
+        "grove.node.name": "node-a",
         "langfuse.session.id": "sess-123",
     }
 
@@ -134,6 +139,10 @@ def test_empty_string_fields_are_omitted() -> None:
         # present whatever the workspace does or doesn't carry.
         "grove.orchestrator.name",
         "grove.orchestrator.version",
+        # Who created it (a record field with a default) and which daemon owns
+        # it (a host fact): neither depends on the workspace's optional fields.
+        "grove.principal.subject",
+        "grove.node.name",
     }
 
 

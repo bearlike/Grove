@@ -19,7 +19,7 @@ import httpx
 import pytest
 
 from grove.core.auth import SessionStore
-from grove.core.native_worker import _BOOT_PROMPT, _PEER_PREAMBLE
+from tests.native_fake import fake_provider_source
 
 pytestmark = [
     pytest.mark.integration,
@@ -81,46 +81,7 @@ def native_sandbox(tmp_path: Path, tmp_repo: Path) -> Iterator[tuple[dict[str, s
     config.mkdir()
     home.mkdir()
     provider_log = tmp_path / "provider.json"
-    fake = (
-        "import json,os,sys\n"
-        "log=os.environ['FAKE_PROVIDER_LOG']\n"
-        "data={'pid':os.getpid(),'session':'6c44c19e-8f97-47fb-86e1-e82b6bc00cd7','initial':0,'followups':[]}\n"
-        "pending=None\n"
-        "def save():\n"
-        " with open(log+'.tmp','w') as out: json.dump(data,out)\n"
-        " os.replace(log+'.tmp',log)\n"
-        "save()\n"
-        "print(json.dumps({'type':'system','subtype':'init','session_id':data['session']}),flush=True)\n"
-        "for raw in sys.stdin:\n"
-        " frame=json.loads(raw)\n"
-        " if frame.get('type') == 'control_request':\n"
-        "  if frame['request']['subtype'] == 'interrupt':\n"
-        "   data['interrupted']=True\n"
-        "   save()\n"
-        "   response={'subtype':'success','request_id':frame['request_id'],'response':{}}\n"
-        "   print(json.dumps({'type':'control_response','response':response}),flush=True)\n"
-        "   if pending: print(json.dumps(pending),flush=True)\n"
-        "   pending=None\n"
-        "  continue\n"
-        " if frame.get('type') != 'user': continue\n"
-        " text=frame['message']['content']\n"
-        # Both markers are INJECTED from the worker's own constants rather than
-        # retyped: this fake distinguishes the boot turn from the initial task
-        # by their text, so a reworded prompt would otherwise desynchronise it
-        # silently and every assertion here would time out naming no cause.
-        f" if {_BOOT_PROMPT[:40]!r} in text: continue\n"
-        f" if {_PEER_PREAMBLE[:40]!r} in text: data['initial']+=1\n"
-        " else: data['followups'].append(text)\n"
-        " save()\n"
-        " reply={'type':'user','uuid':frame.get('uuid'),'message':frame['message']}\n"
-        " if text == 'oversized':\n"
-        "  large={'type':'assistant','message':{'content':[{'type':'text','text':'x'*70000}]}}\n"
-        "  print(json.dumps(large),flush=True)\n"
-        " if text == 'hold replay':\n"
-        "  pending=reply\n"
-        "  continue\n"
-        " print(json.dumps(reply),flush=True)\n"
-    )
+    fake = fake_provider_source()
     config_dir = config / "grove"
     config_dir.mkdir()
     config_dir.joinpath("config.json").write_text(

@@ -27,6 +27,7 @@ import pytest
 from grove.client import BackendConfig, GroveClient, ProtocolError
 from grove.core import tmux as tmux_mod
 from grove.core.agents.claude_code import _ClaudeHome
+from grove.core.contracts.branch_plan import AutoBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 
 pytestmark = [
@@ -244,7 +245,10 @@ async def test_get_workspace(client: GroveClient, tmp_repo: Path) -> None:
 
 
 async def test_pause_then_resume(client: GroveClient, tmp_repo: Path) -> None:
-    req = CreateWorkspaceRequest(agent_name="claude", title="t3", repo_root=tmp_repo)
+    # A spawned daemon sees no conftest pin, and only a worktree can pause.
+    req = CreateWorkspaceRequest(
+        agent_name="claude", title="t3", repo_root=tmp_repo, branch_plan=AutoBranch()
+    )
     created = await client.create_workspace(req)
     try:
         paused = await client.pause(created.id)

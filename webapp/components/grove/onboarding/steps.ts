@@ -93,9 +93,9 @@ export function buildSteps(context: TourContext): readonly OnboardingStep[] {
     {
       selector: '[data-pill="branch"]',
       route: "landing",
-      title: "Branch and worktree",
+      title: "Placement",
       body:
-        "A fresh branch off HEAD, an existing branch, or the repo root itself with no worktree at all — the dropdown lists what the repository has.",
+        "Work in the current checkout with no new branch, or in an isolated worktree on a new, existing or remote branch.",
     },
     {
       selector: '[data-pill="runtime"]',

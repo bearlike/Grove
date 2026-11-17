@@ -74,7 +74,12 @@ from grove.core.devcontainer import (
     UpResult,
 )
 from grove.core.env_source import EnvSource
-from grove.core.errors import ContainerError, ContainerRequired, DevcontainerError
+from grove.core.errors import (
+    ContainerError,
+    ContainerRequired,
+    DevcontainerError,
+    InvalidLaunch,
+)
 from grove.core.git import GitRepo
 from grove.core.preflight import HostPreflight
 from grove.core.workspace import Runtime
@@ -107,6 +112,14 @@ class ProvisionFailed(DevcontainerError):
     def __init__(self, message: str, *, container: ContainerRuntimeState) -> None:
         super().__init__(message, container_id=container.container_id or None)
         self.container = container
+
+
+class _Probe:
+    """Sentinel: ask the preflight live rather than use a reading the caller holds."""
+
+
+#: Pass to :meth:`RuntimeResolver.resolve` (the default) to probe readiness live.
+PROBE = _Probe()
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,34 +197,61 @@ class RuntimeResolver:
     def cli(self) -> DevcontainerCli:
         return self._cli
 
-    def resolve(self, *, requested: Runtime | None, repo_root: Path) -> RuntimeDecision:
-        """Walk the D5 tree for one create. Raises only on arm 2 (the refusal)."""
-        # `default_runtime`, never `container.enabled`: the saved
-        # `defaults.runtime` outranks the section default, and reading the
-        # section directly is what let a create silently contradict the runtime
-        # every create form displayed.
-        wants_container = (
-            self._cfg.default_runtime == "container"
-            if requested is None
-            else requested is Runtime.CONTAINER
-        )
-        config_path = self.project_config(repo_root)
+    def resolve(
+        self,
+        *,
+        requested: Runtime,
+        repo_root: Path,
+        explicit: bool = True,
+        unavailable: str | None | _Probe = PROBE,
+        host_refused: str | None | _Probe = PROBE,
+    ) -> RuntimeDecision:
+        """Walk the D5 tree for one runtime already chosen. Raises on arm 2.
 
-        if not wants_container:
+        Which runtime a create gets is ``LaunchResolver``'s answer; this tree
+        only decides whether that runtime can run here and what it degrades
+        to. ``explicit`` is whether a request named it: an explicit container
+        that is unavailable is refused, while an inherited one (a saved
+        default, or respawn re-trying a container a workspace fell back from)
+        degrades to the host with the reason persisted.
+
+        A remote request is answered as asked: which ``runtimes.<name>`` block
+        runs it is the manager's question, and no arm here may downgrade it.
+
+        ``unavailable`` (container readiness) and ``host_refused`` (the arm-2
+        refusal a project's ``requires_container`` raises, as its sentence) are
+        the readings to decide against. A create leaves both to probe live, so
+        it always revalidates; the launch preview hands in recently cached
+        readings, so a per-keystroke preview runs no subprocess and still raises
+        the SAME refusal a create would. A preview is therefore "validation
+        passed", never a promise the create cannot still refuse.
+        """
+        if requested is Runtime.REMOTE:
+            return RuntimeDecision(runtime=Runtime.REMOTE)
+
+        if requested is not Runtime.CONTAINER:
             # Arm 2 before arm 1: a committed layer may RAISE the floor, and a
             # refusal is better than silently handing back the host runtime the
             # project has declared unsafe. The read is Docker-free and only
             # happens when the answer could change (a config exists, a CLI can
             # parse it) — never a reason to fail an ordinary host create.
-            self._assert_host_allowed(repo_root, config_path)
-            # Arm 1: an explicit choice is not a fallback, so no reason, no
+            if isinstance(host_refused, _Probe):
+                host_refused = self.host_refusal(repo_root)
+            if host_refused is not None:
+                raise ContainerRequired(host_refused)
+            # Arm 1: a host choice is not a fallback, so no reason, no
             # warning, and `respawn` will never auto-promote it.
             return RuntimeDecision(runtime=Runtime.HOST)
 
-        unavailable = self._unavailable_reason()
+        if isinstance(unavailable, _Probe):
+            unavailable = self.unavailable_reason()
+        if unavailable is not None and explicit:
+            # An explicit container is a choice about isolation, so it is
+            # refused rather than quietly handed the host.
+            raise InvalidLaunch(unavailable, field="runtime", error="runtime_unavailable")
         if unavailable is not None:
-            # Arm 4: loud, persisted, and reversible with `grove respawn` once
-            # the runtime is installed/started.
+            # Arm 4: an inherited container degrades loudly, persisted, and
+            # reversible with `grove respawn` once the runtime is installed/started.
             logger.warning("runtime fallback to host for {}: {}", repo_root, unavailable)
             return RuntimeDecision(runtime=Runtime.HOST, fallback_reason=unavailable)
 
@@ -246,22 +286,30 @@ class RuntimeResolver:
                 return candidate
         return None
 
-    def _assert_host_allowed(self, repo_root: Path, config_path: Path | None) -> None:
-        """Refuse a host create the project's committed config forbids (arm 2)."""
+    def host_refusal(self, repo_root: Path) -> str | None:
+        """Why the project's committed config forbids a host create (arm 2), or ``None``.
+
+        Runs the devcontainer CLI's configuration read, so it is a subprocess:
+        ``create`` calls it live and the launch preview through a short memo.
+        A broken or unreadable config, or no CLI to read it with, never blocks
+        a host create, so those answer ``None``.
+        """
+        config_path = self.project_config(repo_root)
         if config_path is None or not self._cli.probe().available:
-            return
+            return None
         try:
             resolved = self._cli.read_configuration(repo_root)
         except Exception as exc:  # a broken/unreadable config never blocks host
             logger.debug("requires_container check skipped for {}: {}", repo_root, exc)
-            return
+            return None
         if resolved.effective.requires_container:
-            raise ContainerRequired(
+            return (
                 f"{config_path} declares customizations.grove.requires_container; "
                 "this project refuses to run its agents on the host"
             )
+        return None
 
-    def _unavailable_reason(self) -> str | None:
+    def unavailable_reason(self) -> str | None:
         """Why the container runtime can't be used here, or ``None`` if it can.
 
         The FIRST failing container-scoped preflight check, rendered with its
@@ -269,12 +317,7 @@ class RuntimeResolver:
         same sentence ``grove doctor`` prints, and a user told to run doctor
         sees the row that caused their fallback rather than a paraphrase.
         """
-        for check in self._preflight.container_ready():
-            if check.ok:
-                continue
-            hint = f" — {check.hint}" if check.hint else ""
-            return f"container runtime unavailable: {check.name}: {check.detail}{hint}"
-        return None
+        return HostPreflight.first_failure(self._preflight.container_ready(), "container")
 
 
 class ContainerProvisioner:
@@ -425,6 +468,7 @@ class ContainerProvisioner:
             statusline=decor.statusline,
             tmux_conf=decor.tmux_conf,
             payload=DecorPayload.resolve(decor.payload),
+            user_tmux_conf=paths.tmux_user_conf_path(),
         )
 
     def netfilter_payload(self, egress: EgressPolicy) -> NetfilterPayload | None:

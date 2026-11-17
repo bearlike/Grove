@@ -265,3 +265,43 @@ def test_clear_caches_forces_a_fresh_location_scan(config: Path) -> None:
         monkeypatch.undo()
 
     assert scans == 1
+
+
+def _touch_age(path: Path, *, seconds_ago: float) -> None:
+    stamp = path.stat().st_mtime - seconds_ago
+    os.utime(path, (stamp, stamp))
+
+
+def test_settled_workers_leave_the_live_spine_but_stay_drillable(config: Path) -> None:
+    """Measured 2026-10-29: one session held 3,239 finished Workflow workers
+    (1.5 GB) and every read re-parsed them all, each reading WORKING off its
+    ``tool_result`` tail. A worker untouched past the settle window leaves
+    ``locate_transcripts`` (so the spine, the fleet rows and the cache fold
+    shrink to what is live), while ``subagent_turns`` still answers for it
+    from its own file."""
+    adapter = ClaudeCodeAdapter()
+    cwd = Path("/workspace/settled-workers")
+    session_id = "22222222-2222-4222-8222-222222222222"
+    main = _path(config, cwd, session_id)
+    _write_main(main, cwd)
+    workflows = main.parent / session_id / "subagents" / "workflows" / "wf_1"
+    workflows.mkdir(parents=True)
+    live = workflows / "agent-live1.jsonl"
+    settled = workflows / "agent-old1.jsonl"
+    record = (
+        '{{"type":"assistant","isSidechain":true,"agentId":"{agent}","uuid":"{agent}-u",'
+        '"timestamp":"2026-10-28T21:49:51.216Z","sessionId":"{sid}","cwd":"{cwd}",'
+        '"message":{{"role":"assistant","content":[{{"type":"text","text":"done"}}]}}}}\n'
+    )
+    live.write_text(record.format(agent="live1", sid=session_id, cwd=cwd), encoding="utf-8")
+    settled.write_text(record.format(agent="old1", sid=session_id, cwd=cwd), encoding="utf-8")
+    _touch_age(settled, seconds_ago=_ClaudeHome.SUBAGENT_SETTLED_AFTER_SECONDS + 60)
+
+    assert adapter.locate_transcripts(cwd, session_id) == [main, live]
+    assert sorted(_ClaudeHome.live_workers(main.parent / session_id / "subagents")) == [live]
+    assert _ClaudeHome.locate_worker(session_id, "old1") == settled
+    assert _ClaudeHome.locate_worker(session_id, "missing") is None
+
+    assert list(adapter.subagent_turns(cwd, session_id, "live1"))
+    assert list(adapter.subagent_turns(cwd, session_id, "old1"))
+    assert adapter.subagent_turns(cwd, session_id, "missing") == ()

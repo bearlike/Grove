@@ -39,19 +39,23 @@ _HOOK_SPOOL_DIR = "spool"
 _CONTAINER_SECRETS_DIR = "container-secrets"
 _AGENT_CONFIG_DIR = "agent-config"
 _AGENT_EXIT_DIR = "agent-exits"
+_NATIVE_WORKERS_DIR = "mailbox-workers"
+_BRIEFS_DIR = "agent-briefs"
 _CONTAINER_TMUX_DIR = "container-tmux"
 _CONTAINER_NETFILTER_DIR = "container-netfilter"
 _HOOKS_SETTINGS_FILE = "claude-hooks-settings.json"
 _CONTAINER_SETTINGS_FILE = "claude-container-settings.json"
-_BRIEFS_DIR = "agent-briefs"
 _HANDOVER_FILE = "handovers.json"
 _USAGE_DB_FILE = "usage.sqlite3"
 _QUOTA_STATE_FILE = "quota-state.json"
 _SHARE_POLICIES_FILE = "share-policies.json"
+_SIDEBAR_PINS_FILE = "sidebar-pins.json"
 _TELEMETRY_LEDGER_FILE = "telemetry-exports.sqlite3"
 _SESSION_TURNS_FILE = "session-turns.json"
 _WORKSPACE_HISTORY_FILE = "workspace-history.sqlite3"
+_DELEGATIONS_FILE = "delegations.sqlite3"
 _WATCHES_FILE = "watches.json"
+_SLACK_THREADS_FILE = "slack-threads.json"
 
 
 def ensure_dir(path: Path) -> Path:
@@ -144,6 +148,34 @@ def exclusive_lock(path: Path) -> Iterator[None]:
         yield
     finally:
         os.close(fd)
+
+
+def lock_is_held(path: Path) -> bool:
+    """Whether some live process holds :func:`exclusive_lock` on *path* right now.
+
+    The kernel releases an ``flock`` when its holder's fd closes, death
+    included, so a free lock is proof that whatever took it is gone. That is
+    what lets a start-up pass tell a provision still running in another process
+    from one a SIGKILL interrupted, with no pid bookkeeping to go stale.
+
+    Args:
+        path: the file whose sidecar lock :func:`exclusive_lock` would take.
+
+    Returns:
+        ``True`` while a holder exists; ``False`` when the lock is free (the
+        probe releases it at once) and on native Windows, which has no lock.
+    """
+    lock_path = path.with_name(path.name + ".lock")
+    if fcntl is None or not lock_path.exists():  # pragma: no cover - Windows
+        return False
+    fd = os.open(lock_path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
 
 
 #: The env vars `platformdirs` consults for Grove's two user-scope roots, in the
@@ -246,6 +278,15 @@ def share_policies_path() -> Path:
     return Path(user_state_dir(_APP_NAME)) / _SHARE_POLICIES_FILE
 
 
+def sidebar_pins_path() -> Path:
+    """Host-wide ordered list of workspaces pinned in the sidebar.
+
+    State rather than config: it changes on a click, and it is one user's
+    preference shared by every browser, so it cannot live in a client.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _SIDEBAR_PINS_FILE
+
+
 def session_turns_path() -> Path:
     """Durable human-turn count per agent session, keyed by transcript identity.
 
@@ -285,6 +326,37 @@ def workspace_history_path() -> Path:
     prompt, no transcript content.
     """
     return Path(user_state_dir(_APP_NAME)) / _WORKSPACE_HISTORY_FILE
+
+
+def delegations_path() -> Path:
+    """What a batch send asked of whom, and each recipient's receipt.
+
+    Durable for the reason ``workspace_history_path`` gives, with a sharper
+    edge: the rows are the batch idempotency record, so losing this file lets a
+    retried ``request_id`` deliver a second time. Never schema-versioned in its
+    filename; a version bump migrates. Contains workspace ids, operator- and
+    model-authored subjects and bodies, and receipts. No credential.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _DELEGATIONS_FILE
+
+
+def reaper_db_path() -> Path:
+    """What the reaper has seen and done: first-seen marks and an append-only action log.
+
+    Durable rather than a cache, because the first-seen time is what makes the
+    grace survive a daemon restart; losing it only delays a sweep by one grace.
+    Contains socket names, pids and workspace ids. No credential.
+    """
+    return Path(user_state_dir(_APP_NAME)) / "reaper.sqlite3"
+
+
+def telemetry_outbox_path() -> Path:
+    """Spans written but not yet acknowledged by the collector; replayed first at start.
+
+    Durable for the same reason as the ledger beside it: losing it loses spans
+    a collector never received. Bounded by ``OutboxSink.CAPACITY``.
+    """
+    return Path(user_state_dir(_APP_NAME)) / "telemetry-outbox.sqlite3"
 
 
 def telemetry_ledger_path() -> Path:
@@ -329,6 +401,17 @@ def user_watches_path() -> Path:
     return Path(user_state_dir(_APP_NAME)) / _WATCHES_FILE
 
 
+def slack_threads_path() -> Path:
+    """Which Slack thread each Slack-started workspace answers in.
+
+    State, not config: Grove writes it when a mention creates a workspace, and it
+    must survive a daemon restart, or a reply in a thread that already has a
+    workspace would start a second one. Contains Slack channel ids, message
+    timestamps, workspace ids and repo paths. No message text, no token.
+    """
+    return Path(user_state_dir(_APP_NAME)) / _SLACK_THREADS_FILE
+
+
 def init_log_path(workspace_id: str) -> Path:
     """Per-workspace init-script log; lives next to the state file.
 
@@ -336,6 +419,15 @@ def init_log_path(workspace_id: str) -> Path:
     grepping loguru output. Best-effort — write failures don't block create.
     """
     return Path(user_state_dir(_APP_NAME)) / _LOGS_DIR / f"{workspace_id}-init.log"
+
+
+def lifecycle_dir() -> Path:
+    """Per-workspace progress files of lifecycle verbs still running (or killed mid-run).
+
+    One small file per in-flight verb, removed when the verb returns; a file
+    left behind is a verb whose process died, which daemon start finishes.
+    """
+    return Path(user_state_dir(_APP_NAME)) / "lifecycle"
 
 
 def provision_log_path(workspace_id: str) -> Path:
@@ -374,6 +466,24 @@ def agent_exit_path(workspace_id: str) -> Path:
     there is nothing for Grove itself to notice at launch time.
     """
     return Path(user_state_dir(_APP_NAME)) / _AGENT_EXIT_DIR / f"{workspace_id}.exit"
+
+
+def native_worker_config_path(workspace_id: str) -> Path:
+    """A host native worker's config file, named for the workspace it serves.
+
+    Beside ``auth.json`` (so it follows that file's test redirect), 0600, and
+    named on the worker's argv, which is how the reaper recognises the worker.
+    """
+    return user_auth_path().parent / _NATIVE_WORKERS_DIR / f"{workspace_id}.json"
+
+
+def agent_brief_path(workspace_id: str) -> Path:
+    """Where Grove once wrote one workspace's first-turn brief; nothing writes it now.
+
+    The brief moved to the ``start`` trigger rule, and the files earlier
+    versions left are residue only the reaper reads, to remove them.
+    """
+    return user_auth_path().parent / _BRIEFS_DIR / f"{workspace_id}.md"
 
 
 def agent_sidecar_dir() -> Path:
@@ -458,30 +568,6 @@ def agent_hooks_settings_path() -> Path:
     return Path(user_config_dir(_APP_NAME)) / _HOOKS_SETTINGS_FILE
 
 
-def agent_brief_path(workspace_id: str) -> Path:
-    """Grove-owned first-turn brief for ONE workspace, read by its hook.
-
-    Beside the hook settings file, because it has the same lifecycle: Grove owns
-    it, every launch rewrites it, and it is only ever read by the hook process.
-
-    **It is per workspace, and it did not used to be.** The text was once
-    identical everywhere, so one host-global file sufficed and the per-workspace
-    choice was carried purely by whether the launch env named it
-    (:attr:`grove.core.agents.brief.AgentBrief.PATH_ENV`). Two things made the
-    content itself vary: an operator's own appended instructions resolve through
-    the config cascade, which is per repository, and the self-naming nudge is
-    added only for a workspace with no description. A shared file cannot hold
-    two answers, and the env var can only say yes or no.
-
-    The id is already filesystem-safe (bare hex), and the directory accumulates
-    one small file per workspace — the same tolerated growth as the sidecar
-    directory's per-session markers, and for the same reason: a stale brief is
-    inert, while tying its removal to ``kill`` would put a cosmetic file on a
-    teardown path that already has three things that can fail.
-    """
-    return Path(user_config_dir(_APP_NAME)) / _BRIEFS_DIR / f"{workspace_id}.md"
-
-
 def agent_container_settings_path() -> Path:
     """The CONTAINER-only variant of the file above: hooks plus container decor.
 
@@ -501,6 +587,25 @@ def agent_container_settings_path() -> Path:
     return Path(user_config_dir(_APP_NAME)) / _CONTAINER_SETTINGS_FILE
 
 
+def tmux_server_conf_path() -> Path:
+    """The config a per-workspace tmux server starts with, instead of the user's own.
+
+    Read only by ``tmux -f`` when Grove starts a workspace's private server, so
+    it holds behaviour Grove depends on and nothing a user's plugins provide.
+    """
+    return Path(user_config_dir(_APP_NAME)) / "tmux-server.conf"
+
+
+def tmux_user_conf_path() -> Path:
+    """The user's own additions to every per-workspace tmux server, if present.
+
+    Grove's server config sources it before its own settings, so a user can
+    style the status bar without being able to undo what Grove depends on.
+    Never written by Grove; a missing file is ignored.
+    """
+    return Path(user_config_dir(_APP_NAME)) / "tmux-user.conf"
+
+
 def project_config_path(repo_root: Path) -> Path:
     """Committed project config: <repo>/.grove/config.json."""
     return repo_root / _PROJECT_DIR_NAME / _CONFIG_FILE
@@ -516,6 +621,15 @@ def project_grove_dir(repo_root: Path) -> Path:
     return repo_root / _PROJECT_DIR_NAME
 
 
+def user_login_path() -> Path:
+    """The bearer ``grove auth login`` saved for the person signed in on this host (0600).
+
+    Local clients prefer it over minting the host user's own session, so what a
+    signed-in person creates is recorded as theirs.
+    """
+    return Path(user_config_dir(_APP_NAME)) / "login.json"
+
+
 def user_auth_path() -> Path:
     """Single-file persistent store for pairing challenges + sessions.
 
@@ -527,6 +641,20 @@ def user_auth_path() -> Path:
     nor password equivalents.
     """
     return Path(user_config_dir(_APP_NAME)) / _AUTH_FILE
+
+
+def federation_nodes_path() -> Path:
+    """A hub's admitted nodes and outstanding join tokens (0600, beside ``auth.json``).
+
+    Config dir rather than state dir for the reason ``auth.json`` is: losing it
+    signs every node out, so it is a credential store, not a cache.
+    """
+    return Path(user_config_dir(_APP_NAME)) / "nodes.json"
+
+
+def federation_node_key_path() -> Path:
+    """A node's id and signing key for its hub (0600)."""
+    return Path(user_config_dir(_APP_NAME)) / "node-key"
 
 
 def user_webapp_sessions_path() -> Path:

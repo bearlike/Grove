@@ -26,6 +26,9 @@ from grove.core.agents.native_stream import NativeStream
 from grove.core.agents.result_frame import parse_result_frame
 
 _MAX_PENDING: Final = 64
+# The tool's own effort override. Inherited from a launch env it outranks any
+# session `effortLevel`, so a live change must clear it in the same write.
+_EFFORT_ENV_PIN: Final = "CLAUDE_CODE_EFFORT_LEVEL"
 _CONTROL_NOTICE: Final = "Native Claude control request requires native approval."
 # `--permission-prompt-tool stdio` is what makes a question REACH the owner:
 # without it a headless session has nowhere to route `AskUserQuestion` and the
@@ -155,7 +158,8 @@ class ClaudeNativeOwner:
 
     def _pinned_session_id(self) -> str | None:
         """The session id on the argv — `--resume` continues one, `--session-id` mints one."""
-        for flag in ("--resume", "--session-id"):
+        # `--session-id` first: a fork carries both, and `--resume` then names the source.
+        for flag in ("--session-id", "--resume"):
             if flag in self._command:
                 return str(UUID(self._command[self._command.index(flag) + 1]))
         return None
@@ -207,6 +211,34 @@ class ClaudeNativeOwner:
         # started before then would otherwise remember the model it switched away from.
         self._model = model
         return True
+
+    async def set_effort(self, effort: str) -> bool:
+        """Change the session's effort via ``apply_flag_settings``.
+
+        Claude exposes no dedicated effort control; this is the same settings
+        write its own ``/effort`` uses, scoped to the session. Measured 2.1.289:
+        the acknowledgement is unconditional (``bogus`` is acked too), so the
+        engine validates the level before it gets here.
+
+        A ``CLAUDE_CODE_EFFORT_LEVEL`` inherited from the launch environment
+        OUTRANKS ``effortLevel`` (``/effort`` then answers "overrides this
+        session"), which would make an explicit operator choice a silent no-op.
+        The same write therefore nulls that variable in the session's ``env``
+        settings, verified by ``/effort`` no longer reporting the override. This
+        is session-scoped: nothing is persisted and the process env is untouched.
+        """
+        return (
+            await self._control(
+                {
+                    "subtype": "apply_flag_settings",
+                    "settings": {
+                        "env": {_EFFORT_ENV_PIN: None},
+                        "effortLevel": effort,
+                    },
+                }
+            )
+            is not None
+        )
 
     @property
     def current_model(self) -> str | None:
@@ -461,6 +493,9 @@ class ClaudeNativeOwner:
             replayed = self._pending.pop(native_id, None)
             if replayed is not None and not replayed.done():
                 replayed.set_result(None)
+                if self._asks is not None:
+                    # The provider echoed a root input it accepted: a turn runs.
+                    self._asks.turn("UserPromptSubmit")
                 # A new root input invalidates any earlier current-context
                 # response. The coalesced control task observes the new epoch
                 # and reads again; no timer polls while the turn runs.
@@ -490,6 +525,7 @@ class ClaudeNativeOwner:
             self._publish_operation(None)
         if self._asks is None:
             return
+        self._asks.turn("Stop")
         facts = parse_result_frame(dict(frame))
         if facts is None:
             return

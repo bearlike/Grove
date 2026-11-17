@@ -40,14 +40,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 if TYPE_CHECKING:
     from grove.core.config import TranscriptCacheConfig
 
 from loguru import logger
 
-from grove.core.agents.base import AgentVersionProbe
+from grove.core.agents.base import AgentVersionProbe, containing_root
+from grove.core.agents.hook import DEFAULT_SIDECAR_MAX_AGE_SECONDS
 from grove.core.agents.model import (
     TASK_TOOL_NAMES,
     AgentActivity,
@@ -408,17 +409,75 @@ class _ClaudeHome:
         for match in projects.glob(f"*/{session_id}.jsonl"):
             if match.is_file() and match not in mains:
                 mains.append(match)
-        # Sub-agent transcripts (Claude Code 2.1.2+): <uuid>/subagents/agent-*.jsonl
-        # — globbed RECURSIVELY: a Workflow ("ultracode") worker
-        # nests one level deeper, at
-        # <uuid>/subagents/workflows/wf_<runId>/agent-*.jsonl. ``**``
-        # matches zero-or-more intermediate dirs, so this still covers the
-        # flat, non-Workflow case too.
-        for match in projects.glob(f"*/{session_id}/subagents/**/agent-*.jsonl"):
-            if match.is_file():
-                subagents.append(match)
+        # Sub-agent transcripts (Claude Code 2.1.2+) live under
+        # <uuid>/subagents/, and only the LIVE ones join the session's spine.
+        for subagents_dir in projects.glob(f"*/{session_id}/subagents"):
+            subagents.extend(cls.live_workers(subagents_dir))
 
         return [*mains, *subagents]
+
+    #: A sub-agent transcript untouched for this long has settled: the worker
+    #: returned or died, and Claude Code writes no terminal marker into the
+    #: file either way. It is the window the hook sidecar trusts a WORKING push
+    #: for, so a worker and its parent cannot disagree about what "quiet" means.
+    SUBAGENT_SETTLED_AFTER_SECONDS: ClassVar[int] = DEFAULT_SIDECAR_MAX_AGE_SECONDS
+
+    @classmethod
+    def live_workers(cls, subagents_dir: Path, *, now: float | None = None) -> list[Path]:
+        """Sub-agent transcripts under one session's ``subagents/`` still in the live window.
+
+        Measured 2026-10-29 on a real host: one session had spawned 3,239
+        Workflow workers (1.5 GB of ``agent-*.jsonl``), every one finished two
+        days earlier. Folding them all into the session's spine put the fold
+        6x over the transcript cache budget, so every read re-parsed the whole
+        1.5 GB (~9 s on one core) and each finished worker read WORKING
+        forever off its ``tool_result`` tail. The mtime is the one liveness
+        fact a settled file still carries, and it costs a ``stat`` rather than
+        a parse. A settled worker stays on disk and is read alone by
+        :meth:`locate_worker` when its thread is drilled into.
+
+        Args:
+            subagents_dir: A session's ``<uuid>/subagents`` directory; may not exist.
+            now: Wall-clock seconds the window is measured against; ``None``
+                reads the clock.
+
+        Returns:
+            Worker files whose mtime is within
+            :attr:`SUBAGENT_SETTLED_AFTER_SECONDS`, recursive so a Workflow
+            worker under ``workflows/wf_<id>/`` counts. Empty when none are live.
+        """
+        # ``**`` matches zero or more intermediate directories, so the flat
+        # ``subagents/agent-*.jsonl`` layout and the nested Workflow one
+        # (``subagents/workflows/wf_<runId>/agent-*.jsonl``) share one glob.
+        cutoff = (time.time() if now is None else now) - cls.SUBAGENT_SETTLED_AFTER_SECONDS
+        live: list[Path] = []
+        for worker in subagents_dir.glob("**/agent-*.jsonl"):
+            try:
+                stat = worker.stat()
+            except OSError:
+                # Vanished between the glob and the stat: not live by definition.
+                continue
+            if stat.st_mtime >= cutoff:
+                live.append(worker)
+        return live
+
+    @classmethod
+    def locate_worker(cls, session_id: str, thread_id: str) -> Path | None:
+        """One sub-agent thread's transcript, live or settled, across the cascade.
+
+        Args:
+            session_id: The parent session whose ``subagents/`` tree holds the worker.
+            thread_id: Claude's ``agentId`` for the worker (the fleet row's session id).
+
+        Returns:
+            The first ``agent-<thread_id>.jsonl`` found under any project
+            folder of any config dir, or ``None`` when no such file exists.
+        """
+        for projects in cls.projects_dirs():
+            for match in projects.glob(f"*/{session_id}/subagents/**/agent-{thread_id}.jsonl"):
+                if match.is_file():
+                    return match
+        return None
 
     @classmethod
     def ordered_locations(cls, cwd: Path, session_id: str, paths: Sequence[Path]) -> list[Path]:
@@ -1063,14 +1122,36 @@ class _Record:
         return kind if isinstance(kind, str) else ""
 
     @property
+    def _queued_unattributed_prompt(self) -> bool:
+        """A ``prompt``-mode queued message that names NO origin at all.
+
+        Interactive builds stamp ``origin.kind``; the headless ``-p`` stream a
+        native session runs on does not (measured 2026-10-10 across 2.1.272 to
+        2.1.289 ``sdk-cli`` transcripts: 348 of 370 queued prompts with human
+        text carried no ``origin`` key). The mode already rules out a task
+        notice, so such a message is classified exactly as a plain user line
+        with the same text would be, by its envelope.
+        """
+        return (
+            self._queued_mode == _QUEUED_MODE_PROMPT
+            and not self._queued_origin
+            and not self.is_sidechain
+        )
+
+    @property
     def is_queued_prompt(self) -> bool:
         """A queued HUMAN steer the harness has now delivered — a real user turn.
 
         ``commandMode`` is checked FIRST because it is the total partition; the
         origin then separates the human from the peer inside the ``prompt``
-        mode. A missing origin is non-human by construction (see
-        :attr:`_queued_origin`).
+        mode. With no origin at all (a native ``-p`` session), the text decides,
+        through the same markers a plain user line is filtered by.
         """
+        if self._queued_unattributed_prompt:
+            prompt = self.queued_prompt
+            return not any(marker in prompt for marker in _NON_HUMAN_MARKERS) and not (
+                prompt.lstrip().startswith(_PEER_MESSAGE_MARKER)
+            )
         return (
             self._queued_mode == _QUEUED_MODE_PROMPT
             and self._queued_origin == _QUEUED_ORIGIN_HUMAN
@@ -1081,6 +1162,11 @@ class _Record:
     def is_queued_peer_message(self) -> bool:
         """A queued relay from a peer session — the queued form of
         :attr:`is_teammate_message`, which is where it is routed."""
+        if self._queued_unattributed_prompt:
+            prompt = self.queued_prompt.lstrip()
+            return prompt.startswith(
+                (_PEER_MESSAGE_MARKER, _TEAMMATE_MESSAGE_MARKER, "<cross-session-message")
+            )
         return (
             self._queued_mode == _QUEUED_MODE_PROMPT
             and self._queued_origin == _QUEUED_ORIGIN_PEER
@@ -1364,9 +1450,9 @@ class _Record:
 
     @property
     def is_grove_reminder(self) -> bool:
-        """A note the Grove daemon sent on its own initiative (``GroveInstruction.reminder``).
+        """A message the Grove daemon sent on its own: a trigger rule's instruction.
 
-        Checked on BOTH arrival shapes because the reminder is sent only to a
+        Checked on BOTH arrival shapes because a trigger is sent only to a
         WORKING agent, so it almost always lands in the harness queue, and a
         queued prompt is otherwise admitted as a human turn before any marker
         is consulted.
@@ -1374,8 +1460,8 @@ class _Record:
         if self.is_sidechain:
             return False
         if self.is_queued:
-            return GroveInstruction.is_reminder(self.queued_prompt)
-        return self.type == "user" and GroveInstruction.is_reminder(self.text())
+            return GroveInstruction.is_authored(self.queued_prompt)
+        return self.type == "user" and GroveInstruction.is_authored(self.text())
 
     def teammate_message_text(self) -> str:
         """The relayed notice, human-readable — never the raw
@@ -2007,6 +2093,10 @@ class _ActivityFolder:
         )
 
 
+#: The ``isMeta`` turn a respawned Claude process opens with.
+_RESUME_NUDGE = "Continue from where you left off."
+
+
 class _QueueFolder:
     """The harness's own queue ledger, folded one record at a time.
 
@@ -2077,6 +2167,8 @@ class _QueueFolder:
             else:
                 self._settle_pop()
             return
+        if self._deferred_pop and self._answers_pop(rec):
+            return
         operation = rec.queue_operation
         if operation is None:
             return
@@ -2084,11 +2176,18 @@ class _QueueFolder:
         self._removed_identity = None
         name, content = operation
         if name == "enqueue":
+            # Since Claude Code 2.1.314 a headless (`sdk-cli`) session writes
+            # EVERY prompt enqueue contentless (2756/2850 on-host) and names the
+            # text only on the delivering `remove`. So a contentless enqueue is
+            # an ordinary queued message, not the resume nudge it was once read
+            # as: clearing on it wiped a queue the moment a second steer landed.
             self._queued.append((content, rec.timestamp))
         elif name == "popAll":
             self._queued.clear()
         elif content:
-            if self._drop(content):
+            # The named message, or else the oldest contentless entry it was
+            # queued as: the remove is the first record that carries its text.
+            if self._drop(content) or self._drop(""):
                 self._removed_identity = _TranscriptParser._queue_identity(content)
         else:
             self._deferred_pop = True
@@ -2110,6 +2209,42 @@ class _QueueFolder:
     def depth(self) -> int:
         """How many messages are pending — the ~1 Hz tick's whole question."""
         return max(0, len(self._queued) - (1 if self._deferred_pop else 0))
+
+    def _answers_pop(self, rec: _Record) -> bool:
+        """Settle an owed pop from the PLAIN user line that delivered it.
+
+        A contentless ``dequeue`` is usually answered by a plain ``type:"user"``
+        line rather than a ``queued_command`` attachment, and that line is a
+        witness too: it names what was taken. Claude does not take in FIFO
+        order (a human prompt jumps background notices), may merge several
+        queued items into one turn, and may wrap a relay in its own preamble,
+        so popping the front instead removed the WRONG message and left the
+        delivered one pending for the rest of the session — measured on 55 of
+        the 144 residual queue entries across this host's transcripts. Every
+        queued text the line contains is taken; a line containing none leaves
+        the FIFO fallback owed, as before.
+        """
+        if rec.type != "user" or rec.is_sidechain or rec._has_block("tool_result"):
+            return False
+        body = rec.text()
+        if not body:
+            return False
+        if rec.is_meta and body.strip() == _RESUME_NUDGE:
+            # A respawned process: the queue was the dead one's memory.
+            self._queued.clear()
+            self._deferred_pop = False
+            return True
+        taken = [
+            i
+            for i, (text, _) in enumerate(self._queued)
+            if (text.strip() and text.strip() in body) or (not text and rec.is_meta)
+        ]
+        if not taken:
+            return False
+        for i in reversed(taken):
+            del self._queued[i]
+        self._deferred_pop = False
+        return True
 
     def _drop(self, content: str) -> bool:
         identity = _TranscriptParser._queue_identity(content)
@@ -2955,10 +3090,7 @@ class _TranscriptLocationIndex:
                 moved = True
                 continue
             found.append(main)
-            subagents = main.parent / session_id / "subagents"
-            for worker in subagents.glob("**/agent-*.jsonl"):
-                if worker.is_file():
-                    found.append(worker)
+            found.extend(_ClaudeHome.live_workers(main.parent / session_id / "subagents"))
         return _ClaudeHome.ordered_locations(cwd, session_id, found), moved
 
     @staticmethod
@@ -3004,6 +3136,10 @@ class ClaudeCodeAdapter:
     # store: 1,067 of 49,505 real `tool_result` blocks across 333 transcripts
     # set it.
     reports_tool_errors = True
+    # `claude --help` on 2.1.289 lists exactly these for `--effort`. An unknown
+    # level is ignored by the CLI with a warning, so the list is the census.
+    efforts: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+    native_controls: frozenset[str] = frozenset({"compact", "command"})
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """``--session-id <uuid>`` for a fresh session — what makes correlation
@@ -3015,9 +3151,29 @@ class ClaudeCodeAdapter:
             return ["--resume", session_id]
         return ["--session-id", session_id]
 
+    def fork_decoration(self, source_session_id: str) -> list[str]:
+        """``--resume <id> --fork-session``, beside the launch's own ``--session-id``.
+
+        Measured 2.1.318: Claude accepts ``--session-id`` with ``--resume`` only
+        when ``--fork-session`` is present. The copy is written under the new
+        id in the launch's cwd, even from another worktree of the same repo, so
+        the minted id stays the transcript's address.
+
+        Args:
+            source_session_id: The session whose conversation is copied.
+
+        Returns:
+            The three tokens.
+        """
+        return ["--resume", source_session_id, "--fork-session"]
+
     def model_decoration(self, model: str) -> list[str]:
         """``--model <id>`` — Claude Code's per-launch model selector."""
         return ["--model", model]
+
+    def effort_decoration(self, effort: str) -> list[str]:
+        """``--effort <level>``, accepted by both the interactive TUI and ``-p``."""
+        return ["--effort", effort]
 
     def offline_decoration(self) -> list[str]:
         """``--disallowedTools WebFetch,WebSearch`` — Claude Code's flag for
@@ -3101,6 +3257,19 @@ class ClaudeCodeAdapter:
         except OSError as exc:  # best-effort: a scan failure must not break peek
             logger.debug("locate_transcripts({}, {}) failed: {}", cwd, session_id, exc)
             return []
+
+    def transcript_root(self, path: Path) -> Path | None:
+        """The config dir of the cascade that holds ``path``: ``<root>/projects/…``
+        is Claude Code's layout under every root, so the host copy keeps the
+        same shape under its own root."""
+        return containing_root(path, _ClaudeHome.config_dirs())
+
+    def transcript_home(self) -> Path | None:
+        """Where Claude Code writes: the first ``CLAUDE_CONFIG_DIR`` entry, else ``~/.claude``."""
+        override = config_dir_override("CLAUDE_CONFIG_DIR")
+        raw = override if override is not None else os.environ.get("CLAUDE_CONFIG_DIR", "")
+        first = next((part.strip() for part in raw.split(",") if part.strip()), "")
+        return Path(first).expanduser() if first else Path.home() / ".claude"
 
     def discover_sessions(self, cwd: Path, *, exclude_id: str | None = None) -> list[str]:
         """Session ids of transcripts whose recorded cwd is ``cwd`` but that Grove
@@ -3484,19 +3653,26 @@ class ClaudeCodeAdapter:
         SAME turn-builder the main thread uses
         (:meth:`_TranscriptParser._turns_from_messages`) so a fleet child's
         turns render with identical rules (question/file-edit/todo
-        structuring). Mirrors :meth:`fleet_activity`'s cheap no-``subagents/``
-        early exit; an unknown ``thread_id`` degrades to ``()``, never raises.
+        structuring). A thread that has SETTLED out of the live spine
+        (:meth:`_ClaudeHome.live_workers`) is read from its own file alone, so
+        drilling into a finished worker keeps working for as long as Claude
+        Code keeps the file; an unknown ``thread_id`` degrades to ``()``,
+        never raises.
         """
-        subagent_paths = {
-            p.stem: p for p in self.locate_transcripts(cwd, session_id) if "subagents" in p.parts
-        }
-        if not subagent_paths:
-            return ()
         thread_messages = [
             msg
             for msg in self.read_messages(cwd, session_id)
             if msg.is_sidechain and msg.thread_id == thread_id
         ]
+        if not thread_messages:
+            settled = _ClaudeHome.locate_worker(session_id, thread_id)
+            if settled is None:
+                return ()
+            # One fold per settled file, LRU-bounded like any other: a reader
+            # pays this worker's parse once, never the whole session's.
+            thread_messages = [
+                msg for msg in self._messages([settled]) if msg.thread_id == thread_id
+            ]
         if not thread_messages:
             return ()
         return _TranscriptParser._turns_from_messages(

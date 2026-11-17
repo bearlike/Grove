@@ -183,6 +183,33 @@ class GroveIdentityAttr:
     RUNTIME: Final = "grove.runtime"
     TICKET_IDS: Final = "grove.ticket.ids"
     SESSION_ID: Final = "grove.session.id"
+    PRINCIPAL_SUBJECT: Final = "grove.principal.subject"
+    """Who created the workspace: the OIDC subject the daemon admitted, or
+    ``local`` for this host's own user. Never a group or an email: identity
+    here is the one opaque id the issuer chose, and nothing that a residency
+    rule would have to chase."""
+    NODE_NAME: Final = "grove.node.name"
+    """Which Grove daemon owns the workspace: its federation node name, else
+    the host name. A federated fleet is several daemons, and a trace that cannot
+    say which one ran it cannot be reconciled against that daemon's own logs."""
+
+
+class GroveRequestAttr:
+    """Facts about one HTTP request the daemon served, for its audit span.
+
+    Separate from the workspace classes because a request is not a workspace:
+    one request may touch none (a listing) or be forwarded to another daemon,
+    and ``grove.request.id`` is what ties the hub's span to the node's.
+    """
+
+    REQUEST_ID: Final = "grove.request.id"
+    """``X-Request-ID`` as received, else minted; echoed on the response and
+    forwarded, so one id follows a request across a hub and its node."""
+    ROUTE: Final = "grove.request.route"
+    METHOD: Final = "grove.request.method"
+    STATUS: Final = "grove.request.status"
+    FORWARDED_BY: Final = "grove.request.forwarded_by"
+    """The node name of the daemon that forwarded this request, when one did."""
 
 
 class GroveLiveAttr:
@@ -400,6 +427,8 @@ class TraceIdentity(BaseModel):
 
     workspace_id: str = ""
     workspace_title: str = ""
+    principal: str = ""
+    node: str = ""
     repo: str = ""
     project: str = ""
     branch: str = ""
@@ -432,6 +461,8 @@ class TraceIdentity(BaseModel):
         (GroveIdentityAttr.AGENT_KIND, "agent_kind"),
         (GroveIdentityAttr.AGENT_VERSION, "agent_version"),
         (GroveIdentityAttr.ORCHESTRATOR_VERSION, "orchestrator_version"),
+        (GroveIdentityAttr.PRINCIPAL_SUBJECT, "principal"),
+        (GroveIdentityAttr.NODE_NAME, "node"),
         (GroveLiveAttr.PHASE, "phase"),
     )
     """``(attribute key, field name)`` — the table IS the mapping, so adding a
@@ -481,8 +512,11 @@ class TraceIdentity(BaseModel):
             resolved[GroveIdentityAttr.TICKET_IDS] = ",".join(self.ticket_ids)
         if self.orchestrator_version:
             resolved[LangfuseAttr.RELEASE] = self.orchestrator_version
-        if self.user:
-            resolved[LangfuseAttr.USER_ID] = self.user
+        # Langfuse's user axis is the person behind the work: a signed-in
+        # principal when there is one, else the host account the fleet runs as.
+        user = self.principal if self.principal and self.principal != "local" else self.user
+        if user:
+            resolved[LangfuseAttr.USER_ID] = user
         return resolved
 
     def tags(self) -> tuple[str, ...]:

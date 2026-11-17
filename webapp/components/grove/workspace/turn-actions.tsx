@@ -11,7 +11,9 @@
  * regenerate verb. The thumbs are assistant-ui's own
  * `ActionBarPrimitive.FeedbackPositive/Negative`, which render only while the
  * runtime carries a feedback adapter, so where Langfuse is not configured
- * (and on a read-only transcript) the bar is Copy alone.
+ * (and on a read-only transcript) the bar is Copy alone. The speaker is
+ * assistant-ui's own `ActionBarPrimitive.Speak`/`StopSpeaking`, rendered only
+ * while the runtime carries a speech adapter (a provider key is configured).
  *
  * EITHER thumb records its verdict at once and then opens `./feedback-dialog`
  * (the vendored dialog ported to take a tone) beneath the bar, for optional
@@ -31,8 +33,10 @@ import { ActionBarPrimitive, AuiIf, useAuiState } from "@assistant-ui/react";
 import {
   CheckIcon,
   CopyIcon,
+  SquareIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
+  Volume2Icon,
 } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -68,6 +72,22 @@ export const TurnActions: FC = () => {
               </AuiIf>
             </TooltipIconButton>
           </ActionBarPrimitive.Copy>
+          <AuiIf condition={(s) => s.thread.capabilities.speech}>
+            <AuiIf condition={(s) => s.message.speech == null}>
+              <ActionBarPrimitive.Speak asChild>
+                <TooltipIconButton tooltip="Read aloud">
+                  <Volume2Icon />
+                </TooltipIconButton>
+              </ActionBarPrimitive.Speak>
+            </AuiIf>
+            <AuiIf condition={(s) => s.message.speech != null}>
+              <ActionBarPrimitive.StopSpeaking asChild>
+                <TooltipIconButton tooltip="Stop reading">
+                  <SquareIcon className="fill-current" />
+                </TooltipIconButton>
+              </ActionBarPrimitive.StopSpeaking>
+            </AuiIf>
+          </AuiIf>
           <AuiIf condition={(s) => s.thread.capabilities.feedback}>
             <ActionBarPrimitive.FeedbackPositive
               asChild

@@ -20,13 +20,19 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import pytest
 
-from grove.core.container_decor import CONTAINER_DECOR_ROOT, DecorPayload, DecorPlan
+from grove.core.container_decor import (
+    CONTAINER_DECOR_ROOT,
+    CONTAINER_USER_TMUX_CONF,
+    DecorPayload,
+    DecorPlan,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # helpers
@@ -143,6 +149,61 @@ def test_everything_enabled_plans_one_readonly_mount_and_both_values(tmp_path: P
     assert plan.tmux_conf is not None
     assert str(plan.tmux_conf) == "/grove/decor/tmux.conf"
     assert plan.statusline_command == "sh /grove/decor/statusline.sh"
+
+
+def test_the_users_tmux_conf_is_mounted_beside_groves_only_when_it_exists(
+    tmp_path: Path,
+) -> None:
+    payload = DecorPayload(root=_payload_dir(tmp_path / "decor"))
+    user_conf = tmp_path / "tmux-user.conf"
+    absent = DecorPlan.from_config(
+        enabled=True, statusline=True, tmux_conf=True, payload=payload, user_tmux_conf=user_conf
+    )
+    assert len(absent.mounts) == 1
+
+    user_conf.write_text("set -g status-style bg=magenta\n")
+    link = tmp_path / "dotfiles-link.conf"
+    link.symlink_to(user_conf)
+    present = DecorPlan.from_config(
+        enabled=True, statusline=True, tmux_conf=True, payload=payload, user_tmux_conf=link
+    )
+    assert present.mounts[1].source == user_conf.resolve()
+    assert present.mounts[1].target == CONTAINER_USER_TMUX_CONF
+    assert present.mounts[1].readonly is True
+
+    no_tmux = DecorPlan.from_config(
+        enabled=True, statusline=True, tmux_conf=False, payload=payload, user_tmux_conf=link
+    )
+    assert len(no_tmux.mounts) == 1
+
+
+@pytest.mark.skipif(shutil.which("tmux") is None, reason="needs a real tmux")
+@pytest.mark.parametrize("user_conf", ["", 'set -g status-right "#[fg=red]mine %H:%M"\n'])
+def test_the_container_badge_leads_whichever_status_right_wins(
+    tmp_path: Path, user_conf: str
+) -> None:
+    """The real decor config, sourced by a real tmux, with and without user styling."""
+    conf = (DecorPayload.bundled() / DecorPayload.TMUX_CONF_NAME).read_text(encoding="utf-8")
+    user = tmp_path / "user-tmux.conf"
+    if user_conf:
+        user.write_text(user_conf)
+    decor = tmp_path / "tmux.conf"
+    decor.write_text(conf.replace(str(CONTAINER_USER_TMUX_CONF), str(user)))
+    socket = f"grove-test-decor-{os.getpid()}"
+    subprocess.run(["tmux", "-L", socket, "-f", str(decor), "new-session", "-d"], check=True)
+    try:
+        right = subprocess.run(
+            ["tmux", "-L", socket, "show", "-gv", "status-right"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    finally:
+        subprocess.run(["tmux", "-L", socket, "kill-server"], check=False)
+    assert right.startswith("#[bg=#cba6f7,fg=#1e1e2e,bold] ⬢ CONTAINER ")
+    assert right.count("CONTAINER") == 1
+    assert ("mine %H:%M" in right) is bool(user_conf)
+    assert ("resources.sh" in right) is not bool(user_conf)
 
 
 def test_disabled_plans_nothing_at_all(tmp_path: Path) -> None:

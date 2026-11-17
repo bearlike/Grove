@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
 from grove.core.runtime_events import (
+    AsyncioRuntimeEventTransport,
     RuntimeEventReader,
     RuntimeEvents,
     RuntimeLivenessChange,
     RuntimeLivenessScope,
 )
+from grove.core.tmux import TmuxServer
 
 CONTAINER = "c" * 64
 SESSION = "grove-demo"
@@ -235,3 +238,25 @@ async def test_bootstrap_is_one_shot_and_reconnect_requires_it() -> None:
     with pytest.raises(RuntimeError, match="already bootstrapped"):
         await events.bootstrap(RuntimeLivenessScope())
     await events.aclose()
+
+
+async def test_observing_a_missing_server_creates_no_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #951 leak's own inputs: a private socket with no server behind it.
+
+    ``attach-session`` there forks a server that sources the user's config, and
+    a plugin blocking on a sessionless server kept it alive forever. The
+    observer must answer "cannot tell" and leave the socket directory empty.
+    """
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TMUX", raising=False)
+    (tmp_path / ".tmux.conf").write_text("run-shell 'sleep 3600'\n")
+    server = TmuxServer(socket=f"{TmuxServer.SOCKET_PREFIX}leakprobe")
+
+    reader = await AsyncioRuntimeEventTransport().tmux_control(session=server.handle("absent"))
+
+    assert reader is None
+    socket = server.socket_path()
+    assert socket is not None and not socket.exists()

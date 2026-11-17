@@ -11,7 +11,14 @@ import {
   type ReactNode,
 } from "react";
 import type { LucideIcon } from "lucide-react";
-import { FolderGit2Icon, GitBranchIcon, MapPinIcon, MonitorIcon } from "lucide-react";
+import {
+  BrainIcon,
+  FolderGit2Icon,
+  GitBranchIcon,
+  MapPinIcon,
+  MonitorIcon,
+  NetworkIcon,
+} from "lucide-react";
 
 import {
   ModelSelectorContent,
@@ -35,7 +42,16 @@ import {
  * other and the directory list — rendered second — was unreachable behind the
  * project list. Nothing failed; the control simply did not work.
  */
-export type LaunchPillKind = "project" | "directory" | "agent" | "model" | "runtime" | "branch";
+export type LaunchPillKind =
+  | "project"
+  | "directory"
+  | "agent"
+  | "profile"
+  | "model"
+  | "effort"
+  | "runtime"
+  | "node"
+  | "branch";
 
 /**
  * One glyph per control, decided once.
@@ -47,15 +63,20 @@ export type LaunchPillKind = "project" | "directory" | "agent" | "model" | "runt
  * mark (`AgentMark`), a model's (`ModelMark`), the fleet's own runtime table —
  * and all three arrive through `leading`.
  */
-const PILL_GLYPH: Readonly<
-  Record<Exclude<LaunchPillKind, "agent" | "runtime" | "model">, LucideIcon>
-> = {
+type ValueMarkedKind = "agent" | "profile" | "runtime" | "model";
+
+const PILL_GLYPH: Readonly<Record<Exclude<LaunchPillKind, ValueMarkedKind>, LucideIcon>> = {
   project: FolderGit2Icon,
   // `entity.tsx`'s Location mark, not a second folder: a working directory is a
   // PLACE INSIDE the project the pill beside it already named, and two folders
   // in a row would read as two repositories.
   directory: MapPinIcon,
   branch: GitBranchIcon,
+  // One mark for the control, not per level: "how hard to think" is a single
+  // concept, and the value beside it is the word that distinguishes levels.
+  effort: BrainIcon,
+  // A connected Grove daemon: one of several machines, not a runtime on one.
+  node: NetworkIcon,
 };
 
 const FALLBACK_GLYPH: LucideIcon = MonitorIcon;
@@ -66,10 +87,21 @@ export interface LaunchPillOption {
   readonly label: string;
   /** One line under the label, when a choice needs its consequence stated. */
   readonly description?: string;
+  /**
+   * The whole explanation, shown only on hover. A row's visible line stays a
+   * few words; an install command or a config step belongs here, not there.
+   */
+  readonly detail?: string;
   readonly icon?: ReactNode;
   /** A branch already checked out elsewhere, an agent the repo has none of. */
   readonly disabled?: boolean;
   readonly keywords?: readonly string[];
+  /**
+   * The section heading this option sits under. Options sharing a group render
+   * together under one vendored group heading, in first-appearance order; an
+   * ungrouped list renders as one unheaded group, as before.
+   */
+  readonly group?: string;
   /**
    * This option is only half an answer — the rest is typed in the panel below,
    * so choosing it must NOT close the menu.
@@ -104,6 +136,11 @@ export function LaunchPillGroup({ children }: { readonly children: ReactNode }):
   const [openKind, setOpenKind] = useState<LaunchPillKind | null>(null);
   const value = useMemo<PillGroup>(() => ({ openKind, setOpenKind }), [openKind]);
   return <PillGroupContext.Provider value={value}>{children}</PillGroupContext.Provider>;
+}
+
+/** Which pill's menu is open, for a caller composing chrome around a pill. */
+export function useOpenPillKind(): LaunchPillKind | null {
+  return usePillGroup().openKind;
 }
 
 function usePillGroup(): PillGroup {
@@ -231,7 +268,7 @@ export function LaunchPill({
 }: LaunchPillProps): ReactNode {
   const { openKind, setOpenKind } = usePillGroup();
   const Glyph =
-    kind === "agent" || kind === "runtime" || kind === "model"
+    kind === "agent" || kind === "profile" || kind === "runtime" || kind === "model"
       ? null
       : (PILL_GLYPH[kind] ?? FALLBACK_GLYPH);
   const selected = options.find((option) => option.id === value);
@@ -239,6 +276,19 @@ export function LaunchPill({
   const unavailable = disabledReason !== undefined;
   const mark = leading ?? (Glyph ? <Glyph aria-hidden /> : null);
   const modelOptions = useMemo(() => toModelOptions(options), [options]);
+  const details = useMemo(
+    () => new Map(options.flatMap((option) => (option.detail ? [[option.id, option.detail] as const] : []))),
+    [options],
+  );
+  const groups = useMemo(() => {
+    const byHeading = new Map<string | undefined, ModelOption[]>();
+    options.forEach((option, index) => {
+      const group = byHeading.get(option.group);
+      if (group) group.push(modelOptions[index]!);
+      else byHeading.set(option.group, [modelOptions[index]!]);
+    });
+    return [...byHeading];
+  }, [options, modelOptions]);
   const noun = searchNoun ?? ariaLabel.toLowerCase();
   // Set while the pill's own item handler runs, read by the close that Radix
   // fires immediately after it. A ref rather than state because the two happen
@@ -333,19 +383,23 @@ export function LaunchPill({
         )}
         <ModelSelectorList>
           <ModelSelectorEmpty>{`No ${noun} found.`}</ModelSelectorEmpty>
-          <ModelSelectorGroup>
-            {modelOptions.map((option) => (
-              // `title` is the item's own overflow escape hatch: the vendored
-              // row truncates both its name and its description, and a working
-              // directory or a gateway model id is exactly the value that runs
-              // past the edge.
-              <ModelSelectorItem
-                key={option.id}
-                model={option}
-                title={option.description ? `${option.name} — ${option.description}` : option.name}
-              />
-            ))}
-          </ModelSelectorGroup>
+          {groups.map(([heading, members]) => (
+            <ModelSelectorGroup key={heading ?? ""} heading={heading}>
+              {members.map((option) => (
+                // `title` is the item's own overflow escape hatch: the vendored
+                // row truncates both its name and its description, and a working
+                // directory or a gateway model id is exactly the value that runs
+                // past the edge.
+                <ModelSelectorItem
+                  key={option.id}
+                  model={option}
+                  title={[option.name, details.get(option.id) ?? option.description]
+                    .filter(Boolean)
+                    .join(" — ")}
+                />
+              ))}
+            </ModelSelectorGroup>
+          ))}
         </ModelSelectorList>
         {children ? (
           <div

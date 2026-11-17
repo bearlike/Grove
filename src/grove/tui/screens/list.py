@@ -24,6 +24,7 @@ cursor.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 from collections.abc import Callable
 from dataclasses import replace as _dc_replace
@@ -68,8 +69,9 @@ from grove.core.agents import (
 )
 from grove.core.contracts.tickets import TicketRef
 from grove.core.contracts.usage import UsageQuotasView
+from grove.core.errors import ConfigError
 from grove.core.phase import PhaseReport, TicketClaim
-from grove.core.tmux import ContainerAttach, fit_window_to_client
+from grove.core.tmux import ContainerAttach, TmuxServer, fit_window_to_client
 from grove.core.usage import UsageService
 from grove.core.workspace import LIVE_STATUSES, Placement, ProvisionProgress
 from grove.tui._status import ACTIVE_PULSE_FRAMES
@@ -505,6 +507,11 @@ class WorkspaceListScreen(Screen[None]):
         registry and ``switch_screen``s to a fresh list screen for it, so the
         screen stack never grows on repeated switches.
         """
+        # Re-read the declared projects so one added since this TUI started
+        # (`grove config add-project` in another shell) lists without a restart.
+        # A config that will not parse keeps the list the registry already has.
+        with contextlib.suppress(ConfigError):
+            self._registry.reload_projects(load_config(repo_root=None).projects)
         choices = RepoChoice.group(
             self._manager.store.load_all(),
             current=self._manager.repo_root,
@@ -936,10 +943,12 @@ class WorkspaceListScreen(Screen[None]):
         # the window to `window-size: manual` (tmux then stops re-fitting it
         # forever) and must exclude the status-bar rows that `#{client_height}`
         # counts but the window never gets. See `tmux.fit_window_to_client`.
-        fit_window_to_client(instr.tmux_session)
+        fit_window_to_client(instr.tmux_session, TmuxServer(socket=instr.tmux_socket))
         if instr.inside_outer_tmux:
-            # Inside outer tmux — switch the existing client; Grove keeps
-            # running, unwatched, in a session the user has just left. This is
+            # Inside outer tmux — switch the existing client (or, for a
+            # workspace on its own server, open a window attached to it);
+            # either way Grove keeps running, unwatched, in a session the user
+            # has just left. This is
             # the ONLY attach branch that needs the tick gate: `switch-client`
             # returns immediately, so without it the pane tick keeps paying a
             # `docker exec` at 4 Hz for the entire attach (measured ~24%

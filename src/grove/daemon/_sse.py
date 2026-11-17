@@ -29,7 +29,7 @@ import contextlib
 from collections import deque
 from collections.abc import Callable
 
-from grove.core.activity import ActivityService, DashboardDelta
+from grove.core.activity import ActivityService, DashboardDelta, DashboardSnapshot
 from grove.core.admission import Admission, AdmissionLimits, BoundedInbox, InboxClosed
 from grove.core.contracts.activity import DashboardEvent
 from grove.daemon._audience import _PollAudience
@@ -40,6 +40,11 @@ _QUEUE_SIZE = 256
 # Shared replay window. Covers a reconnect gap of this many events before we fall
 # back to a full snapshot.
 _RING_SIZE = 512
+# The same window bounded by payload, because a count alone is not a bound:
+# one workspace row measured 2.67 MB (3,245 fleet sessions, 2026-10-29), and
+# 512 of those is 1.4 GB of retained pydantic models for a replay nobody asks
+# for. Matches the intake budget, so the ring can never outgrow what it feeds.
+_RING_MAX_BYTES = 16 * 1024 * 1024
 
 
 class _SseHub:
@@ -61,6 +66,10 @@ class _SseHub:
         self._audience = audience if audience is not None else _PollAudience()
         self._queue_size = queue_size
         self._ring: deque[DashboardEvent] = deque(maxlen=ring_size)
+        # Parallel to ``_ring``: the serialized size of each held event, so the
+        # byte bound evicts without re-serializing anything.
+        self._ring_sizes: deque[int] = deque(maxlen=ring_size)
+        self._ring_bytes = 0
         self._queues: set[asyncio.Queue[DashboardEvent]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._unsub: Callable[[], None] | None = None
@@ -91,7 +100,7 @@ class _SseHub:
         self._loop = None
         for queue in list(self._queues):
             self.unregister(queue)
-        self._ring.clear()
+        self._clear_ring()
 
     # ─── per-connection registration ───────────────────────────────────────
 
@@ -134,7 +143,7 @@ class _SseHub:
         if loop is None:
             return
         event = DashboardEvent.from_delta(delta)
-        result = self._intake.offer(event, size_bytes=len(event.model_dump_json().encode()))
+        result = self._intake.offer(event, size_bytes=_event_size(event))
         if result in (Admission.FULL, Admission.TOO_LARGE):
             self._overflowed = True
 
@@ -147,7 +156,7 @@ class _SseHub:
             try:
                 if self._overflowed:
                     self._overflowed = False
-                    self._ring.clear()
+                    self._clear_ring()
                     snapshot, cursor = self._service.snapshot_with_cursor()
                     self._publish(DashboardEvent.snapshot_event(snapshot, seq=cursor))
                 else:
@@ -159,8 +168,41 @@ class _SseHub:
         """Publish a daemon-owned small event on the loop."""
         self._publish(event)
 
-    def _publish(self, event: DashboardEvent) -> None:
+    def resync(self, snapshot: DashboardSnapshot, cursor: int) -> None:
+        """Hand every client a fresh full snapshot, on the loop.
+
+        For a change no row delta can carry — a project list that moved under a
+        fleet whose rows did not. Same repair as an overflow: the ring is
+        cleared so a reconnect is answered with a snapshot, never a replay
+        across the change.
+        """
+        self._clear_ring()
+        self._publish(DashboardEvent.snapshot_event(snapshot, seq=cursor))
+
+    def _clear_ring(self) -> None:
+        self._ring.clear()
+        self._ring_sizes.clear()
+        self._ring_bytes = 0
+
+    def _remember(self, event: DashboardEvent) -> None:
+        """Hold ``event`` for replay, within both the count and the byte bound.
+
+        The two deques share one ``maxlen`` and are only ever appended and
+        popped together, so an index into one names the same event in the other.
+        """
+        size = _event_size(event)
+        if len(self._ring) == self._ring.maxlen:
+            # ``deque.append`` would drop the head silently; account for it first.
+            self._ring_bytes -= self._ring_sizes[0]
         self._ring.append(event)
+        self._ring_sizes.append(size)
+        self._ring_bytes += size
+        while self._ring_bytes > _RING_MAX_BYTES and len(self._ring) > 1:
+            self._ring.popleft()
+            self._ring_bytes -= self._ring_sizes.popleft()
+
+    def _publish(self, event: DashboardEvent) -> None:
+        self._remember(event)
         for queue in list(self._queues):
             if queue.full():
                 while not queue.empty():
@@ -169,6 +211,11 @@ class _SseHub:
                 queue.put_nowait(DashboardEvent.snapshot_event(snapshot, seq=cursor))
             else:
                 _offer(queue, event)
+
+
+def _event_size(event: DashboardEvent) -> int:
+    """The event's wire size in bytes — the unit both the intake and the ring budget in."""
+    return len(event.model_dump_json().encode())
 
 
 def _offer(queue: asyncio.Queue[DashboardEvent], event: DashboardEvent) -> None:

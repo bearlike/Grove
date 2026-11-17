@@ -130,36 +130,29 @@ describe("the shared entity labels keep their behaviour outside the scope", () =
 
 describe("the session metric ledger", () => {
   const html = renderToStaticMarkup(
-    <SessionMetadata workspace={{ ...workspace({ id: "sample" }), dirty_files: 7, diff_added: 124, diff_removed: 18 }} />,
+    <SessionMetadata workspace={{ ...workspace({ id: "sample", lastEventAt: "2026-08-09T00:00:00Z" }), dirty_files: 7, diff_added: 124, diff_removed: 18 }} />,
   );
 
-  it("holds changes and creation age on a separate compact ledger line", () => {
-    expect(html).toContain('data-testid="rail-ledger"');
-    expect(html).toContain('data-testid="rail-dirty"');
-    expect(html).toContain('data-testid="rail-added"');
-    expect(html).toContain('data-testid="rail-removed"');
-    expect(html).toContain('data-testid="rail-created"');
-    expect(html).not.toContain("grid-cols-8");
+  it("holds only the age and last update, with no change ledger", () => {
+    expect(html).toContain('data-testid="rail-times"');
+    for (const gone of ["rail-ledger", "rail-dirty", "rail-added", "rail-removed", "+124"]) {
+      expect(html, gone).not.toContain(gone);
+    }
   });
 
-  it("keeps all ledger figures non-shrinking and outside the marquee", () => {
-    expect(html.match(/flex shrink-0 items-center gap-1 whitespace-nowrap/g)).toHaveLength(4);
-    const cells = html.slice(html.indexOf('data-testid="rail-dirty"'));
-    expect(cells).not.toContain('data-testid="looping-text"');
-    expect(metrics).toContain("<CreatedAge iso={workspace.state.created_at} />");
-  });
-
-  it("keeps the signs as text on the figure rather than a fifth icon cell", () => {
-    expect(html).toContain("+124");
-    expect(html).toContain("−18");
+  it("keeps the times non-shrinking and outside the marquee", () => {
+    expect(html).toMatch(/class="flex shrink-0 items-center gap-1 whitespace-nowrap[^"]*" aria-label="[^"]*" data-testid="rail-times"/);
+    expect(html).not.toContain('data-testid="looping-text"');
+    expect(metrics).toContain("createdIso={workspace.state.created_at}");
   });
 
   it("carries no monospace anywhere", () => {
     expect(html).not.toContain("font-mono");
   });
 
-  it("says WHICH age it is showing, because the rail does not sort by it", () => {
-    expect(html).toContain("Created: ");
-    expect(metrics).toContain("workspace.state.created_at");
+  it("names each time it shows, because only one of them is the sort key", () => {
+    expect(html).toContain("Age: ");
+    expect(html).toContain("Last update: ");
+    expect(metrics).toContain("updatedIso={lastTranscriptIso(workspace)}");
   });
 });

@@ -112,6 +112,9 @@ class TicketState:
     listing its comments each time: the thread is fetched only when the count
     goes up.
 
+    On a GitHub pull request ``comment_count`` also counts submitted reviews,
+    since its ``comments`` field never moves for a review or an inline comment.
+
     ``body`` and ``comment_count`` are ``None`` for a tracker that does not
     report them (Linear, today). ``None`` means "cannot tell" and is never
     treated as empty, so a tracker that does not report comments can never
@@ -337,6 +340,16 @@ class TicketProvider(Protocol):
 
         Used to detect Grove's own marker comment on a cold start (issue-ops
         looks for its sticky comment before deciding to post vs. edit).
+        """
+        ...
+
+    def list_reviews(self, ticket_id: str) -> list[TicketComment]:
+        """A pull request's submitted reviews, oldest first, shaped as comments. Network I/O.
+
+        Kept apart from :meth:`list_comments` because review ids are not comment
+        ids: nothing may edit or react to one. ``read_state`` counts these into
+        ``comment_count`` exactly when this returns any, which is how the ticket
+        watch sees a review land.
         """
         ...
 
@@ -570,6 +583,10 @@ class HttpTicketProvider(ABC):
 
     def list_comments(self, ticket_id: str) -> list[TicketComment]:  # noqa: ARG002
         raise self._comments_unsupported("list_comments")
+
+    def list_reviews(self, ticket_id: str) -> list[TicketComment]:  # noqa: ARG002
+        """Base default: no reviews, matching a ``read_state`` that counts none."""
+        return []
 
     def post_comment(self, ticket_id: str, body: str) -> TicketComment:  # noqa: ARG002
         raise self._comments_unsupported("post_comment")

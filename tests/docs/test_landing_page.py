@@ -415,10 +415,14 @@ def test_landing_controls_share_light_text_on_machined_dark_surfaces() -> None:
     source = (DOCS / "index.md").read_text()
     assert source.count('<span class="grove-landing__button-icon">') == source.count("<svg") > 0
     assert "Documentation</a>" in source
+    # Every tile carries its window and its surface. The total is the README's
+    # Supports row, so adding a supported tool never needs this line edited.
+    readme = (ROOT / "README.md").read_text()
+    supports = readme.split("<strong>Supports</strong>", 1)[1].split("</p>", 1)[0]
     assert (
         source.count('class="grove-landing__support-window"')
         == source.count("--support-surface:")
-        == 7
+        == supports.count("<a href=")
     )
     assert "width: 112%;" in artwork and "max-width: none;" in artwork
     assert "border: 2px solid var(--factory-control-edge);" in css
@@ -523,6 +527,7 @@ def test_home_and_overview_keep_the_shared_readme_pitch() -> None:
         "features-attachments.md": "features-attachments/",
         "features-diagrams.md": "features-diagrams/",
         "issue-ops.md": "issue-ops/",
+        "features-slack.md": "features-slack/",
     }
     for destination in destinations.values():
         readme_overview = readme_overview.replace(

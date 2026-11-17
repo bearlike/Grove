@@ -12,7 +12,7 @@ import { barInset, captureSharpSurface, openSharpSurface } from "./sharp-surface
  */
 const ACTUAL_TAB_FLOOR = dp(13);
 // The fixture workspace has no diagram, so its strip is
-// `offeredPanelTabs(true, false)` — pinned member-by-member in
+// `offeredPanelTabs(true, false, false)` — pinned member-by-member in
 // tests/unit/diagram-tab-presence.test.ts. Update both together when a tab is
 // added (#858 added Trajectory and this count went stale).
 const WORK_TAB_COUNT = 6;
@@ -322,6 +322,9 @@ test.describe("sharp surfaces", () => {
   test("captures the approved Info and Controls evidence at both review widths and themes", async ({
     page,
   }, testInfo) => {
+    // Four themed widths of captures in one test overran the shared 90 s budget
+    // on a loaded runner; the per-step waits are unchanged.
+    test.setTimeout(240_000);
     for (const theme of ["light", "dark"] as const) {
       for (const width of [540, 300] as const) {
         for (const tab of ["info", "controls"] as const) {

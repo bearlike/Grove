@@ -16,7 +16,7 @@ export type {
 export { PublicClient, publicClient } from "./public-client";
 export type { PublicWorkspaceView } from "./public-client";
 export { subscribeToEventStream } from "./sse";
-export type { EventStream, EventStreamHandlers, GroveStreamEvent } from "./sse";
+export type { EventStream, EventStreamHandlers, GroveStreamEvent, LivePulseEvent } from "./sse";
 
 /**
  * The daemon's wire types, re-exported wholesale. Narrowing this list buys

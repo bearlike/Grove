@@ -26,9 +26,11 @@ import {
   workspaceContext,
 } from "@/lib/grove/adapters";
 import { useUsageQuotas } from "@/lib/grove/hooks/usage";
-import { useWhoami } from "@/lib/grove/hooks";
+import { useMe, useWhoami } from "@/lib/grove/hooks";
 import { StatusFooter } from "@/components/grove/shell/status-footer";
 import { AnnotationHost } from "@/components/grove/annotation";
+import { AddProjectDialog } from "@/components/grove/projects";
+import { LaunchDraftProvider } from "@/components/grove/launch/launch-draft";
 import { FleetOverlays, useFleetStream } from "@/components/grove/fleet";
 import {
   filterRows,
@@ -38,10 +40,12 @@ import {
   type FleetFilter,
 } from "@/components/grove/fleet/filter";
 import { useProjectContext, scopeFleetRows } from "@/components/grove/fleet/project-context";
+import { useUnreadTracking } from "@/components/grove/fleet/unread";
 import type { FleetSearchController } from "@/components/grove/fleet/fleet-palette";
 import { AppSidebar } from "@/components/grove/shell/app-sidebar";
 import { RAIL_WIDTH } from "./rail-width";
 import {
+  useRouteCollapse,
   useSidebarShortcuts,
   useSidebarUi,
 } from "./sidebar-state";
@@ -58,9 +62,10 @@ function useFleetSearch(
     () => scopeFleetRows(allRows, project.context),
     [allRows, project.context],
   );
+  const me = useMe().data?.subject;
   const visibleRows = useMemo(
-    () => filterRows(scopedRows, filter),
-    [scopedRows, filter],
+    () => filterRows(scopedRows, filter, me),
+    [scopedRows, filter, me],
   );
   const facets = useMemo(() => fleetFacets(scopedRows), [scopedRows]);
 
@@ -139,7 +144,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const footer = useFooterData(stream, project);
   const searchOpener = useRef<HTMLElement | null>(null);
   const [searchAfterSheet, setSearchAfterSheet] = useState(false);
+  const pathname = usePathname();
   useSidebarShortcuts();
+  useRouteCollapse(pathname);
+  useUnreadTracking(
+    stream.snapshot,
+    pathname.startsWith("/w/") ? (pathname.split("/")[2] ?? null) : null,
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -196,6 +207,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     // column, so the rail's absolutely-positioned descendants still resolve
     // against the row that CONTAINS the rail — the trap `webapp/CLAUDE.md`
     // records as a page painting over the brand.
+    // The creation draft wraps the whole shell: the landing composer lives in
+    // the page and More options in the overlays, and both edit ONE draft.
+    <LaunchDraftProvider>
     <div className="flex h-dvh w-full flex-col overflow-hidden">
       <div className="relative flex min-h-0 w-full flex-1 overflow-hidden">
       <aside
@@ -261,11 +275,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {/* The page, with an annotation pane beside it while one is open.
               Inside the panel so the pane shares the page's clipping corner. */}
           <AnnotationHost>{children}</AnnotationHost>
+          <AddProjectDialog />
         </div>
       </div>
 
       <FleetOverlays
-        snapshot={stream.snapshot}
         search={search}
         onSearchOpenChange={(open) => {
           if (open) search.setOpen(true);
@@ -285,5 +299,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         attention={footer.attention}
       />
     </div>
+    </LaunchDraftProvider>
   );
 }

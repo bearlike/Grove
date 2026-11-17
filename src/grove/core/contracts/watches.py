@@ -11,7 +11,7 @@ halts, and Grove delivers the outcome as ordinary mail when it happens.
 a new kind of thing to wait for is a new variant plus a
 :class:`~grove.core.watches.Watcher` — never a change to the scheduler, the
 registry or any surface. ``ci`` ships built in because it is what agents ask for
-first, but it holds no privileged position: it is one variant among four.
+first, but it holds no privileged position: it is one variant among five.
 
 **A callback is not evidence that a model acted on it.** Delivery rides the
 mailbox, so it inherits that contract exactly (see
@@ -21,6 +21,7 @@ bytes to a transport. Nothing here claims a session read them.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
@@ -182,45 +183,175 @@ class TicketPredicate(BaseModel):
     baseline: TicketSnapshot | None = None
 
 
-class PhaseNudgePredicate(BaseModel):
-    """Remind this workspace's agent to report its phase when it works on without doing so.
+class TriggerPredicate(BaseModel):
+    """Put Grove's configured instructions into this workspace's session when they apply.
 
     The second STANDING predicate, with the same lifetime as ``ticket``: Grove
     registers one per running workspace, the workspace's lifecycle cancels it,
-    and it never settles. Each check compares what it sees now against the
-    baseline it recorded at the previous check, which is what lets "the phase
-    did not move for a whole interval while the agent kept working" be decided
-    from two observations rather than a clock inside the agent.
+    and it never settles. Every rule in ``triggers.rules`` is evaluated by this
+    one watch, so a new rule is configuration rather than another row.
 
-    Every baseline field is ``None`` until the first check has looked, so a
-    fresh registration only records and never reminds.
+    The fields are the watch's memory between checks, and they are what make a
+    rule fire once rather than on every check. Each is scoped to ``session_id``:
+    a respawn or a rotated session starts the counts over, because a send cap
+    is a promise about one conversation's context window, not about a workspace.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: Literal["phase_nudge"] = "phase_nudge"
+    kind: Literal["trigger"] = "trigger"
     workspace_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    # The primary session the remaining fields describe. `None` until the first
+    # check has seen one.
+    session_id: str | None = None
     # The primary session's assistant replies plus tool calls at the previous
-    # check. A change means the agent did something during the interval, which
-    # is the only evidence that separates working on from one long tool call.
+    # check. A change means the agent did something since, which is the only
+    # evidence that separates working on from one long tool call or a stall.
     progress: int | None = None
-    # When the phase report last changed, as of the previous check.
-    phase_at: datetime | None = None
-    # The phase report a reminder was already sent about. One reminder per
-    # report: a long `build` is a long task, not a stale claim, so a reminder
-    # repeated every interval would nag an agent that had nothing to change.
-    nudged_at: datetime | None = None
+    # Compactions in the primary session already accounted for. A reminder is
+    # owed whenever the session's own count is higher.
+    compactions: int | None = None
+    # The phase report a stale-phase reminder was already sent about. One per
+    # report: a long `build` is a long task, so repeating it would only nag.
+    phase_reminded_at: datetime | None = None
+    # Sends per rule name in this session, and when each rule last went out.
+    # Counted at the attempt, before delivery, so a cap can never be exceeded
+    # by a send whose receipt was lost.
+    sent: dict[str, int] = Field(default_factory=dict)
+    last_sent: dict[str, datetime] = Field(default_factory=dict)
+
+
+class ReaperPredicate(BaseModel):
+    """Reconcile what exists on this host against what the workspace records entitle.
+
+    The one HOST-scoped standing predicate: it belongs to no workspace, so its
+    recipient is :data:`HOST_ADDRESS` and nothing is ever mailed to it. The
+    durable memory (first-seen marks, the action log) lives in the reaper's own
+    store, not here, so this carries no fields beyond its kind.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["reaper"] = "reaper"
+
+
+class IdlePredicate(BaseModel):
+    """Freeze every workspace whose agent has been idle past its cooldown.
+
+    HOST-scoped like :class:`ReaperPredicate`: one watch for the host, never one
+    per workspace, so an idle fleet costs one check per interval. The idle
+    signal is re-read each check, so this carries nothing but its kind.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["idle"] = "idle"
 
 
 WatchPredicate = Annotated[
-    TimerPredicate | CiPredicate | CommandPredicate | TicketPredicate | PhaseNudgePredicate,
+    TimerPredicate
+    | CiPredicate
+    | CommandPredicate
+    | TicketPredicate
+    | TriggerPredicate
+    | ReaperPredicate
+    | IdlePredicate,
     Field(discriminator="kind"),
 ]
 
 # Kinds that never settle and have no deadline. Grove registers and cancels them
 # with the workspace's lifecycle, and nobody halts on one, so there is no turn
 # to hand back when time runs out.
-STANDING_KINDS: frozenset[str] = frozenset({"ticket", "phase_nudge"})
+STANDING_KINDS: frozenset[str] = frozenset({"ticket", "trigger", "reaper", "idle"})
+
+# Standing kinds that belong to the HOST rather than a workspace. Their recipient
+# is HOST_ADDRESS, which no workspace record names, so the start-up orphan sweep
+# must not read "no such workspace" as "this watch is orphaned".
+HOST_KINDS: frozenset[str] = frozenset({"reaper", "idle"})
+
+# The address a host-scoped watch is registered to. All zeros is not a workspace
+# id Grove mints (`uuid4().hex`), so it can never collide with a real recipient.
+HOST_ADDRESS = MailboxAddress(workspace_id="0" * 32)
+
+# Kinds an earlier release persisted and this one replaced. A row of one is
+# dropped when the log is read rather than held aside as unreadable, because no
+# newer build will ever claim it back: `phase_nudge` became one rule of `trigger`,
+# and `supervise` left with the master role.
+RETIRED_KINDS: frozenset[str] = frozenset({"phase_nudge", "supervise"})
+
+
+class TriggerTarget(BaseModel):
+    """Which workspaces a manual trigger reaches. Every field narrows; none widens.
+
+    An empty selector matches nothing unless ``all`` is set, so a request that
+    forgot its filter cannot broadcast to the whole fleet by accident.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workspace_ids: list[str] = Field(default_factory=list, max_length=200)
+    all: bool = False
+    repo: str | None = None
+    agent: str | None = None
+    phase: str | None = None
+    ticket: str | None = Field(default=None, pattern=r"^[a-z]+:[A-Za-z0-9._/#-]+$")
+    title_prefix: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("workspace_ids")
+    @classmethod
+    def _ids_are_workspace_ids(cls, value: list[str]) -> list[str]:
+        bad = [item for item in value if not re.fullmatch(r"[a-f0-9]{32}", item)]
+        if bad:
+            raise ValueError(f"not a workspace id: {', '.join(bad)}")
+        return value
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this selector names nothing at all."""
+        return not (
+            self.workspace_ids
+            or self.all
+            or self.repo
+            or self.agent
+            or self.phase
+            or self.ticket
+            or self.title_prefix
+        )
+
+
+class TriggerFireRequest(BaseModel):
+    """Send one configured trigger rule now, to the workspaces a selector picks."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule: str = Field(pattern=r"^[a-z][a-z0-9-]{0,39}$")
+    target: TriggerTarget
+
+
+# What happened at one workspace. `skipped` means Grove deliberately did not
+# send (the session was not working, the cap was reached, the workspace had no
+# trigger watch); the other three are the mailbox's own receipt vocabulary.
+TriggerReceipt = Literal["delivered", "rejected", "unknown", "skipped"]
+
+
+class TriggerFireResult(BaseModel):
+    """One workspace's answer to a manual trigger."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workspace_id: str
+    title: str
+    receipt: TriggerReceipt
+    detail: str | None = None
+
+
+class TriggerFireView(BaseModel):
+    """Every workspace the selector matched, and what happened at each."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule: str
+    results: list[TriggerFireResult] = Field(default_factory=list)
 
 
 class WatchRegistration(BaseModel):
@@ -321,13 +452,20 @@ __all__ = [
     "DEFAULT_INTERVAL",
     "MAX_DEADLINE",
     "MIN_INTERVAL",
+    "RETIRED_KINDS",
     "STANDING_KINDS",
     "CiPredicate",
     "CommandPredicate",
-    "PhaseNudgePredicate",
+    "IdlePredicate",
     "TicketPredicate",
     "TicketSnapshot",
     "TimerPredicate",
+    "TriggerFireRequest",
+    "TriggerFireResult",
+    "TriggerFireView",
+    "TriggerPredicate",
+    "TriggerReceipt",
+    "TriggerTarget",
     "WatchId",
     "WatchList",
     "WatchOutcome",

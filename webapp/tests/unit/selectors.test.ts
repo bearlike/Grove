@@ -95,6 +95,7 @@ describe("resolvedWorkspaceSelection", () => {
       resolvedWorkspaceSelection(true, { view: "work", workTab: null }),
     ).toEqual({ view: "work", workTab: "info" });
   });
+
 });
 
 describe("storedView", () => {

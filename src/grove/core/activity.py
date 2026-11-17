@@ -53,14 +53,14 @@ from grove.core.agents.hook import (
 from grove.core.agents.session_registry import NativeClaudeSession, NativeSessionRegistry
 from grove.core.agents.transcript_scope import config_dir_override
 from grove.core.contracts.usage import DurationView, GenerationLatencyView, TokenClassesView
-from grove.core.errors import WorkspaceNotFound
+from grove.core.errors import GitError, GroveError, WorkspaceNotFound
 from grove.core.git import GitRepo
 from grove.core.launch import AgentExit
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
 from grove.core.phase import PhaseReport
 from grove.core.registry import RepoRegistry
 from grove.core.spine_facts import SpineFactsCache
-from grove.core.workspace import CommitSummary, WorkspaceState, WorkspaceStatus
+from grove.core.workspace import CommitSummary, Runtime, WorkspaceState, WorkspaceStatus
 from grove.core.workspace_history import WorkspaceHistoryStore
 
 if TYPE_CHECKING:
@@ -140,6 +140,9 @@ class SessionActivity:
     duration: DurationView | None = None
     tokens: TokenClassesView | None = None
     latency: GenerationLatencyView | None = None
+    #: Main-thread compactions so far, off the same spine read; ``None`` when unread.
+    #: Not on the wire: the trigger watcher is its one reader.
+    compactions: int | None = None
     # The adapter's immutable answer before runtime/sidecar evidence changes its
     # displayed state. It lets a runtime-only edge reblend without a re-parse.
     polled_activity: AgentActivity | None = None
@@ -502,6 +505,7 @@ class _SpineFacts:
     duration: DurationView
     tokens: TokenClassesView
     latency: GenerationLatencyView
+    compactions: int
 
 
 class ActivityService:
@@ -516,6 +520,11 @@ class ActivityService:
     ``poll_once()``; the service keeps time-of-day out of its core, exactly like
     the manager keeps side effects at the boundary.
     """
+
+    # The projection has one worker: a remote command that exceeds this budget
+    # must degrade one row rather than turn the worker's 120-second git bound
+    # into fleet-wide latency.
+    PROJECTION_WORKER_TIMEOUT_SECONDS = 5.0
 
     def __init__(
         self,
@@ -801,10 +810,23 @@ class ActivityService:
                 queue=self._queue_depth(mgr, state, sessions),
                 fleet=self._fleet_summary(mgr, state),
             )
-        if domains & RefreshDomain.WORKTREE:
+        # A worker that cannot answer keeps the retained facts `row` already carries.
+        readable = not self._worker_unreadable(state)
+        if readable and domains & RefreshDomain.WORKTREE:
             row = self._replace_worktree_facts(row, state)
-        if domains & RefreshDomain.PHASE:
-            row = replace(row, phase=self._phase(mgr, state))
+        if readable and domains & RefreshDomain.PHASE:
+            try:
+                phase = (
+                    self._phase(mgr, state, strict=True)
+                    if state.runtime is Runtime.REMOTE
+                    else self._phase(mgr, state)
+                )
+            except GroveError as exc:
+                if state.runtime is not Runtime.REMOTE:
+                    raise
+                logger.debug("activity remote phase({}) failed: {}", state.id, exc)
+            else:
+                row = replace(row, phase=phase)
         if domains & RefreshDomain.RUNTIME:
             row = replace(row, sessions=self._reblend_sessions(mgr, state, row.sessions))
         return row
@@ -833,13 +855,18 @@ class ActivityService:
             transcript = session.polled_activity or session.activity
             kind = session.session.adapter_kind
             adapter = get_adapter(kind)
-            sidecar = (
-                ClaudeHook.read(
-                    session.session.session_id, sidecar_dir=core_paths.agent_sidecar_dir()
-                )
-                if kind == "claude_code"
-                else None
+            sidecar = self._remote_push(
+                state,
+                (
+                    ClaudeHook.read(
+                        session.session.session_id, sidecar_dir=core_paths.agent_sidecar_dir()
+                    )
+                    if kind == "claude_code"
+                    else None
+                ),
             )
+            if state.runtime is Runtime.REMOTE:
+                transcript = self._remote_clock(state, transcript, sidecar)
             native = (
                 NativeSessionRegistry.for_session(session.session.session_id)
                 if kind == "claude_code"
@@ -874,6 +901,7 @@ class ActivityService:
                     activity=replace(
                         session.activity,
                         state=blended,
+                        last_event_at=transcript.last_event_at,
                         current_task=(
                             agent_exit.reason
                             if agent_exit is not None and agent_exit.failed
@@ -1051,6 +1079,40 @@ class ActivityService:
         groups.sort(key=lambda g: g.cwd)
         return DashboardSnapshot(projects=tuple(groups), generated_at=_utcnow())
 
+    def regroup_projects(self) -> tuple[DashboardSnapshot, int]:
+        """Re-fit the held projection to the registry's CURRENT project list.
+
+        A project added to or removed from config changes the groups and no
+        row, so this reads no workspace, transcript or git — unlike
+        `reconcile`, which re-reads the whole fleet (measured 57 s on a busy
+        host) to answer the same question. Rows stay in the group they already
+        sit in; a group no row holds and no project declares is dropped.
+        Returns the new snapshot with its cursor, for a caller to push.
+        """
+        projects = self._registry.known_projects()
+        self.bootstrap()
+        with self._projection_lock:
+            held = {g.cwd: g for g in self._projection.projects} if self._projection else {}
+            groups = {
+                str(p.cwd): held.get(str(p.cwd))
+                or ProjectGroup(
+                    repo_root=str(p.repo_root),
+                    repo_name=p.repo_root.name,
+                    cwd=str(p.cwd),
+                    workspaces=(),
+                )
+                for p in projects
+            }
+            for cwd, group in held.items():
+                if group.workspaces:
+                    groups.setdefault(cwd, group)
+            self._projection = DashboardSnapshot(
+                projects=tuple(sorted(groups.values(), key=lambda g: g.cwd)),
+                generated_at=_utcnow(),
+            )
+            self._projection_seq = self.next_seq()
+            return self._projection, self._projection_seq
+
     @staticmethod
     def _subpath(repo_root: Path, cwd: Path) -> str:
         """POSIX subpath of ``cwd`` under ``repo_root`` ("" when they're equal).
@@ -1136,9 +1198,31 @@ class ActivityService:
         self, mgr: WorkspaceManager, state: WorkspaceState
     ) -> WorkspaceActivity:
         sessions = tuple(self.sessions_for(mgr, state))
-        ahead, behind, added, removed, dirty, pane_target, commits, branch = self._worktree_facts(
-            state
-        )
+        if self._worker_unreadable(state):
+            with self._projection_lock:
+                previous = self._rows.get(state.id)
+            facts = self._carried_facts(state, previous)
+            phase = previous.phase if previous is not None else None
+        else:
+            try:
+                facts = self._worktree_facts(state)
+                phase = (
+                    self._phase(mgr, state, strict=True)
+                    if state.runtime is Runtime.REMOTE
+                    else self._phase(mgr, state)
+                )
+            except (GitError, GroveError) as exc:
+                # A remote worker that missed the projection deadline is no more
+                # readable than a frozen one. Keep its last facts rather than
+                # letting one row's timeout delay every other row's refresh.
+                if state.runtime is not Runtime.REMOTE:
+                    raise
+                logger.debug("activity remote worktree({}) failed: {}", state.id, exc)
+                with self._projection_lock:
+                    previous = self._rows.get(state.id)
+                facts = self._carried_facts(state, previous)
+                phase = previous.phase if previous is not None else None
+        ahead, behind, added, removed, dirty, pane_target, commits, branch = facts
         return WorkspaceActivity(
             state=state,
             sessions=sessions,
@@ -1150,7 +1234,7 @@ class ActivityService:
             pane_target=pane_target,
             recent_commits=commits,
             observed_at=_utcnow(),
-            phase=self._phase(mgr, state),
+            phase=phase,
             todo=self._todo_progress(mgr, state, sessions),
             queue=self._queue_depth(mgr, state, sessions),
             fleet=self._fleet_summary(mgr, state),
@@ -1161,9 +1245,14 @@ class ActivityService:
         self, row: WorkspaceActivity, state: WorkspaceState
     ) -> WorkspaceActivity:
         """Replace every git-derived member while leaving transcript facts intact."""
-        ahead, behind, added, removed, dirty, pane_target, commits, branch = self._worktree_facts(
-            state
-        )
+        try:
+            facts = self._worktree_facts(state)
+            ahead, behind, added, removed, dirty, pane_target, commits, branch = facts
+        except GitError as exc:
+            if state.runtime is not Runtime.REMOTE:
+                raise
+            logger.debug("activity remote worktree({}) failed: {}", state.id, exc)
+            return row
         return replace(
             row,
             base_ahead=ahead,
@@ -1176,25 +1265,83 @@ class ActivityService:
             branch=branch,
         )
 
+    @staticmethod
+    def _worker_unreadable(state: WorkspaceState) -> bool:
+        """Whether a remote workspace's worker cannot answer a read right now.
+
+        A frozen or hibernated workload is paused or gone, and an OFFLINE one
+        has no worker on the channel (``RemoteRuntime.liveness``). Each read
+        through it would wait out ``GitRepo.TIMEOUT_SECONDS``, and a full
+        refresh makes about six of them on the projection's ONE thread, so a
+        single frozen remote stalled every row on the host for 11 m 39 s
+        (#1070). Frozen is Grove's own stamp, so it holds whether or not the
+        platform's pause took.
+
+        Returns:
+            ``True`` for a REMOTE workspace that is frozen, hibernated or
+            OFFLINE; ``False`` for every other workspace.
+        """
+        return state.runtime is Runtime.REMOTE and (
+            state.frozen_at is not None
+            or state.hibernated_at is not None
+            or state.status is WorkspaceStatus.OFFLINE
+        )
+
+    @staticmethod
+    def _carried_facts(
+        state: WorkspaceState, previous: WorkspaceActivity | None
+    ) -> tuple[int, int, int, int, int, str | None, tuple[CommitSummary, ...], str]:
+        """The git and pane facts of the last row, for a worker that cannot be read.
+
+        Args:
+            state: The workspace being refreshed.
+            previous: Its maintained row, or ``None`` when it has none yet.
+
+        Returns:
+            The previous row's facts, or zeros and the recorded branch when there
+            is no previous row: the same answer a failed read already degrades to.
+        """
+        if previous is None:
+            return 0, 0, 0, 0, 0, None, (), state.branch
+        return (
+            previous.base_ahead,
+            previous.base_behind,
+            previous.diff_added,
+            previous.diff_removed,
+            previous.dirty_files,
+            previous.pane_target,
+            previous.recent_commits,
+            previous.branch,
+        )
+
     def _worktree_facts(
         self, state: WorkspaceState
     ) -> tuple[int, int, int, int, int, str | None, tuple[CommitSummary, ...], str]:
         """The git and pane facts an actual worktree edge invalidates."""
-        git = self._git_for(Path(state.repo_root))
-        branch = self._live_branch(state)
+        remote = state.runtime is Runtime.REMOTE
+        git = self._git_of(state)
+        # Only a remote row hands its bounded reader over: a local row's live
+        # branch is its WORKTREE's HEAD, and `git` here answers for the repo root.
+        branch = self._live_branch(state, git=git if remote else None, strict=remote)
         try:
             ahead, behind = git.ahead_behind(branch, state.base_branch)
         except Exception as exc:
+            if remote:
+                raise
             logger.debug("activity ahead_behind({}) failed: {}", state.id, exc)
             ahead = behind = 0
         try:
             added, removed = git.diff_stats(branch, state.diff_base)
         except Exception as exc:
+            if remote:
+                raise
             logger.debug("activity diff_stats({}) failed: {}", state.id, exc)
             added = removed = 0
         try:
             dirty = git.dirty_file_count(Path(state.worktree_path))
         except Exception as exc:
+            if remote:
+                raise
             logger.debug("activity dirty_file_count({}) failed: {}", state.id, exc)
             dirty = 0
         try:
@@ -1205,15 +1352,27 @@ class ActivityService:
         try:
             commits = git.recent_commits(branch, limit=3)
         except Exception as exc:
+            if remote:
+                raise
             logger.debug("activity recent_commits({}) failed: {}", state.id, exc)
             commits = ()
         return ahead, behind, added, removed, dirty, pane_target, commits, branch
 
-    @staticmethod
-    def _phase(mgr: WorkspaceManager, state: WorkspaceState) -> PhaseReport | None:
+    @classmethod
+    def _phase(
+        cls, mgr: WorkspaceManager, state: WorkspaceState, *, strict: bool = False
+    ) -> PhaseReport | None:
         try:
-            return mgr.phase_for(state)
+            return mgr.phase_for(
+                state,
+                timeout=cls.PROJECTION_WORKER_TIMEOUT_SECONDS
+                if state.runtime is Runtime.REMOTE
+                else None,
+                strict=strict,
+            )
         except Exception as exc:
+            if strict:
+                raise
             logger.debug("activity phase({}) failed: {}", state.id, exc)
             return None
 
@@ -1540,6 +1699,7 @@ class ActivityService:
         agent_exit: AgentExit | None = None,
     ) -> SessionActivity:
         adapter = get_adapter(kind)
+        sidecar = self._remote_push(state, sidecar)
         # ``cwd`` is the directory this session was discovered under — agent_cwd
         # for the minted session, the discovered cwd for an extra (which may be
         # the worktree root for a nested project's root-recorded session, #F7).
@@ -1561,6 +1721,8 @@ class ActivityService:
             native = (
                 NativeSessionRegistry.for_session(session_id) if kind == "claude_code" else None
             )
+        if state.runtime is Runtime.REMOTE:
+            transcript = self._remote_clock(state, transcript, sidecar)
         # Remote adapters surface state with no local file, so "materialized"
         # can't mean "a file exists" — UNKNOWN-and-fileless is the only true
         # STARTING window.
@@ -1650,6 +1812,7 @@ class ActivityService:
             duration=spine.duration if spine else None,
             tokens=spine.tokens if spine else None,
             latency=spine.latency if spine else None,
+            compactions=spine.compactions if spine else None,
             polled_activity=transcript,
         )
 
@@ -1701,6 +1864,7 @@ class ActivityService:
                 duration=current.duration,
                 tokens=current.token_classes,
                 latency=current.generation_latency,
+                compactions=current.compactions,
             )
             self._spine_cache[session_id] = (identity, reducer, facts)
             return facts
@@ -1856,9 +2020,10 @@ class ActivityService:
             signals; an ended turn stays WAITING, a needs-input prompt stays
             BLOCKED, regardless of tmux noise).
           - transcript WORKING (tool_use / mid-stream tail):
-              · remote adapter → WORKING (the backend's status is authoritative;
-                the local pane runs a bare shell and says nothing about remote
-                work — gating on it read every busy remote agent as IDLE).
+              · pane not authoritative (remote adapter, headless or native
+                workspace) AND the transcript carries no clock → WORKING: the
+                backend's status is all there is, and the local pane runs a
+                bare shell (gating on it read every busy remote agent as IDLE).
               · workspace ACTIVE (tmux fresh) → WORKING.
               · transcript fresh (``last_event_at`` within the sidecar window) →
                 WORKING. The adapter's own abstraction outranks the tmux
@@ -1869,7 +2034,12 @@ class ActivityService:
               · otherwise (both signals stale, or session not live) → IDLE — a
                 tool_use tail with nothing advancing is alive-but-stalled (or a
                 killed agent whose transcript froze mid-tool); precise BLOCKED
-                needs a hook.
+                needs a hook. This arm applies to a paneless session too: its
+                clock is the mirrored transcript or the worker's push
+                (``_remote_clock``), and a native session whose fleet spawn
+                never closed (``_SubagentFleet``) read WORKING for days
+                because the paneless arm used to skip this check entirely
+                (measured 2026-10-29).
         """
         # No transcript materialized: only a Grove-launched session is legitimately
         # mid-STARTING (nothing written yet on its first turn). An fs_discovered
@@ -1889,9 +2059,9 @@ class ActivityService:
             AgentActivityState.BLOCKED,
         ):
             return t
-        if remote:
+        if remote and transcript.last_event_at is None:
             return t
-        if ws_status == WorkspaceStatus.ACTIVE:
+        if ws_status == WorkspaceStatus.ACTIVE and not remote:
             return AgentActivityState.WORKING
         if (
             transcript.last_event_at is not None
@@ -1899,6 +2069,48 @@ class ActivityService:
         ):
             return AgentActivityState.WORKING
         return AgentActivityState.IDLE
+
+    @staticmethod
+    def _remote_push(state: WorkspaceState, sidecar: HookRecord | None) -> HookRecord | None:
+        """The pushed state a session's blend may use, given where its workspace runs.
+
+        A remote session's only agent axis is what its worker pushed (#1030),
+        and a worker that can no longer be reached pushes nothing more: its
+        last ``Stop`` would otherwise read WAITING forever, with a clock the
+        idle watcher would act on against a workload nobody can reach.
+        ``RemoteRuntime.liveness`` already reads such a workspace OFFLINE, so
+        that answer outranks the stale push here.
+        """
+        if state.runtime is Runtime.REMOTE and state.status is WorkspaceStatus.OFFLINE:
+            return None
+        return sidecar
+
+    @staticmethod
+    def _remote_clock(
+        state: WorkspaceState, transcript: AgentActivity, sidecar: HookRecord | None
+    ) -> AgentActivity:
+        """A remote session's event time: the newer of its transcript and its push.
+
+        The worker mirrors its transcript to this host (``transcript_mirror``),
+        so the parse carries a clock once the first chunk has landed; before
+        that, or for a worker that declares no mirror, the parse has none. The
+        sidecar's ``ts`` is the daemon's receipt of the newest edge the worker
+        reported, accurate to the network, and it lands before the bytes that
+        describe it, so the later of the two is the honest answer.
+
+        A workspace read OFFLINE has NO clock, whatever either source says: the
+        idle rule gates on this field alone, and a clock for a workload nobody
+        can reach would freeze it against a worker that cannot answer the
+        freeze (the ``_remote_push`` rule, which withholds the push for the
+        same reason, applied to the mirrored copy too).
+        """
+        if state.status is WorkspaceStatus.OFFLINE:
+            return replace(transcript, last_event_at=None)
+        pushed = sidecar.ts if sidecar is not None else None
+        parsed = transcript.last_event_at
+        if pushed is None or (parsed is not None and parsed > pushed):
+            return replace(transcript, last_event_at=parsed)
+        return replace(transcript, last_event_at=pushed)
 
     @staticmethod
     def _with_native_step(
@@ -2014,7 +2226,9 @@ class ActivityService:
 
     # ─── internal ──────────────────────────────────────────────────────────
 
-    def _live_branch(self, state: WorkspaceState) -> str:
+    def _live_branch(
+        self, state: WorkspaceState, *, git: GitRepo | None = None, strict: bool = False
+    ) -> str:
         """The branch the workspace is on NOW, falling back to the recorded one.
 
         ``WorkspaceState.branch`` is a CREATE-TIME snapshot that nothing
@@ -2039,11 +2253,29 @@ class ActivityService:
         worktree has no branch to report.
         """
         try:
-            live = self._git_for(Path(state.worktree_path)).current_branch()
+            live = (
+                git
+                if git is not None
+                else (
+                    self._git_of(state)
+                    if state.runtime is Runtime.REMOTE
+                    else self._git_for(Path(state.worktree_path))
+                )
+            ).current_branch()
         except Exception as exc:  # best-effort, exactly like the reads around it
+            if strict:
+                raise
             logger.debug("activity current_branch({}) failed: {}", state.id, exc)
             return state.branch
         return live or state.branch
+
+    def _git_of(self, state: WorkspaceState) -> GitRepo:
+        """This workspace's git reads: the cached local repo, or its remote worker's."""
+        if state.runtime is Runtime.REMOTE:
+            return self._registry.get(Path(state.repo_root)).git_for(
+                state, runner_timeout=self.PROJECTION_WORKER_TIMEOUT_SECONDS
+            )
+        return self._git_for(Path(state.repo_root))
 
     def _git_for(self, repo_root: Path) -> GitRepo:
         key = repo_root.resolve()

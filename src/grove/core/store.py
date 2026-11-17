@@ -24,9 +24,11 @@ from loguru import logger
 
 from grove.core import paths
 from grove.core.container_runtime import ContainerRuntimeState
+from grove.core.contracts.artifacts import ArtifactRef
 from grove.core.contracts.diagrams import DiagramSessionView
 from grove.core.contracts.tickets import TicketRef
 from grove.core.errors import DiagramConflict, GroveError, WorkspaceNotFound
+from grove.core.runtimes import RemoteHandle
 from grove.core.workspace import (
     PERSISTED_STATUSES,
     BranchProvenance,
@@ -386,6 +388,9 @@ class JsonWorkspaceStore:
         data["created_at"] = state.created_at.isoformat()
         data["updated_at"] = state.updated_at.isoformat()
         data["paused_at"] = state.paused_at.isoformat() if state.paused_at else None
+        data["frozen_at"] = state.frozen_at.isoformat() if state.frozen_at else None
+        data["thawed_at"] = state.thawed_at.isoformat() if state.thawed_at else None
+        data["hibernated_at"] = state.hibernated_at.isoformat() if state.hibernated_at else None
         data["share_expires_at"] = (
             state.share_expires_at.isoformat() if state.share_expires_at else None
         )
@@ -398,11 +403,16 @@ class JsonWorkspaceStore:
         # recurses dataclasses), so serialize them to plain JSON dicts here —
         # the same explicit-field treatment the enums/datetimes get.
         data["ticket_refs"] = [r.model_dump(mode="json") for r in state.ticket_refs]
+        data["artifact_refs"] = [r.model_dump(mode="json") for r in state.artifact_refs]
         # Same treatment for the container identity (Pydantic, so `asdict` left
         # it as a model instance). Persisting it is what makes teardown possible
         # at all: a container whose id is not on disk is a container nothing can
         # ever find again.
         data["container"] = state.container.model_dump(mode="json") if state.container else None
+        data["remote"] = asdict(state.remote) if state.remote else None
+        data["pending_snapshot"] = (
+            asdict(state.pending_snapshot) if state.pending_snapshot else None
+        )
         data["diagram"] = state.diagram.model_dump(mode="json") if state.diagram else None
         return data
 
@@ -430,6 +440,16 @@ class JsonWorkspaceStore:
             paused_at=(
                 datetime.fromisoformat(data["paused_at"]) if data.get("paused_at") else None
             ),
+            frozen_at=(
+                datetime.fromisoformat(data["frozen_at"]) if data.get("frozen_at") else None
+            ),
+            thawed_at=(
+                datetime.fromisoformat(data["thawed_at"]) if data.get("thawed_at") else None
+            ),
+            hibernated_at=(
+                datetime.fromisoformat(data["hibernated_at"]) if data.get("hibernated_at") else None
+            ),
+            created_by=data.get("created_by") or "local",
             error_detail=data.get("error_detail"),
             description=data.get("description"),
             init_status=InitStatus(init_status_raw) if init_status_raw else None,
@@ -460,6 +480,10 @@ class JsonWorkspaceStore:
             # existed; re-validated through the Pydantic model so a corrupt
             # on-disk ref fails loudly here rather than mid-render.
             ticket_refs=[TicketRef.model_validate(r) for r in (data.get("ticket_refs") or [])],
+            # `.get()`: absent on every record written before artifacts existed.
+            artifact_refs=[
+                ArtifactRef.model_validate(r) for r in (data.get("artifact_refs") or [])
+            ],
             # `.get()` — absent on every record until a runtime-context override
             # is set; None is the default, current-behavior path for
             # every legacy and non-container workspace.
@@ -491,6 +515,9 @@ class JsonWorkspaceStore:
             # existed was never briefed, which is exactly what `False` says.
             brief=bool(data.get("brief", False)),
             native=bool(data.get("native", False)),
+            # `.get()`: absent on every record written before per-workspace
+            # tmux servers; "" keeps those on the shared default server.
+            tmux_socket=data.get("tmux_socket") or "",
             runtime_fallback_reason=data.get("runtime_fallback_reason"),
             provision_status=(
                 ProvisionStatus(provision_status_raw) if provision_status_raw else None
@@ -502,6 +529,11 @@ class JsonWorkspaceStore:
             # other optional decodes this one re-validates LOUDLY; see
             # `_decode_container`.
             container=_decode_container(data.get("container")),
+            remote=_decode_remote(data.get("remote")),
+            # The cleanup obligation has to survive a daemon restart for the
+            # same reason the live handle does: otherwise the only snapshot
+            # copy can neither be retried from nor later reclaimed.
+            pending_snapshot=_decode_remote(data.get("pending_snapshot")),
             # `.get(..., False)` — a legacy record predates the packaged
             # default config entirely, so it can never have used one.
             runtime_default_config=bool(data.get("runtime_default_config", False)),
@@ -522,6 +554,17 @@ def _decode_container(raw: Any) -> ContainerRuntimeState | None:
     if raw is None:
         return None
     return ContainerRuntimeState.model_validate(raw)
+
+
+def _decode_remote(raw: Any) -> RemoteHandle | None:
+    """``None`` for every non-remote record, else the persisted workload handle.
+
+    Loud like :func:`_decode_container`, for the same reason: a dropped handle
+    orphans a billed workload on somebody's cloud that no verb can name again.
+    """
+    if raw is None:
+        return None
+    return RemoteHandle(runtime=str(raw["runtime"]), ref=str(raw["ref"]))
 
 
 def _decode_transcript_context(raw: Any) -> TranscriptContext | None:

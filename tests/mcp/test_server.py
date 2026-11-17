@@ -35,6 +35,7 @@ EXPECTED_TOOLS = {
     "grove_stop_diagram",
     "grove_peek_workspace",
     "grove_get_fleet_status",
+    "grove_get_fleet_digest",
     "grove_pause_workspace",
     "grove_resume_workspace",
     "grove_respawn_workspace",
@@ -44,12 +45,15 @@ EXPECTED_TOOLS = {
     "grove_remap_workspace_session",
     "grove_attach_ticket",
     "grove_detach_ticket",
+    "grove_attach_artifact",
+    "grove_detach_artifact",
     "grove_get_workspace_phase",
     "grove_set_workspace_phase",
     "grove_get_workspace_todo",
     "grove_recollect_session",
     "grove_list_mailbox_contacts",
     "grove_send_mailbox_message",
+    "grove_send_mailbox_batch",
 }
 
 # The read-only scope: tools that only observe. Every OTHER published tool
@@ -68,6 +72,7 @@ NON_MUTATING_TOOLS = {
     "grove_list_sessions",
     "grove_peek_workspace",
     "grove_get_fleet_status",
+    "grove_get_fleet_digest",
     "grove_attach_instruction",
     "grove_get_workspace_phase",
     "grove_get_workspace_todo",

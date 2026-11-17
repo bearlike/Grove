@@ -13,6 +13,9 @@
 /.next/
 /out/
 
+# the file viewer's runtime assets, copied from node_modules by `npm run assets:viewer`
+/public/file-viewer/
+
 # production
 /build
 

@@ -65,6 +65,7 @@ export const FIXTURE_ACTIVITY: DashboardSnapshotView = {
           {
             "state": {
               "id": "59d472a0b0ef47339ad61d1cf190edb9",
+"project_subpath": "",
               "title": "Frontend UI migration",
               "repo_root": "/home/demo/acme/widget",
               "branch": "main",
@@ -219,6 +220,7 @@ export const FIXTURE_WORKSPACE_ACTIVITY: WorkspaceActivityView =
 export const FIXTURE_WORKSPACES: WorkspaceStateView[] = [
     {
       "id": "59d472a0b0ef47339ad61d1cf190edb9",
+"project_subpath": "",
       "title": "Frontend UI migration",
       "repo_root": "/home/demo/acme/widget",
       "branch": "main",
@@ -1412,6 +1414,7 @@ export const FIXTURE_USAGE: {
 export const FIXTURE_PEEK: WorkspacePeekView = {
     "state": {
       "id": "59d472a0b0ef47339ad61d1cf190edb9",
+"project_subpath": "",
       "title": "Frontend UI migration",
       "repo_root": "/home/demo/acme/widget",
       "branch": "main",
@@ -1542,6 +1545,8 @@ export const FIXTURE_AGENTS: AgentSummaryView[] = [
     description: "Plain shell — a workspace with no LLM",
     native: false,
     models: [],
+    launch_modes: ["terminal"],
+    runtimes: ["host", "container"],
   },
   {
     name: "Claude Code (default)",
@@ -1549,6 +1554,9 @@ export const FIXTURE_AGENTS: AgentSummaryView[] = [
     description: "Claude Code, default config dir, skip-permissions",
     native: true,
     models: ["fable", "opus", "sonnet", "haiku"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    launch_modes: ["native", "terminal"],
+    runtimes: ["host", "container", "remote"],
   },
   {
     name: "claude-terminal",
@@ -1556,6 +1564,9 @@ export const FIXTURE_AGENTS: AgentSummaryView[] = [
     description: "Anthropic Claude Code (interactive terminal)",
     native: false,
     models: ["fable", "opus", "sonnet", "haiku"],
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    launch_modes: ["native", "terminal"],
+    runtimes: ["host", "container", "remote"],
   },
 ];
 

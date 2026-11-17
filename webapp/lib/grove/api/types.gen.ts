@@ -38,6 +38,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/oidc/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Oidc Session
+         * @description Trade a verified ID token for a Grove bearer that names the same person.
+         *
+         *     What the CLI device flow and a browser sign-in call once, so neither has
+         *     to carry the ID token (and refresh it) on every request afterwards.
+         */
+        post: operations["oidc_session_auth_oidc_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/pair/{challenge_id}/deny": {
         parameters: {
             query?: never;
@@ -79,7 +102,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Session Me */
+        /**
+         * Session Me
+         * @description The caller's own session; a caller presenting an ID token directly has none, so it
+         *     is described from the token.
+         */
         get: operations["session_me_auth_sessions_me_get"];
         put?: never;
         post?: never;
@@ -196,6 +223,260 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mailboxes/read-result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read Result
+         * @description What a command the daemon asked the owner to run in its worktree answered.
+         */
+        post: operations["read_result_mailboxes_read_result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/pulse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pulse
+         * @description A watched owner's newest live step; dropped when nobody watches.
+         */
+        post: operations["pulse_mailboxes_pulse_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/spool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Spool
+         * @description One spool drop from an owner that shares no filesystem with this host.
+         *
+         *     A remote worker states its session's turn edges, standing ask and
+         *     stream facts here; the daemon writes each into the host hook spool,
+         *     where the sidecar reader folds it exactly like a local drop. Fenced
+         *     like ``/pulse`` (bearer plus the connection's generation), and a
+         *     drop may only speak for the session this owner registered: a worker
+         *     naming another session would be writing a stranger's agent state.
+         */
+        post: operations["spool_mailboxes_spool_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/pane": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pane
+         * @description A watched remote owner's newest pane lines; dropped when nobody watches.
+         *
+         *     Fenced like ``/pulse``. A batch that does not continue the replica is
+         *     409 carrying where the replica ends, and the worker answers by
+         *     resending its whole log, so a lost batch never leaves a gap.
+         */
+        post: operations["pane_mailboxes_pane_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Transcript Read
+         * @description One bounded chunk of a file :func:`transcript_files` listed, base64.
+         */
+        get: operations["transcript_read_mailboxes_transcript_get"];
+        put?: never;
+        /**
+         * Transcript Chunk
+         * @description The next bytes of one of a remote owner's transcript files.
+         *
+         *     Fenced like ``/spool``: bearer plus the connection's generation,
+         *     and a chunk may only name the session this owner registered, so a
+         *     worker can never write a stranger's transcript. Applied only when
+         *     ``offset`` is the file's current size; otherwise 409 carrying that
+         *     size, which is the worker's cue to re-read from there. That one
+         *     answer is the whole sync protocol (there is no size query): a
+         *     reconnect, a restored daemon or a file the host already holds all
+         *     correct the worker on its next POST.
+         */
+        post: operations["transcript_chunk_mailboxes_transcript_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/transcript/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Transcript Files
+         * @description The host-mirrored files of a remote workspace's own session, with their sizes.
+         *
+         *     Read by a fresh workload that is about to resume the session, before
+         *     its provider starts and therefore before it can register, so the
+         *     fence is the bearer alone. That reads no wider than ``/turns``,
+         *     which serves the same transcript to every authenticated principal.
+         *     Empty for any session but the record's own and for a non-remote
+         *     workspace.
+         */
+        get: operations["transcript_files_mailboxes_transcript_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fleet/digest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Digest */
+        get: operations["digest_fleet_digest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Batch */
+        post: operations["send_batch_mailboxes_batch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/speech/transcriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Transcribe */
+        post: operations["transcribe_speech_transcriptions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/speech/synthesis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Synthesize */
+        post: operations["synthesize_speech_synthesis_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sidebar/pins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Listing */
+        get: operations["listing_sidebar_pins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sidebar/pins/{workspace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Pin */
+        put: operations["pin_sidebar_pins__workspace_id__put"];
+        post?: never;
+        /** Unpin */
+        delete: operations["unpin_sidebar_pins__workspace_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/watches": {
         parameters: {
             query?: never;
@@ -226,6 +507,23 @@ export interface paths {
         post?: never;
         /** Cancel */
         delete: operations["cancel_watches__watch_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/watches/triggers/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fire */
+        post: operations["fire_watches_triggers_fire_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -746,6 +1044,9 @@ export interface paths {
          *     ``WorkspaceManager.find_by_ticket`` resolves for that ticket — the
          *     issue-ops "does a workspace already exist for this ticket" lookup —
          *     scanned within ``repo`` when given, else across every known repo.
+         *     ``creator`` defaults to ``me``, the caller's own workspaces; ``all``
+         *     shows everyone's. It narrows a view and grants nothing: every signed-in
+         *     person may read every workspace.
          */
         get: operations["list_workspaces_workspaces_get"];
         put?: never;
@@ -949,6 +1250,30 @@ export interface paths {
          *     re-provisioning cost and same per-workspace serialization as ``resume``.
          */
         post: operations["respawn_workspace_workspaces__ws_id__respawn_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork Workspace
+         * @description Create a new workspace whose agent starts from a copy of this one's conversation.
+         *
+         *     Returns the NEW workspace once it is provisioned, like ``POST /workspaces``.
+         *     Unkeyed on the lifecycle runner for the same reason create is: the
+         *     serializing id is minted by the call, and the source is only read.
+         */
+        post: operations["fork_workspace_workspaces__ws_id__fork_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1197,6 +1522,33 @@ export interface paths {
          *     In the executor like every other steer route — same tmux injection path.
          */
         post: operations["switch_workspace_model_workspaces__ws_id__controls_model_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/controls/effort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch Workspace Effort
+         * @description Change the running native session's reasoning effort.
+         *
+         *     Delivered over the provider's own control channel (Claude Code
+         *     ``apply_flag_settings``, Codex ``thread/settings/update``) — 204 means
+         *     the request reached the owner, not that the provider applied it.
+         *     Refusals: 422 ``effort_not_supported`` (a level the kind does not list,
+         *     or a workspace with no native channel), 409 ``pane_not_found`` (no
+         *     connected owner), 501 ``steering_unsupported``.
+         */
+        post: operations["switch_workspace_effort_workspaces__ws_id__controls_effort_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1789,6 +2141,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Workspace Live Stream
+         * @description The working loader's feed, alive exactly as long as somebody reads it.
+         *
+         *     Opening the stream is the watch: the first viewer asks the owner worker
+         *     to start posting its live step and the last one leaving stops it, so an
+         *     unwatched session costs nothing beyond the in-memory fold the worker
+         *     already does. No snapshot read, no poll and no host-wide delta.
+         */
+        get: operations["workspace_live_stream_workspaces__ws_id__live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{ws_id}/provision": {
         parameters: {
             query?: never;
@@ -2124,6 +2501,44 @@ export interface paths {
          */
         get: operations["list_projects_projects_get"];
         put?: never;
+        /**
+         * Add Project
+         * @description Create, clone or adopt a repository and add it to the user config.
+         *
+         *     Rides the lifecycle pool, not the default executor: a clone takes as long
+         *     as the remote and the repository make it take.
+         *
+         *     The registry is reloaded HERE, with the watch's own loader, before the
+         *     response leaves. The user-config watch would get there a second or two
+         *     later, and in that window every repo-gated route (`/agents`,
+         *     `/branches`, `/defaults`) answered `unknown_repo_root` for the project a
+         *     client had just been told exists — measured as a 404 on the launch
+         *     picker's first agents read. The watch's later reload then finds nothing
+         *     changed. Pushing the new snapshot to clients stays the watch's job.
+         */
+        post: operations["add_project_projects_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Project Candidates
+         * @description Git repositories under `projects_root` that Grove does not list yet.
+         *
+         *     The "add an existing repository" step's source. Off-loop because it
+         *     stats every entry of the root and reads each candidate's remotes.
+         */
+        get: operations["project_candidates_projects_candidates_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -2225,6 +2640,60 @@ export interface paths {
          *     ``repo``; the user scope deliberately has no repository requirement.
          */
         put: operations["save_defaults_defaults_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/launch/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Launch
+         * @description What ``POST /workspaces`` would do with this exact body, before anything is created.
+         *
+         *     Same resolution and same pre-side-effect checks as the create, run
+         *     against the same per-repo config, so a form showing this is showing
+         *     what the create will record. ``problems`` empty means validation
+         *     passed; provisioning is still checked by the create itself. Cheap
+         *     enough to call on every draft change: container readiness is a
+         *     shared reading at most a few seconds old (`_ReadinessMemo`), and
+         *     nothing here runs git, tmux or Docker on the request.
+         */
+        post: operations["preview_launch_launch_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/launch/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Launch Options
+         * @description Where a create in ``repo`` could run, configured or not, and whether each is ready.
+         *
+         *     Host and container readiness are the same preflight checks ``grove
+         *     doctor`` runs, read through the preview's shared memo so a form fetching
+         *     this costs at most one probe per runtime every few seconds. A remote
+         *     block's platform is never probed and reads ``unknown``; a hub appends
+         *     each reachable node's runtimes by name, also ``unknown``.
+         */
+        get: operations["list_launch_options_launch_options_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -2391,10 +2860,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{ws_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach Artifact
+         * @description Attach a file path or an http(s) link to a workspace.
+         *
+         *     The engine classifies and validates the target: a file must be a
+         *     regular file under the workspace checkout, the project root or a
+         *     configured ``artifacts.roots`` directory. Idempotent by target. A
+         *     refused target is 422 ``artifact_invalid``.
+         */
+        post: operations["attach_artifact_workspaces__ws_id__artifacts_post"];
+        /**
+         * Detach Artifact
+         * @description Remove an artifact by its id or by the target it was attached with.
+         *
+         *     ``ref`` is a query parameter because a target is a path or a URL, and
+         *     neither survives as one path segment. Idempotent.
+         */
+        delete: operations["detach_artifact_workspaces__ws_id__artifacts_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{ws_id}/artifacts/{artifact_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Artifact Content
+         * @description The current bytes of one attached file artifact.
+         *
+         *     Only an attached artifact is addressable, so a client never names a
+         *     path, and the engine re-checks the allowed directories on every read.
+         *
+         *     ALWAYS ``application/octet-stream`` with ``nosniff``, whatever the file
+         *     is. An agent-written HTML or SVG file opened directly at this URL must
+         *     download, never render on the dashboard's origin. The viewer picks a
+         *     renderer from the file name, which rides ``Content-Disposition``.
+         */
+        get: operations["read_artifact_content_workspaces__ws_id__artifacts__artifact_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AdoptProject
+         * @description Register a repository that already exists on this host.
+         */
+        AdoptProject: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "adopt";
+            /** Path */
+            path: string;
+        };
         /**
          * AgentActivityState
          * @description What one agent session is doing right now.
@@ -2577,6 +3119,59 @@ export interface components {
              * @default []
              */
             models: string[];
+            /** Efforts */
+            efforts?: string[];
+            /**
+             * Launch Modes
+             * @default [
+             *       "terminal"
+             *     ]
+             */
+            launch_modes: ("native" | "terminal")[];
+            /**
+             * Runtimes
+             * @default [
+             *       "host",
+             *       "container"
+             *     ]
+             */
+            runtimes: ("host" | "container" | "remote")[];
+        };
+        /**
+         * ArtifactAttachRequest
+         * @description Body of ``POST /workspaces/{id}/artifacts``.
+         *
+         *     ``target`` is whatever a person or an agent typed: an ``http(s)`` URL, or
+         *     a file path (relative paths resolve against the workspace checkout). The
+         *     engine classifies and validates it, so no client re-implements the rule.
+         */
+        ArtifactAttachRequest: {
+            /** Target */
+            target: string;
+            /** Title */
+            title?: string | null;
+        };
+        /**
+         * ArtifactRef
+         * @description One attached artifact.
+         *
+         *     ``target`` is the URL for a link and the absolute host path for a file.
+         *     ``id`` is derived from kind and target (see :meth:`id_for`), so it is
+         *     stable across attaches and safe as a URL segment. ``title`` is the
+         *     optional human label; ``None`` means the client shows the target's name.
+         */
+        ArtifactRef: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "link" | "file";
+            /** Target */
+            target: string;
+            /** Title */
+            title?: string | null;
         };
         /**
          * AssignmentTicketEvent
@@ -2802,6 +3397,23 @@ export interface components {
             head_sha: string;
         };
         /**
+         * CloneProject
+         * @description Clone a repository the host's git can already reach.
+         */
+        CloneProject: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "clone";
+            /** Url */
+            url: string;
+            /** Name */
+            name?: string | null;
+            /** Location */
+            location?: string | null;
+        };
+        /**
          * CommandPredicate
          * @description Wake me when this command exits with one of these statuses.
          *
@@ -3010,24 +3622,47 @@ export interface components {
             used_fraction: number;
         };
         /**
+         * CreateProject
+         * @description Start an empty repository: `git init` plus one empty initial commit.
+         */
+        CreateProject: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "create";
+            /** Name */
+            name: string;
+            /** Location */
+            location?: string | null;
+        };
+        /**
          * CreateWorkspaceRequest
          * @description Payload for ``WorkspaceManager.create()``.
          *
-         *     ``branch_plan`` defaults to ``AutoBranch()`` so callers that don't
-         *     care about branch semantics get the historical Grove behavior for
-         *     free — Grove generates ``{prefix}{slug(title)}-{ts}`` off ``HEAD``.
+         *     Every launch field may be omitted, and omitted means "resolve it": the
+         *     engine's ``LaunchResolver`` answers it from the request, then the project's
+         *     saved defaults, then the user's, then Grove's built-in (the first agent, on
+         *     the host, in the current checkout). A client sends only what the person
+         *     chose, so a pre-filled form never pins today's config onto the workspace.
          */
         CreateWorkspaceRequest: {
             /** Agent Name */
-            agent_name: string;
+            agent_name?: string | null;
+            /** Agent Kind */
+            agent_kind?: ("claude_code" | "codex" | "opencode" | "mewbo" | "generic") | null;
             /** Title */
-            title: string;
+            title?: string;
             /** Description */
             description?: string | null;
             /** Model */
             model?: string | null;
-            branch_plan?: components["schemas"]["BranchPlan"];
+            /** Effort */
+            effort?: string | null;
+            branch_plan?: components["schemas"]["BranchPlan"] | null;
             runtime?: components["schemas"]["Runtime"] | null;
+            /** Remote Runtime */
+            remote_runtime?: string | null;
             /** Brief */
             brief?: boolean | null;
             /** Native */
@@ -3041,8 +3676,17 @@ export interface components {
             attachments?: components["schemas"]["AttachmentUploadRequest"][];
             /** Resume Session Id */
             resume_session_id?: string | null;
+            /** Fork Session */
+            fork_session?: boolean | null;
             /** Repo Root */
             repo_root?: string | null;
+            project?: components["schemas"]["ProjectIdentity"] | null;
+            /** Selector */
+            selector?: {
+                [key: string]: string;
+            } | null;
+            /** Node */
+            node?: string | null;
             /** Project Cwd */
             project_cwd?: string | null;
         };
@@ -3326,6 +3970,121 @@ export interface components {
             new_text: string;
         };
         /**
+         * FleetDigestRow
+         * @description One workspace, small enough that fifty fit in a model turn.
+         *
+         *     ``agent`` is the primary session's blended state (``working``, ``waiting``,
+         *     ``idle``, ``blocked``, ``error``, ``unknown``), the same word the dashboard
+         *     shows. ``phase`` and ``phase_note`` are what the agent CLAIMS; ``status`` and
+         *     ``agent`` are what Grove OBSERVED. A reader must keep the two apart.
+         */
+        FleetDigestRow: {
+            /** Workspace Id */
+            workspace_id: string;
+            /** Title */
+            title: string;
+            /** Repo Name */
+            repo_name: string;
+            /** Status */
+            status: string;
+            /** Agent */
+            agent?: string | null;
+            /** Session Id */
+            session_id?: string | null;
+            /** Phase */
+            phase?: string | null;
+            /** Phase Note */
+            phase_note?: string | null;
+            /**
+             * Phase Blocked
+             * @default false
+             */
+            phase_blocked: boolean;
+            /** Phase Updated At */
+            phase_updated_at?: string | null;
+            /** Todo Done */
+            todo_done?: number | null;
+            /** Todo Total */
+            todo_total?: number | null;
+            /** Current Task */
+            current_task?: string | null;
+            /** Question Ids */
+            question_ids?: string[];
+            /** Tickets */
+            tickets?: string[];
+            /** Subagents Active */
+            subagents_active?: number | null;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Flags */
+            flags?: ("question" | "blocked" | "error" | "offline" | "quiet" | "handoff")[];
+        };
+        /**
+         * FleetDigestTotals
+         * @description Counts over the WHOLE selection, not just the returned page.
+         */
+        FleetDigestTotals: {
+            /** Workspaces */
+            workspaces: number;
+            /** By Status */
+            by_status?: {
+                [key: string]: number;
+            };
+            /** By Agent */
+            by_agent?: {
+                [key: string]: number;
+            };
+            /** By Phase */
+            by_phase?: {
+                [key: string]: number;
+            };
+            /** By Flag */
+            by_flag?: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * FleetDigestView
+         * @description One bounded page of the fleet, plus totals over all of it.
+         *
+         *     ``cursor`` is an opaque token naming the projection generation this page was
+         *     read from. Pass it back as ``since`` to receive only rows whose facts
+         *     changed after it, plus ``removed`` for workspaces that left the
+         *     selection. ``resync_required`` means the cursor belongs to an earlier daemon
+         *     run or a different selection: discard what you held and read from scratch.
+         *     ``next_page`` continues this same read; it is not a change cursor.
+         */
+        FleetDigestView: {
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Scope */
+            scope?: string[] | null;
+            totals: components["schemas"]["FleetDigestTotals"];
+            /** Rows */
+            rows?: components["schemas"]["FleetDigestRow"][];
+            /** Removed */
+            removed?: string[];
+            /** Degraded Repos */
+            degraded_repos?: string[];
+            /** Cursor */
+            cursor: string;
+            /** Next Page */
+            next_page?: string | null;
+            /**
+             * Resync Required
+             * @default false
+             */
+            resync_required: boolean;
+        };
+        /**
          * FleetProgressView
          * @description Wire mirror of ``grove.core.activity.FleetSummary`` — counts, never the roster.
          *
@@ -3516,6 +4275,26 @@ export interface components {
              * @default false
              */
             read_only: boolean;
+            /**
+             * Tmux Socket
+             * @default
+             */
+            tmux_socket: string;
+        };
+        /**
+         * IdlePredicate
+         * @description Freeze every workspace whose agent has been idle past its cooldown.
+         *
+         *     HOST-scoped like :class:`ReaperPredicate`: one watch for the host, never one
+         *     per workspace, so an idle fleet costs one check per interval. The idle
+         *     signal is re-read each check, so this carries nothing but its kind.
+         */
+        IdlePredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "idle";
         };
         /**
          * InitStatus
@@ -3602,6 +4381,92 @@ export interface components {
             workspace_id?: string | null;
         };
         /**
+         * LaunchAdjustmentView
+         * @description One answer the engine changed so the draft can run, and why, in one sentence.
+         *
+         *     ``value`` is the answer taken, in the request's own vocabulary (a roster
+         *     name for ``agent_name``, a branch-plan kind for ``branch_plan``, a runtime
+         *     for ``runtime``). A form shows ``reason`` as-is and never re-derives it.
+         */
+        LaunchAdjustmentView: {
+            /** Field */
+            field: string;
+            /** Value */
+            value: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * LaunchOptionsView
+         * @description Every runtime a create form may offer: this daemon's, then each reachable node's.
+         */
+        LaunchOptionsView: {
+            /** Runtimes */
+            runtimes: components["schemas"]["RuntimeOptionView"][];
+        };
+        /**
+         * LaunchPreviewView
+         * @description The effective launch for one draft request, with sources and problems.
+         *
+         *     ``problems`` empty means the create's validation passed, never that it
+         *     will succeed: provisioning, git and the container's own readiness are
+         *     checked again, live, by the create. Container readiness here is a reading
+         *     up to a few seconds old, so a preview never waits on Docker.
+         *
+         *     Carries no secret, no environment and no host path: ``agent_cwd`` is
+         *     relative to the repository root.
+         */
+        LaunchPreviewView: {
+            /** Agent Name */
+            agent_name: string | null;
+            /** Agent Kind */
+            agent_kind: ("claude_code" | "codex" | "opencode" | "generic" | "mewbo") | null;
+            /**
+             * Runtime
+             * @enum {string}
+             */
+            runtime: "host" | "container" | "remote";
+            /** Remote Runtime */
+            remote_runtime: string | null;
+            /** Runtime Fallback Reason */
+            runtime_fallback_reason: string | null;
+            /** Native */
+            native: boolean;
+            /** Placement */
+            placement: ("root" | "worktree") | null;
+            branch_plan: components["schemas"]["BranchPlan"] | null;
+            /** Agent Cwd */
+            agent_cwd: string;
+            /** Model */
+            model: string | null;
+            /** Effort */
+            effort: string | null;
+            /** Brief */
+            brief: boolean;
+            /** Skip Init */
+            skip_init: boolean;
+            /** Sources */
+            sources: {
+                [key: string]: "request" | "project" | "user" | "config" | "builtin";
+            };
+            /** Problems */
+            problems: components["schemas"]["LaunchProblemView"][];
+            /** Adjustments */
+            adjustments: components["schemas"]["LaunchAdjustmentView"][];
+        };
+        /**
+         * LaunchProblemView
+         * @description One reason a create would be refused, named by the request field that owns it.
+         */
+        LaunchProblemView: {
+            /** Field */
+            field: string;
+            /** Error */
+            error: string;
+            /** Message */
+            message: string;
+        };
+        /**
          * LiveCountersView
          * @description Wire mirror of ``grove.core.activity.LiveCounters``.
          *
@@ -3626,6 +4491,39 @@ export interface components {
             generating_since: string;
         };
         /**
+         * LivePulseView
+         * @description One snapshot of the owned stream's current step.
+         *
+         *     ``step`` is ``None`` while the owner has seen nothing it can name since the
+         *     last turn ended. Counts are the harness's own figures, never an estimate
+         *     Grove makes: ``thinking_tokens`` is Claude's running ``estimated_tokens``,
+         *     ``output_tokens`` is the sum of ``usage.output_tokens`` the turn's replies
+         *     reported. ``None`` means the stream has not stated it.
+         */
+        LivePulseView: {
+            /** Step */
+            step?: ("thinking" | "generating" | "tool" | "subagent") | null;
+            /** Since */
+            since?: string | null;
+            /** Thinking Tokens */
+            thinking_tokens?: number | null;
+            /** Output Tokens */
+            output_tokens?: number | null;
+            /** Tool */
+            tool?: string | null;
+            /** Tool Detail */
+            tool_detail?: string | null;
+            /**
+             * Subagents
+             * @default 0
+             */
+            subagents: number;
+            /** Subagent */
+            subagent?: string | null;
+            /** Subagent Tool */
+            subagent_tool?: string | null;
+        };
+        /**
          * MailboxAddress
          * @description A managed agent slot, never a PID, display name or transcript path.
          *
@@ -3641,6 +4539,42 @@ export interface components {
              * @default
              */
             agent: string;
+        };
+        /**
+         * MailboxBatchReceipt
+         * @description One receipt per unique recipient, in request order. Partial success is normal.
+         */
+        MailboxBatchReceipt: {
+            /** Request Id */
+            request_id: string;
+            /** Receipts */
+            receipts: components["schemas"]["MailboxReceipt"][];
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+        };
+        /**
+         * MailboxBatchRequest
+         * @description The same message to an explicit, frozen list of recipients.
+         *
+         *     ``request_id`` makes a retry safe: resending the same id with the same
+         *     payload returns the recorded receipts instead of delivering again, and the
+         *     same id with a different payload is refused.
+         */
+        MailboxBatchRequest: {
+            /** Request Id */
+            request_id: string;
+            sender: components["schemas"]["MailboxAddress"];
+            /** Recipients */
+            recipients: components["schemas"]["MailboxAddress"][];
+            /** Subject */
+            subject: string;
+            /** Body */
+            body: string;
+            /** In Reply To */
+            in_reply_to?: string | null;
         };
         /**
          * MailboxContact
@@ -3661,7 +4595,7 @@ export interface components {
              * Runtime
              * @enum {string}
              */
-            runtime: "host" | "container";
+            runtime: "host" | "container" | "remote";
             /** Live */
             live: boolean;
         };
@@ -3901,6 +4835,19 @@ export interface components {
             base_ref: string;
         };
         /**
+         * OidcExchangeRequest
+         * @description ``POST /auth/oidc/session`` body: an ID token to trade for a Grove bearer.
+         */
+        OidcExchangeRequest: {
+            /** Id Token */
+            id_token: string;
+            /**
+             * Label
+             * @default oidc
+             */
+            label: string;
+        };
+        /**
          * PairRequest
          * @description ``POST /auth/pair`` body.
          */
@@ -3949,35 +4896,6 @@ export interface components {
              */
             expires_at: string;
             state: components["schemas"]["ChallengeState"];
-        };
-        /**
-         * PhaseNudgePredicate
-         * @description Remind this workspace's agent to report its phase when it works on without doing so.
-         *
-         *     The second STANDING predicate, with the same lifetime as ``ticket``: Grove
-         *     registers one per running workspace, the workspace's lifecycle cancels it,
-         *     and it never settles. Each check compares what it sees now against the
-         *     baseline it recorded at the previous check, which is what lets "the phase
-         *     did not move for a whole interval while the agent kept working" be decided
-         *     from two observations rather than a clock inside the agent.
-         *
-         *     Every baseline field is ``None`` until the first check has looked, so a
-         *     fresh registration only records and never reminds.
-         */
-        PhaseNudgePredicate: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "phase_nudge";
-            /** Workspace Id */
-            workspace_id: string;
-            /** Progress */
-            progress?: number | null;
-            /** Phase At */
-            phase_at?: string | null;
-            /** Nudged At */
-            nudged_at?: string | null;
         };
         /**
          * PhaseView
@@ -4056,6 +4974,28 @@ export interface components {
             ticket_key: string | null;
         };
         /**
+         * ProjectCandidateView
+         * @description One git repository on disk that Grove does not list yet.
+         */
+        ProjectCandidateView: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Remote */
+            remote?: string | null;
+        };
+        /**
+         * ProjectCandidatesView
+         * @description Unregistered repositories directly under `root`, sorted by name.
+         */
+        ProjectCandidatesView: {
+            /** Root */
+            root: string;
+            /** Candidates */
+            candidates?: components["schemas"]["ProjectCandidateView"][];
+        };
+        /**
          * ProjectGroupView
          * @description Wire mirror of ``grove.core.activity.ProjectGroup``.
          */
@@ -4070,6 +5010,16 @@ export interface components {
             workspaces: components["schemas"]["WorkspaceActivityView"][];
             /** Error */
             error?: string | null;
+        };
+        /**
+         * ProjectIdentity
+         * @description ``remote`` is normalized (``host/owner/repo``) so every clone URL form agrees.
+         */
+        ProjectIdentity: {
+            /** Remote */
+            remote: string;
+            /** Default Branch */
+            default_branch: string;
         };
         /**
          * ProjectView
@@ -4432,6 +5382,22 @@ export interface components {
             position: number;
         };
         /**
+         * ReaperPredicate
+         * @description Reconcile what exists on this host against what the workspace records entitle.
+         *
+         *     The one HOST-scoped standing predicate: it belongs to no workspace, so its
+         *     recipient is :data:`HOST_ADDRESS` and nothing is ever mailed to it. The
+         *     durable memory (first-seen marks, the action log) lives in the reaper's own
+         *     store, not here, so this carries no fields beyond its kind.
+         */
+        ReaperPredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "reaper";
+        };
+        /**
          * RecordedNameView
          * @description The most recently recorded name for a workspace, including its tombstone.
          */
@@ -4537,7 +5503,67 @@ export interface components {
          *     :attr:`WorkspaceState.runtime_fallback_reason`.
          * @enum {string}
          */
-        Runtime: "host" | "container";
+        Runtime: "host" | "container" | "remote";
+        /**
+         * RuntimeOptionView
+         * @description One place a workspace could run, as a create form offers it.
+         *
+         *     Send ``id`` through ``CreateWorkspaceRequest.runtime_fields``: ``host`` and
+         *     ``container`` are runtimes, any other id is a ``remote_runtime``, and a
+         *     row with a ``node`` also sends that ``node``. An unconfigured driver's id
+         *     is ``driver:<kind>`` and is never sent. ``workspace_target`` false
+         *     (a task-only episodic block) is never selectable. ``status`` is measured
+         *     for host and container and ``unknown`` wherever Grove does not probe, never
+         *     a fabricated ``ready``. ``setup`` says what configuring an unset driver
+         *     takes; it names config keys, never a credential. ``driver_label`` is the
+         *     driver's name as a person reads it (``OpenSandbox``), so a form never has
+         *     to show ``driver``'s config keyword; ``None`` for host, container and a
+         *     node's runtime, whose driver is not known here.
+         */
+        RuntimeOptionView: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "host" | "container" | "remote";
+            /** Driver */
+            driver: string | null;
+            /** Driver Label */
+            driver_label: string | null;
+            /** Node */
+            node: string | null;
+            /** Workspace Target */
+            workspace_target: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "unavailable" | "not_configured" | "unknown";
+            /** Reason */
+            reason: string | null;
+            /** Setup */
+            setup: string | null;
+        };
+        /**
+         * RuntimeTargetView
+         * @description One place a create may run: a daemon, and the remote runtimes it configures.
+         *
+         *     ``node`` is ``None`` for the daemon answering; on a federation hub every
+         *     reachable node follows by name. A client sends ``node`` as
+         *     ``CreateWorkspaceRequest.node`` and one of ``runtimes`` as its
+         *     ``remote_runtime`` with ``runtime: "remote"``.
+         */
+        RuntimeTargetView: {
+            /** Node */
+            node: string | null;
+            /**
+             * Runtimes
+             * @default []
+             */
+            runtimes: string[];
+        };
         /**
          * SendKey
          * @description Engine-owned key names; the terminal application decides their effect.
@@ -4614,6 +5640,8 @@ export interface components {
             current_model: string | null;
             /** Permission Mode */
             permission_mode: string | null;
+            /** Efforts */
+            efforts?: string[];
         };
         /**
          * SessionDetailView
@@ -4813,6 +5841,11 @@ export interface components {
              * @default false
              */
             revoked: boolean;
+            /**
+             * Subject
+             * @default local
+             */
+            subject: string;
         };
         /**
          * SetPhaseRequest
@@ -4871,6 +5904,21 @@ export interface components {
              * @default false
              */
             passcode_set: boolean;
+        };
+        /**
+         * SignInView
+         * @description A bearer minted for a person by ``POST /auth/oidc/session``.
+         */
+        SignInView: {
+            /** Token */
+            token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Subject */
+            subject: string;
         };
         /**
          * SubagentActivityView
@@ -5050,6 +6098,15 @@ export interface components {
              */
             evidence: "provider_endpoint" | "statusline" | "rollout" | "unknown";
             projection?: components["schemas"]["SubscriptionWindowProjection"] | null;
+        };
+        /**
+         * SynthesisRequest
+         * @description Text to read aloud. 4096 characters is the provider's own limit, so a
+         *     longer answer is split by the client and read chunk by chunk.
+         */
+        SynthesisRequest: {
+            /** Text */
+            text: string;
         };
         /**
          * TicketPhaseView
@@ -5426,6 +6483,128 @@ export interface components {
             remote_ref: string;
             /** Local Name */
             local_name?: string | null;
+        };
+        /**
+         * TranscriptionRequest
+         * @description One finished recording to turn into text.
+         *
+         *     ``filename`` travels to the provider as the upload's name, whose extension
+         *     is how it recognises the container (``speech.webm``, ``speech.m4a``).
+         */
+        TranscriptionRequest: {
+            /** Audio Base64 */
+            audio_base64: string;
+            /** Filename */
+            filename: string;
+        };
+        /**
+         * TranscriptionView
+         * @description The provider's transcript, verbatim.
+         */
+        TranscriptionView: {
+            /** Text */
+            text: string;
+        };
+        /**
+         * TriggerFireRequest
+         * @description Send one configured trigger rule now, to the workspaces a selector picks.
+         */
+        TriggerFireRequest: {
+            /** Rule */
+            rule: string;
+            target: components["schemas"]["TriggerTarget"];
+        };
+        /**
+         * TriggerFireResult
+         * @description One workspace's answer to a manual trigger.
+         */
+        TriggerFireResult: {
+            /** Workspace Id */
+            workspace_id: string;
+            /** Title */
+            title: string;
+            /**
+             * Receipt
+             * @enum {string}
+             */
+            receipt: "delivered" | "rejected" | "unknown" | "skipped";
+            /** Detail */
+            detail?: string | null;
+        };
+        /**
+         * TriggerFireView
+         * @description Every workspace the selector matched, and what happened at each.
+         */
+        TriggerFireView: {
+            /** Rule */
+            rule: string;
+            /** Results */
+            results?: components["schemas"]["TriggerFireResult"][];
+        };
+        /**
+         * TriggerPredicate
+         * @description Put Grove's configured instructions into this workspace's session when they apply.
+         *
+         *     The second STANDING predicate, with the same lifetime as ``ticket``: Grove
+         *     registers one per running workspace, the workspace's lifecycle cancels it,
+         *     and it never settles. Every rule in ``triggers.rules`` is evaluated by this
+         *     one watch, so a new rule is configuration rather than another row.
+         *
+         *     The fields are the watch's memory between checks, and they are what make a
+         *     rule fire once rather than on every check. Each is scoped to ``session_id``:
+         *     a respawn or a rotated session starts the counts over, because a send cap
+         *     is a promise about one conversation's context window, not about a workspace.
+         */
+        TriggerPredicate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "trigger";
+            /** Workspace Id */
+            workspace_id: string;
+            /** Session Id */
+            session_id?: string | null;
+            /** Progress */
+            progress?: number | null;
+            /** Compactions */
+            compactions?: number | null;
+            /** Phase Reminded At */
+            phase_reminded_at?: string | null;
+            /** Sent */
+            sent?: {
+                [key: string]: number;
+            };
+            /** Last Sent */
+            last_sent?: {
+                [key: string]: string;
+            };
+        };
+        /**
+         * TriggerTarget
+         * @description Which workspaces a manual trigger reaches. Every field narrows; none widens.
+         *
+         *     An empty selector matches nothing unless ``all`` is set, so a request that
+         *     forgot its filter cannot broadcast to the whole fleet by accident.
+         */
+        TriggerTarget: {
+            /** Workspace Ids */
+            workspace_ids?: string[];
+            /**
+             * All
+             * @default false
+             */
+            all: boolean;
+            /** Repo */
+            repo?: string | null;
+            /** Agent */
+            agent?: string | null;
+            /** Phase */
+            phase?: string | null;
+            /** Ticket */
+            ticket?: string | null;
+            /** Title Prefix */
+            title_prefix?: string | null;
         };
         /**
          * TurnFeedbackRequest
@@ -6294,7 +7473,7 @@ export interface components {
         WatchRegistration: {
             recipient: components["schemas"]["MailboxAddress"];
             /** Predicate */
-            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"] | components["schemas"]["PhaseNudgePredicate"];
+            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"] | components["schemas"]["TriggerPredicate"] | components["schemas"]["ReaperPredicate"] | components["schemas"]["IdlePredicate"];
             /**
              * Every
              * Format: duration
@@ -6318,7 +7497,7 @@ export interface components {
             id: string;
             recipient: components["schemas"]["MailboxAddress"];
             /** Predicate */
-            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"] | components["schemas"]["PhaseNudgePredicate"];
+            predicate: components["schemas"]["TimerPredicate"] | components["schemas"]["CiPredicate"] | components["schemas"]["CommandPredicate"] | components["schemas"]["TicketPredicate"] | components["schemas"]["TriggerPredicate"] | components["schemas"]["ReaperPredicate"] | components["schemas"]["IdlePredicate"];
             /**
              * State
              * @enum {string}
@@ -6407,6 +7586,10 @@ export interface components {
             positive_feedback_reasons?: string[];
             /** Feedback Reasons */
             feedback_reasons?: string[];
+            /** Speech */
+            speech?: boolean;
+            /** Federation */
+            federation?: string;
         };
         /**
          * WorkspaceActivityView
@@ -6470,27 +7653,28 @@ export interface components {
          * @description Your saved answers for a create that does not name one. Every field is optional and
          *     an unset one falls through to its normal source.
          *
-         *     Every field is optional, and ``None`` means "no saved default" — the field
-         *     falls through to whatever the existing per-field cascade already resolved
-         *     (``container.enabled`` for runtime, ``brief.enabled`` for brief, the agent's
-         *     own default for model). Grove applies these in the engine, so every surface
-         *     that creates a workspace — the CLI, the TUI, the web composer, MCP and
-         *     issue-ops — honours them identically, and a create form showing you a
-         *     pre-filled answer is showing you what will actually happen.
+         *     Every field is optional, and ``None`` means "no saved default". With nothing
+         *     saved a create runs the first configured agent on the host, in the current
+         *     checkout, with no new branch or worktree. A project's saved answer beats your
+         *     own, and an explicit choice on the create beats both. Grove applies these in
+         *     the engine, so every surface that creates a workspace — the CLI, the TUI, the
+         *     web composer, MCP and issue-ops — honours them identically, and a create form
+         *     showing you a pre-filled answer is showing you what will actually happen.
          *
          *     Title is deliberately absent: it names one task, never a default. So are
-         *     concrete branch and remote names, for the same reason.
+         *     concrete branch and remote names, for the same reason, which is why a saved
+         *     `new`, `existing` or `remote` branch mode asks for the branch on each create.
          */
         WorkspaceDefaults: {
             /**
              * Agent
-             * @description Agent selected when a create form opens.
+             * @description Agent a create launches when it names none. Unset uses the first configured agent.
              */
             agent?: string | null;
             /**
              * Runtime
-             * @description `host` or `container` for a new workspace. Unset falls through to
-             *     `container.enabled`.
+             * @description `host` or `container` for a new workspace. Unset runs on the host; enabling
+             *     containers makes them available without choosing them.
              */
             runtime?: ("host" | "container") | null;
             /**
@@ -6501,12 +7685,14 @@ export interface components {
             brief?: boolean | null;
             /**
              * Model
-             * @description Model id sent to the selected agent. Unset uses the agent's own default.
+             * @description Model id sent to the saved `agent`. Another agent, or an unset model, uses the
+             *     agent's own default. With no saved `agent` it applies to every agent.
              */
             model?: string | null;
             /**
              * Branch Mode
-             * @description How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`.
+             * @description How a create picks its branch. `auto`, `new`, `existing`, `remote` or `root`. Unset
+             *     is `root`: the current checkout, with no new branch or worktree.
              */
             branch_mode?: ("auto" | "new" | "existing" | "remote" | "root") | null;
             /**
@@ -6519,6 +7705,20 @@ export interface components {
              * @description Whether to skip the configured init script.
              */
             skip_init?: boolean | null;
+            /**
+             * Profiles
+             * @description Which profile each tool uses on each runtime. A row is `*` (any runtime), a runtime
+             *     kind (`host`, `container`, `remote`) or a configured resident `runtimes.<name>` block;
+             *     a column is an agent kind; a cell names an `agents[]` entry of that kind. An omitted
+             *     profile uses the named remote row, runtime kind, then `*` or a same-kind saved `agent`
+             *     from the higher layer, then the first roster entry of that kind. Cells merge one by
+             *     one across config layers and are checked after the final roster is known.
+             */
+            profiles?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            } | null;
         };
         /**
          * WorkspaceDefaultsSaveView
@@ -6535,12 +7735,13 @@ export interface components {
         };
         /**
          * WorkspaceDefaultsView
-         * @description Resolved answers a new-workspace form should pre-select.
+         * @description What an untouched create will launch, for a new-workspace form to pre-select.
          *
-         *     Unlike the raw ``WorkspaceDefaults`` config section, this fills values the
-         *     create path already resolves through the wider cascade. ``None`` remains
-         *     meaningful for agent and model: their providers decide when no saved answer
-         *     exists.
+         *     Resolved by the engine's own ``LaunchResolver`` against an empty request, so
+         *     it is exactly what a create that omits every launch field gets. ``sources``
+         *     says where each answer came from, keyed by ``CreateWorkspaceRequest`` field
+         *     name: ``project`` or ``user`` for a saved default, ``config`` for another
+         *     configured source, ``builtin`` for Grove's own starting answer.
          */
         WorkspaceDefaultsView: {
             /** Agent */
@@ -6570,6 +7771,20 @@ export interface components {
             agent_cwds: components["schemas"]["AgentCwdView"][];
             /** Agent Cwd */
             agent_cwd?: string | null;
+            /**
+             * Targets
+             * @default []
+             */
+            targets: components["schemas"]["RuntimeTargetView"][];
+            /** Sources */
+            sources?: {
+                [key: string]: "request" | "project" | "user" | "config" | "builtin";
+            };
+            /**
+             * Problems
+             * @default []
+             */
+            problems: components["schemas"]["LaunchProblemView"][];
         };
         /**
          * WorkspaceDiffView
@@ -6734,6 +7949,14 @@ export interface components {
             updated_at: string;
             /** Paused At */
             paused_at?: string | null;
+            /** Frozen At */
+            frozen_at?: string | null;
+            /** Thawed At */
+            thawed_at?: string | null;
+            /** Hibernated At */
+            hibernated_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Error Detail */
             error_detail?: string | null;
             /** Description */
@@ -6750,10 +7973,19 @@ export interface components {
              * @default []
              */
             ticket_refs: components["schemas"]["TicketRef"][];
+            /** Artifact Refs */
+            artifact_refs?: components["schemas"]["ArtifactRef"][];
             /** @default host */
             runtime: components["schemas"]["Runtime"];
             /** Runtime Fallback Reason */
             runtime_fallback_reason?: string | null;
+            /** Remote Runtime */
+            remote_runtime?: string | null;
+            /**
+             * Project Subpath
+             * @default
+             */
+            project_subpath: string;
             provision_status?: components["schemas"]["ProvisionStatus"] | null;
             /** Provision Duration Ms */
             provision_duration_ms?: number | null;
@@ -6872,6 +8104,24 @@ export interface components {
             stage: "queued" | "delivered" | "unknown" | "rejected";
         };
         /**
+         * _PaneBatchBody
+         * @description Lines a remote owner printed, numbered from its first (see ``PaneLog``).
+         *
+         *     ``reset`` replaces the replica with these lines; otherwise they must be the
+         *     replica's next lines.
+         */
+        _PaneBatchBody: {
+            /** First */
+            first: number;
+            /** Lines */
+            lines: string[];
+            /**
+             * Reset
+             * @default false
+             */
+            reset: boolean;
+        };
+        /**
          * _PauseBody
          * @description Pause request body — ``force`` skips the dirty-worktree check.
          *
@@ -6888,6 +8138,18 @@ export interface components {
              * @default false
              */
             force: boolean;
+        };
+        /**
+         * _ReadResultBody
+         * @description What one worktree command the owner ran answered.
+         */
+        _ReadResultBody: {
+            /** Request Id */
+            request_id: string;
+            /** Returncode */
+            returncode: number;
+            /** Output */
+            output: string;
         };
         /**
          * _RefreshBody
@@ -6929,6 +8191,19 @@ export interface components {
             attachments: string[];
         };
         /**
+         * _SwitchEffortBody
+         * @description Change the running native session's reasoning effort.
+         *
+         *     ``effort`` must be one of the agent's ``AgentSummaryView.efforts``; the
+         *     pattern keeps a flag-shaped value out of any provider frame, and the engine
+         *     refuses a level the kind does not list. Module-scope for the same
+         *     forward-ref reason above.
+         */
+        _SwitchEffortBody: {
+            /** Effort */
+            effort: string;
+        };
+        /**
          * _SwitchModelBody
          * @description Switch the running session's model — ``model`` is any id, forwarded
          *     verbatim (the provider boundary; the engine never validates it against the
@@ -6954,6 +8229,25 @@ export interface components {
         _TicketLinkBody: {
             /** Ref */
             ref: string;
+        };
+        /**
+         * _TranscriptChunkBody
+         * @description The next bytes of one of a remote owner's transcript files.
+         *
+         *     ``data`` is base64 (the proxy-safe encoding every binary body here uses);
+         *     the cap is on the ENCODED text so an oversized string is refused before it
+         *     is decoded, and the decoded length is checked again against the mirror's
+         *     limit.
+         */
+        _TranscriptChunkBody: {
+            /** Session Id */
+            session_id: string;
+            /** Relative Path */
+            relative_path: string;
+            /** Offset */
+            offset: number;
+            /** Data */
+            data: string;
         };
     };
     responses: never;
@@ -7015,6 +8309,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PairResultView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oidc_session_auth_oidc_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OidcExchangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignInView"];
                 };
             };
             /** @description Validation Error */
@@ -7206,6 +8533,10 @@ export interface operations {
                 provider_session_id: string;
                 input_capacity?: number | null;
                 pending_input_ids?: string[] | null;
+                live?: boolean;
+                reads?: boolean;
+                transcripts?: boolean;
+                cwd?: string | null;
             };
             header?: never;
             path?: never;
@@ -7258,6 +8589,483 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_result_mailboxes_read_result_post: {
+        parameters: {
+            query: {
+                workspace_id: string;
+                generation: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_ReadResultBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pulse_mailboxes_pulse_post: {
+        parameters: {
+            query: {
+                workspace_id: string;
+                generation: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LivePulseView"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    spool_mailboxes_spool_post: {
+        parameters: {
+            query: {
+                workspace_id: string;
+                generation: string;
+                suffix: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pane_mailboxes_pane_post: {
+        parameters: {
+            query: {
+                workspace_id: string;
+                generation: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_PaneBatchBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transcript_read_mailboxes_transcript_get: {
+        parameters: {
+            query: {
+                workspace_id: string;
+                session_id: string;
+                relative_path: string;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transcript_chunk_mailboxes_transcript_post: {
+        parameters: {
+            query: {
+                workspace_id: string;
+                generation: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_TranscriptChunkBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transcript_files_mailboxes_transcript_files_get: {
+        parameters: {
+            query: {
+                workspace_id: string;
+                session_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    digest_fleet_digest_get: {
+        parameters: {
+            query?: {
+                since?: string | null;
+                page?: string | null;
+                workspaces?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetDigestView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_batch_mailboxes_batch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailboxBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxBatchReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transcribe_speech_transcriptions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TranscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    synthesize_speech_synthesis_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SynthesisRequest"];
+            };
+        };
+        responses: {
+            /** @description The spoken audio. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "audio/mpeg": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    listing_sidebar_pins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+        };
+    };
+    pin_sidebar_pins__workspace_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpin_sidebar_pins__workspace_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description Validation Error */
@@ -7353,6 +9161,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WatchView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fire_watches_triggers_fire_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerFireRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TriggerFireView"];
                 };
             };
             /** @description Validation Error */
@@ -8047,6 +9888,7 @@ export interface operations {
             query?: {
                 repo?: string | null;
                 ticket?: string | null;
+                creator?: "me" | "all";
             };
             header?: never;
             path?: never;
@@ -8369,6 +10211,37 @@ export interface operations {
             };
         };
     };
+    fork_workspace_workspaces__ws_id__fork_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     kill_workspace_workspaces__ws_id__kill_post: {
         parameters: {
             query?: never;
@@ -8641,6 +10514,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["_SwitchModelBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    switch_workspace_effort_workspaces__ws_id__controls_effort_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["_SwitchEffortBody"];
             };
         };
         responses: {
@@ -9398,6 +11304,37 @@ export interface operations {
             };
         };
     };
+    workspace_live_stream_workspaces__ws_id__live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent `live_pulse` events: what the workspace's native session is doing this second (thinking, generating, a tool, a sub-agent). Produced only while a viewer holds this stream; a terminal workspace sends heartbeats and nothing else. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivePulseView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     workspace_provision_workspaces__ws_id__provision_get: {
         parameters: {
             query?: never;
@@ -9765,6 +11702,59 @@ export interface operations {
             };
         };
     };
+    add_project_projects_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProject"] | components["schemas"]["CloneProject"] | components["schemas"]["AdoptProject"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_candidates_projects_candidates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectCandidatesView"];
+                };
+            };
+        };
+    };
     list_agents_agents_get: {
         parameters: {
             query: {
@@ -9882,6 +11872,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceDefaultsSaveView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_launch_launch_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchPreviewView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_launch_options_launch_options_get: {
+        parameters: {
+            query: {
+                repo: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchOptionsView"];
                 };
             };
             /** @description Validation Error */
@@ -10113,6 +12167,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attach_artifact_workspaces__ws_id__artifacts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactAttachRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detach_artifact_workspaces__ws_id__artifacts_delete: {
+        parameters: {
+            query: {
+                ref: string;
+            };
+            header?: never;
+            path: {
+                ws_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceStateView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_artifact_content_workspaces__ws_id__artifacts__artifact_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ws_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
                 };
             };
             /** @description Validation Error */

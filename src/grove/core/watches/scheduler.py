@@ -47,8 +47,10 @@ from grove.core.contracts.watches import (
     MAX_DEADLINE,
     MIN_INTERVAL,
     STANDING_KINDS,
+    TimerPredicate,
     WatchList,
     WatchOutcome,
+    WatchPredicate,
     WatchRegistration,
     WatchView,
 )
@@ -90,6 +92,10 @@ class WatchScheduler:
     #: One worker, deliberately. See the module docstring: the fix for a slow
     #: probe is a small fixed number, never one per workspace.
     _WORKERS = 1
+    #: How long a pass that raised waits before the next. A raise there is a
+    #: log that cannot be read, which no immediate retry will fix, and the loop
+    #: must not spin on it.
+    _FAILED_PASS_BACKOFF_SECONDS = 30.0
 
     def __init__(
         self,
@@ -108,6 +114,10 @@ class WatchScheduler:
         self._task: asyncio.Task[None] | None = None
         self._pool: ThreadPoolExecutor | None = None
         self._cancelled: set[str] = set()
+        # Rows that came due while no daemon was running, keyed to the instant
+        # they were due. Held in memory only: "late" is a fact about THIS
+        # start, and the first visit consumes it whatever the visit concludes.
+        self._overdue: dict[str, datetime] = {}
         self._transition_lock = RLock()
 
     # ─── lifecycle ──────────────────────────────────────────────────────────
@@ -137,6 +147,8 @@ class WatchScheduler:
             logger.error("watches: cannot read the registry, starting empty ({})", exc)
             rows = []
         for row in rows:
+            if row.next_due is not None and row.next_due < now:
+                self._overdue[row.id] = row.next_due
             spread = random.uniform(0, max(1.0, self._interval_of(row).total_seconds()))
             heapq.heappush(self._heap, _Due(now + timedelta(seconds=spread), row.id))
         if rows:
@@ -191,6 +203,36 @@ class WatchScheduler:
         self._wake.set()
         return watch
 
+    def now(self) -> datetime:
+        """The scheduler's clock, so an out-of-band step stamps the time a probe would."""
+        return self._clock()
+
+    def advance(
+        self,
+        watch_id: str,
+        step: Callable[[WatchView], tuple[WatchPredicate, WatchOutcome | None] | str],
+    ) -> tuple[str, str | None]:
+        """Run one out-of-band step on a pending standing watch, then deliver its outcome.
+
+        *step* returns the predicate to persist and the outcome to send, or a
+        reason to send nothing. It runs under the same transition lock a probe's
+        result does, and the new predicate is persisted BEFORE delivery, so a
+        manual send and a scheduled check can never both count from one value.
+        A ``None`` outcome persists and sends nothing (``"recorded"``).
+        """
+        with self._transition_lock:
+            row = self._log.get(watch_id)
+            if row is None or row.state != "pending":
+                return "skipped", "workspace is not running (no pending watch)"
+            result = step(row)
+            if isinstance(result, str):
+                return "skipped", result
+            predicate, outcome = result
+            self._log.carry_on(row.id, predicate, row.next_due or self.now())
+        if outcome is None:
+            return "recorded", None
+        return self._deliver(row, outcome)
+
     def cancel(self, watch_id: str) -> WatchView | None:
         """Withdraw a watch. Its heap entry is dropped when next popped."""
         with self._transition_lock:
@@ -224,7 +266,17 @@ class WatchScheduler:
                 # No heap entries => timeout is None => this waits forever, for
                 # free, until something registers. That is the idle guarantee.
                 await asyncio.wait_for(self._wake.wait(), timeout=timeout)
-            await self.tick()
+            try:
+                await self.tick()
+            except Exception as exc:
+                # This task is the only thing that fires a watch on the host, and
+                # nothing restarts it: one unreadable log read (measured
+                # 2026-10-09, a one-bit flip in watches.json) ended it, and every
+                # watch stayed pending after the file was repaired, until a
+                # daemon restart. `tick` put the failed row back, so the next
+                # pass after the backoff retries it with every other row.
+                logger.warning("watches: scheduler pass failed ({}); continuing", exc)
+                await asyncio.sleep(self._FAILED_PASS_BACKOFF_SECONDS)
 
     def seconds_until_next(self) -> float | None:
         """How long to wait, or ``None`` for "nothing is scheduled at all".
@@ -250,7 +302,13 @@ class WatchScheduler:
         visited = 0
         while self._heap and self._heap[0].when <= now:
             entry = heapq.heappop(self._heap)
-            await self._visit(entry.watch_id, now)
+            try:
+                await self._visit(entry.watch_id, now)
+            except Exception:
+                # Back on the heap before the raise leaves, so a visit that
+                # could not read the log loses its turn and never its row.
+                heapq.heappush(self._heap, entry)
+                raise
             visited += 1
         return visited
 
@@ -258,6 +316,7 @@ class WatchScheduler:
         if watch_id in self._cancelled:
             self._cancelled.discard(watch_id)
             return
+        overdue_since = self._overdue.pop(watch_id, None)
         row = self._log.get(watch_id)
         if row is None or row.state != "pending":
             return
@@ -284,6 +343,7 @@ class WatchScheduler:
                     ),
                 ),
                 now=now,
+                overdue_since=overdue_since,
             )
             return
 
@@ -307,10 +367,15 @@ class WatchScheduler:
             logger.warning("watches: {} could not be evaluated ({})", row.id, exc)
             outcome = None
 
-        self._apply_observation(row, outcome, now)
+        self._apply_observation(row, outcome, now, overdue_since=overdue_since)
 
     def _apply_observation(
-        self, row: WatchView, outcome: WatchOutcome | StillWatching | None, now: datetime
+        self,
+        row: WatchView,
+        outcome: WatchOutcome | StillWatching | None,
+        now: datetime,
+        *,
+        overdue_since: datetime | None = None,
     ) -> None:
         """Apply a completed probe only while its durable row remains pending."""
         # Activity callbacks can cancel from a lifecycle worker while a probe is
@@ -327,9 +392,17 @@ class WatchScheduler:
                 self._rearm(row, now)
                 return
             if isinstance(outcome, StillWatching):
+                if current.predicate != row.predicate:
+                    # `advance` moved this row while the probe ran (an
+                    # acknowledgement, a manual trigger). The probe answered
+                    # about a baseline that no longer exists; writing it would
+                    # undo the newer one, so it is dropped and asked again.
+                    self._rearm(current, now)
+                    return
                 self._carry_on(row, outcome, now)
                 self._deliver_carry_on(row, outcome)
                 return
+            outcome = _marked_late(outcome, overdue_since, now)
             settled = self._log.settle(row.id, state="fired", now=now, outcome=outcome)
             if settled is None:
                 return
@@ -362,9 +435,16 @@ class WatchScheduler:
         self._log.reschedule(row.id, nxt)
 
     def _settle_and_tell(
-        self, row: WatchView, *, state: str, outcome: WatchOutcome, now: datetime
+        self,
+        row: WatchView,
+        *,
+        state: str,
+        outcome: WatchOutcome,
+        now: datetime,
+        overdue_since: datetime | None = None,
     ) -> None:
         """Persist a conclusion while pending, then deliver it outside the transition lock."""
+        outcome = _marked_late(outcome, overdue_since, now)
         with self._transition_lock:
             current = self._log.get(row.id)
             if current is None or current.state != "pending":
@@ -466,9 +546,41 @@ class WatchScheduler:
             return f"the command {' '.join(p.argv)!r} to exit with {p.terminal_exit_codes}"
         if p.kind == "ticket":
             return f"changes to {p.provider} ticket #{p.ticket_id}"
-        if p.kind == "phase_nudge":
-            return "the reported phase going stale while the agent works"
-        return f"the timer set for {p.at.isoformat()}"
+        if isinstance(p, TimerPredicate):
+            return f"the timer set for {p.at.isoformat()}"
+        return _STANDING_SUBJECTS[p.kind]
+
+
+#: Standing kinds carry no per-watch detail worth naming, so their subject is fixed.
+_STANDING_SUBJECTS: dict[str, str] = {
+    "trigger": "Grove's configured session instructions",
+    "reaper": "leaked tmux servers and Grove processes on this host",
+}
+
+
+def _marked_late(
+    outcome: WatchOutcome, overdue_since: datetime | None, now: datetime
+) -> WatchOutcome:
+    """Say plainly that this outcome arrives late because no daemon was running.
+
+    Args:
+        outcome: what the watch concluded.
+        overdue_since: when the row came due while the daemon was down, or
+            ``None`` for an ordinary on-time visit.
+        now: the instant of this visit.
+
+    Returns:
+        The outcome unchanged when on time, else the same outcome whose summary
+        names the delay, so a recipient acting on "the timer elapsed" knows it
+        elapsed some time ago.
+    """
+    if overdue_since is None:
+        return outcome
+    note = (
+        f" (Late: this came due at {overdue_since.isoformat()} while the Grove daemon "
+        f"was not running, and was checked {_duration(now - overdue_since)} later.)"
+    )
+    return outcome.model_copy(update={"summary": (outcome.summary + note)[:4000]})
 
 
 def _duration(span: timedelta) -> str:

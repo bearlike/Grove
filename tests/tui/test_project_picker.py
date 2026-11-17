@@ -8,6 +8,7 @@ selecting a repo swaps the running screen's Manager without leaving the app.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,6 +41,13 @@ def _init_repo(path: Path) -> Path:
         ["git", "commit", "-m", "init", "--no-verify"], cwd=path, check=True, capture_output=True
     )
     return path.resolve()
+
+
+@pytest.fixture(autouse=True)
+def _user_config(tmp_state_dir: Path, tmp_path: Path) -> Path:
+    """The picker re-reads the user config on open, so it must never be the real one."""
+    del tmp_state_dir
+    return tmp_path / "config" / "config.json"
 
 
 def _env(tmp_path: Path) -> tuple[RepoRegistry, JsonWorkspaceStore]:
@@ -158,6 +166,27 @@ async def test_p_opens_picker_listing_every_repo(fake_tmux: FakeTmux, tmp_path: 
         assert isinstance(picker, ProjectPickerScreen)
         names = {row.choice.name for row in picker.query(RepoRow)}
         assert names == {"repo_a", "repo_b"}
+
+
+@pytest.mark.asyncio
+async def test_picker_lists_a_project_added_after_the_tui_started(
+    fake_tmux: FakeTmux, tmp_path: Path, _user_config: Path
+) -> None:
+    del fake_tmux
+    app, registry, repo_a, _ = await _two_repo_list_screen(tmp_path)
+    added = _init_repo(tmp_path / "added_later")
+    async with app.run_test(size=(160, 48)) as pilot:
+        await pilot.pause()
+        app.push_screen(WorkspaceListScreen(registry.get(repo_a), registry=registry))
+        await pilot.pause()
+        # `grove config add-project` in another shell, while this TUI is open.
+        _user_config.write_text(json.dumps({"projects": [str(added)]}), encoding="utf-8")
+        await pilot.press("P")
+        await pilot.pause()
+        picker = app.screen
+        assert isinstance(picker, ProjectPickerScreen)
+        names = {row.choice.name for row in picker.query(RepoRow)}
+        assert names == {"repo_a", "repo_b", "added_later"}
 
 
 @pytest.mark.asyncio

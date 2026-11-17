@@ -49,6 +49,7 @@ from grove.core.git import GitRepo, detect_root
 from grove.core.manager import WorkspaceManager, build
 from grove.core.process import LiveRuntime
 from grove.core.turn_count import CountFillResult, SessionFacts, TurnCountCache
+from grove.core.workspace import Runtime
 
 if TYPE_CHECKING:
     from grove.core.agents import AgentActivity, AgentMessage, AgentSession
@@ -598,6 +599,10 @@ class SessionExplorer:
             return None
         cwd = state.transcript_scan_cwds[0]
         summary = adapter.session_summary(cwd, session_id)
+        if summary is None and state.runtime is Runtime.REMOTE:
+            # Before the worker's first mirrored chunk lands (or for a worker
+            # that mirrors nothing), the pushed sidecar is the only evidence.
+            summary = self._remote_summary(state, session_id)
         if summary is None:
             return None
         seen.add((summary.adapter_kind, summary.session_id))
@@ -610,6 +615,30 @@ class SessionExplorer:
             workspace_branch=state.branch,
             duration=facts.duration if facts is not None else None,
             turn_count=facts.turns if facts is not None else None,
+        )
+
+    def _remote_summary(self, state: WorkspaceState, session_id: str) -> SessionSummary | None:
+        """A remote workspace's own session, known from what its worker pushed.
+
+        The fallback for a remote session with no mirrored transcript on this
+        disk yet (``transcript_mirror``): the sidecar its worker feeds over the
+        daemon connection (#1030) is then the only evidence the session exists.
+        ``None`` until the worker has pushed anything. No path and no size:
+        there is no local file to name or measure, and a zero would read as an
+        empty transcript.
+        """
+        record = ClaudeHook.read(session_id, sidecar_dir=core_paths.agent_sidecar_dir())
+        if record is None:
+            return None
+        return SessionSummary(
+            session_id=session_id,
+            adapter_kind=self._manager.effective_kind(state),
+            transcript_path=None,
+            cwd=None,
+            created_at=None,
+            modified_at=record.ts,
+            size_bytes=None,
+            git_branch=state.branch,
         )
 
     def _facts(self, summary: SessionSummary) -> SessionFacts | None:

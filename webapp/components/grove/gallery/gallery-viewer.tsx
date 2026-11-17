@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { DownloadIcon, ImageIcon } from "lucide-react";
 
 import { ErrorState } from "@/components/elements/error-state";
@@ -12,19 +12,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   galleryCardCaption,
   galleryCardTitle,
   galleryExportFilename,
-  galleryPageDocument,
-  galleryPages,
 } from "@/lib/grove/adapters";
 import type { GalleryItemView } from "@/lib/grove/api";
 import { useGalleryDocument } from "@/lib/grove/hooks";
 
-import { useDrawioFrame } from "./drawio-frame";
+import { DiagramFrame, DiagramPageTabs, useDiagramStage } from "./diagram-stage";
 
 /**
  * The lightbox: one diagram in draw.io's own chromeless viewer, with
@@ -32,11 +28,9 @@ import { useDrawioFrame } from "./drawio-frame";
  * frame is mounted with `chrome=0` and `autosave` off, and the daemon has no
  * write route for a gallery item anyway.
  *
- * The page tabs are Grove's, not the editor's: the chromeless embed draws
- * none, and the protocol's `load` takes no page selector, so switching a
- * page hands the frame a one-page document (`galleryPageDocument`). Export
- * therefore always answers for the page on screen, and its filename carries
- * the page name when the file has more than one.
+ * The frame, the page tabs and the fit are `useDiagramStage`, shared with the
+ * workspace artifact viewer. Export always answers for the page on screen,
+ * and its filename carries the page name when the file has more than one.
  */
 export function GalleryViewer({
   item,
@@ -57,59 +51,9 @@ export function GalleryViewer({
   ) => void;
 }): React.ReactNode {
   const document = useGalleryDocument(item?.id ?? null);
-  const frame = useDrawioFrame(base);
-  const [frameElement, setFrameElement] = useState<HTMLIFrameElement | null>(null);
-  // Memoized, and that is load-bearing: an inline callback ref is a new
-  // function every render, so React detaches (null) and re-attaches it on
-  // each one — and `frame.ref(null)` resets the frame's readiness, which
-  // made the viewer un-ready itself the moment `load` set it ready.
-  const attachFrame = useCallback(
-    (element: HTMLIFrameElement | null) => {
-      frame.ref(element);
-      setFrameElement(element);
-    },
-    [frame.ref],
-  );
+  const stage = useDiagramStage(base, document.data?.xml, item?.id ?? null);
+  const { frame, pages, current } = stage;
   const [exporting, setExporting] = useState(false);
-  const pages = useMemo(() => (document.data ? galleryPages(document.data.xml) : []), [document.data]);
-  const [pageId, setPageId] = useState<string | null>(null);
-  const current = pages.find((page) => page.id === pageId) ?? pages[0] ?? null;
-
-  // A new document starts on its first page; the reader's page choice does
-  // not carry from one diagram to the next.
-  useEffect(() => {
-    setPageId(null);
-  }, [item?.id]);
-
-  useEffect(() => {
-    if (!document.data || current === null) return;
-    const xml =
-      pages.length > 1 ? galleryPageDocument(document.data.xml, current.id) : document.data.xml;
-    if (xml !== null) void frame.load(xml).then(() => frame.fit());
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the DOCUMENT and the PAGE are the triggers; the frame object is stable per mount
-  }, [document.data, current?.id]);
-
-  // Fit once the editor has laid the page out AND the frame has its final
-  // size: the dialog animates open and the page tabs land after the first
-  // load, so a fit fired on `load` alone measures a viewport that then grows.
-  // Same ResizeObserver idiom as the workspace Diagram tab.
-  useEffect(() => {
-    const element = frameElement;
-    if (!frame.ready || !element) return;
-    let timer: number | undefined;
-    const schedule = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => frame.fit(), 150);
-    };
-    const observer = new ResizeObserver(schedule);
-    observer.observe(element);
-    schedule();
-    return () => {
-      observer.disconnect();
-      window.clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- readiness and the element are the triggers
-  }, [frame.ready, frameElement]);
 
   const title = item ? galleryCardTitle(item) : "";
   const filename = item
@@ -155,17 +99,7 @@ export function GalleryViewer({
             </div>
           ) : null}
         </DialogHeader>
-        {pages.length > 1 && current ? (
-          <Tabs value={current.id} onValueChange={setPageId} className="shrink-0">
-            <TabsList variant="line" className="h-8 max-w-full overflow-x-auto" aria-label="Pages">
-              {pages.map((page) => (
-                <TabsTrigger key={page.id} value={page.id} className="flex-none text-xs" data-testid="gallery-viewer-page">
-                  {page.name}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        ) : null}
+        <DiagramPageTabs stage={stage} testId="gallery-viewer-page" />
         <div className="relative min-h-0 flex-1 overflow-hidden border border-border">
           {base === null ? (
             <ErrorState
@@ -182,21 +116,14 @@ export function GalleryViewer({
               onRetry={() => void document.refetch()}
             />
           ) : (
-            <>
-              {!frame.ready ? (
-                <Skeleton className="absolute inset-0" aria-hidden />
-              ) : null}
-              {item ? (
-                <iframe
-                  key={item.id}
-                  ref={attachFrame}
-                  src={frame.src}
-                  title={`Diagram ${item.name}`}
-                  className="h-full w-full border-0"
-                  data-testid="gallery-viewer-frame"
-                />
-              ) : null}
-            </>
+            item && (
+              <DiagramFrame
+                stage={stage}
+                frameKey={item.id}
+                title={`Diagram ${item.name}`}
+                testId="gallery-viewer-frame"
+              />
+            )
           )}
         </div>
       </DialogContent>

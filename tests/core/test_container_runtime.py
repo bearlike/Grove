@@ -903,11 +903,18 @@ def test_the_shutdown_really_delivers_sigterm_and_really_waits(tmp_path: Path) -
     recorded `tmux_command` does.
     """
     marker = tmp_path / "flushed"
+    armed = tmp_path / "armed"
     agent = tmp_path / "agent.sh"
     agent.write_text(
         # The trap runs between foreground commands, so the loop sleeps briefly
-        # rather than blocking delivery behind a long one.
-        f"trap 'sleep 2; echo done > \"{marker}\"; exit 0' TERM\nwhile :; do sleep 0.2; done\n",
+        # rather than blocking delivery behind a long one. The `armed` touch
+        # follows the trap: `new-session -d` returns before the pane's shell has
+        # run a line, and a TERM delivered before the trap is installed kills
+        # the shell on the default action (measured on CI, where the gap is
+        # wide enough to lose the race on two runs out of two).
+        f"trap 'sleep 2; echo done > \"{marker}\"; exit 0' TERM\n"
+        f': > "{armed}"\n'
+        "while :; do sleep 0.2; done\n",
         encoding="utf-8",
     )
     socket = "grove-289-test"
@@ -921,6 +928,10 @@ def test_the_shutdown_really_delivers_sigterm_and_really_waits(tmp_path: Path) -
         capture_output=True,
     )
     try:
+        deadline = time.monotonic() + 10
+        while not armed.exists():
+            assert time.monotonic() < deadline, "the agent never installed its trap"
+            time.sleep(0.05)
         started = time.monotonic()
         done = subprocess.run(
             [

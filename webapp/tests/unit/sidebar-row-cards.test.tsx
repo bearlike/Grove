@@ -52,15 +52,14 @@ describe("compact sidebar workspace cards", () => {
     expect(context).toContain('agentState === "working" ? (');
   });
 
-  it("puts natural-width branch, attention, and phase words in body context", () => {
+  it("puts attention and phase words in body context, with no branch line", () => {
     const row = tree.slice(tree.indexOf("function WorkspaceRow("), tree.indexOf("function FleetSkeleton("));
 
-    const branch = row.indexOf('data-testid="rail-branch"');
     const attention = row.indexOf('data-testid="fleet-row-attention-mark"');
     const phase = row.indexOf('data-testid="fleet-row-phase-mark"');
     expect(row).toContain('data-testid="rail-context"');
-    expect(branch).toBeGreaterThan(-1);
-    expect(attention).toBeGreaterThan(branch);
+    expect(row).not.toContain('data-testid="rail-branch"');
+    expect(attention).toBeGreaterThan(-1);
     expect(phase).toBeGreaterThan(attention);
     expect(row).toContain("<span>{phaseText}</span>");
     expect(row).toContain('const phaseText = phase ? phaseLabel(phase.phase) : undefined');
@@ -69,23 +68,18 @@ describe("compact sidebar workspace cards", () => {
     expect(row).not.toContain("STATUS_MARK_AREA");
   });
 
-  it("divides context from the ledger and separates each figure with a rule", () => {
+  it("puts the context and the times on ONE line, with no change ledger", () => {
     const metrics = readFileSync("components/grove/fleet/workspace-metrics.tsx", "utf8");
-    const body = metrics.slice(metrics.indexOf("export function SessionMetadata("), metrics.indexOf("export function SessionMetricDetails("));
+    const body = metrics.slice(metrics.indexOf("export function SessionMetadata("), metrics.indexOf("export function SessionTimes("));
 
     expect(body).toContain("context?: React.ReactNode");
-    // The divider sits between the context and the ledger, in that order.
     const context = body.indexOf("{context}");
-    const divider = body.indexOf('<Separator data-testid="rail-divider" />');
-    const ledger = body.indexOf('data-testid="rail-ledger"');
+    const times = body.indexOf("<SessionTimes");
     expect(context).toBeGreaterThan(-1);
-    expect(divider).toBeGreaterThan(context);
-    expect(ledger).toBeGreaterThan(divider);
-    // Two short vertical rules, one between each pair of figures.
-    expect(body.match(/<Separator orientation="vertical"/g)).toHaveLength(2);
-    expect(body).not.toContain("noChanges");
-    expect(body).not.toContain("justify-between");
-    expect(body).not.toContain("h-4 w-full");
+    expect(times).toBeGreaterThan(context);
+    expect(body).not.toContain("<Separator");
+    expect(body).not.toContain("rail-ledger");
+    expect(body).not.toContain("flex-col");
   });
 
   it("uses a row tooltip for keyboard focus while values retain individual descriptions", () => {
@@ -93,11 +87,13 @@ describe("compact sidebar workspace cards", () => {
     const metrics = readFileSync("components/grove/fleet/workspace-metrics.tsx", "utf8");
 
     expect(row).toContain("<TooltipTrigger asChild>");
-    expect(row).toContain('<TooltipContent side="left" sideOffset={8}>');
+    // Right, beside the card: the rail is at the screen's left edge, so a
+    // `left` request always collided and Radix flipped it anyway.
+    expect(row).toMatch(/<TooltipContent\s+side="right"/);
     expect(row.match(/<TooltipTrigger asChild>/g)).toHaveLength(1);
-    expect(row).toContain("<SessionMetricDetails workspace={row.workspace} />");
+    expect(row).toContain("<SessionOverview workspace={row.workspace} unread={unread} />");
     expect(metrics).not.toContain("<TooltipTrigger");
-    expect(metrics).toContain("aria-label={detail}");
+    expect(metrics).toContain("aria-label={label}");
   });
 
   it("keeps the actual card border on the card and never dims active text", () => {
@@ -115,7 +111,7 @@ describe("compact sidebar workspace cards", () => {
   it("steps the fill by interaction state: rest darkest, hover between, selected full", () => {
     const row = tree.slice(tree.indexOf("function WorkspaceRow("), tree.indexOf("function FleetSkeleton("));
     const css = readFileSync("app/globals.css", "utf8");
-    const ladder = css.slice(css.indexOf(".rail-row {"), css.indexOf("/* The landing configuration shelf"));
+    const ladder = css.slice(css.indexOf(".rail-row {"), css.indexOf("/* The shelf TUCKS UNDER"));
 
     expect(row).toContain('data-selected={active ? "true" : "false"}');
     // Selected is the base rule: the full card fill.

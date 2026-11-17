@@ -290,7 +290,9 @@ export function RuntimeBadge({
         data-runtime={runtime}
         data-fallback="true"
       >
-        <TriangleAlertIcon aria-hidden />
+        <span data-runtime-kind="host">
+          <TriangleAlertIcon aria-hidden />
+        </span>
         <Explain term="runtime_fallback">Fell back to host</Explain>
       </Badge>
     );
@@ -299,7 +301,9 @@ export function RuntimeBadge({
   const Icon = runtimeGlyph(runtime);
   return (
     <Badge variant="outline" data-testid="runtime-badge" data-runtime={runtime}>
-      <Icon aria-hidden />
+      <span data-runtime-kind={runtime}>
+        <Icon aria-hidden />
+      </span>
       <Explain term={runtimeGlossaryTerm(runtime)}>{runtimeLabel(runtime)}</Explain>
     </Badge>
   );

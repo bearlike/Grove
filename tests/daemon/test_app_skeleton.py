@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from loguru import logger
 
 from grove import __version__ as GROVE_VERSION
 from grove.core.config import GroveConfig
 from grove.core.loaded_source import LoadedSource
+from grove.core.reaper import Reaper, ReaperWatcher
+from grove.core.registry import RepoRegistry
 from grove.core.release import ReleaseChecker
 from grove.core.store import JsonWorkspaceStore
+from grove.core.watches.watcher import StillWatching
 from grove.daemon import build_app
 from tests.daemon.conftest import daemon_test_config
 
@@ -146,3 +152,86 @@ def test_whoami_asks_for_a_restart_once_the_code_on_disk_moves(
         assert client.get("/whoami").json()["restart_required"] is False
         os.utime(module, ns=(2_000_000_000, 2_000_000_000))
         assert client.get("/whoami").json()["restart_required"] is True
+
+
+def test_whoami_reports_why_federation_is_disabled(tmp_state_dir: Path) -> None:
+    cfg = GroveConfig.model_validate(
+        {"auth": {"enabled": False}, "federation": {"enabled": True, "node": {"role": "node"}}}
+    )
+    with TestClient(build_app(cfg=cfg, store=JsonWorkspaceStore())) as client:
+        body = client.get("/whoami").json()
+    assert body["federation"].startswith("disabled (federation.node.hub_url")
+
+
+def test_startup_reports_one_warning_naming_the_slowest_step_first(
+    tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow start must name its own step in the journal, which keeps WARNING only.
+
+    The listener binds only after the lifespan finishes, so a slow step reads
+    from outside as a dead port. One warning per start, slowest step first, is
+    what turns that into an answer without anyone enabling debug logging.
+    """
+
+    def _slow(self: RepoRegistry) -> None:
+        time.sleep(0.3)
+
+    monkeypatch.setattr(RepoRegistry, "resolve_interrupted", _slow)
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(message.record["message"]), level="WARNING")
+    try:
+        app = build_app(cfg=daemon_test_config(), store=JsonWorkspaceStore())
+        with TestClient(app) as client:
+            assert client.get("/healthz").status_code == 200
+    finally:
+        logger.remove(sink)
+
+    ready = [line for line in warnings if line.startswith("lifespan ready in ")]
+    assert len(ready) == 1
+    steps = ready[0].split(": ", 1)[1].split(", ")
+    assert steps[0].startswith("resolve interrupted ")
+    assert {"watch scheduler", "standing watches", "activity runtime", "runtime sources"} <= {
+        step.rsplit(" ", 1)[0] for step in steps
+    }
+
+
+def test_lifespan_serves_while_the_startup_reaper_is_still_running(
+    tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow orphan scan may not hold the listener closed during a restart."""
+    entered = threading.Event()
+    release = threading.Event()
+    serving = threading.Event()
+
+    def _block(self: Reaper, *, apply: bool) -> object:
+        del self, apply
+        entered.set()
+        release.wait()
+        return object()
+
+    monkeypatch.setattr(Reaper, "run", _block)
+    # The standing watcher has its own pass; neutralize it so this exercises
+    # only the one the lifespan schedules after readiness.
+    monkeypatch.setattr(
+        ReaperWatcher, "observe", lambda _self, predicate, _now: StillWatching(predicate)
+    )
+    app = build_app(
+        cfg=GroveConfig.model_validate({"auth": {"enabled": False}, "reaper": {"enabled": True}}),
+        store=JsonWorkspaceStore(),
+    )
+
+    def _serve() -> None:
+        with TestClient(app) as client:
+            assert client.get("/healthz").status_code == 200
+            serving.set()
+            release.wait()
+
+    thread = threading.Thread(target=_serve)
+    thread.start()
+    try:
+        assert entered.wait(timeout=1)
+        assert serving.wait(timeout=0.2)
+    finally:
+        release.set()
+        thread.join(timeout=1)
+    assert not thread.is_alive()

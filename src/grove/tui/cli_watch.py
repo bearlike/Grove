@@ -21,6 +21,7 @@ from pydantic import BaseModel, ValidationError
 
 from grove.client import BackendConfig, GroveClient
 from grove.client.errors import GroveClientError
+from grove.core.config import load_config
 from grove.core.contracts.mailboxes import MailboxAddress
 from grove.core.contracts.tickets import TicketProviderName
 from grove.core.contracts.watches import (
@@ -29,9 +30,13 @@ from grove.core.contracts.watches import (
     CiPredicate,
     CommandPredicate,
     TimerPredicate,
+    TriggerFireRequest,
+    TriggerTarget,
     WatchPredicate,
     WatchRegistration,
 )
+from grove.core.errors import GroveError
+from grove.core.git import detect_root
 from grove.core.phase import PhaseFile
 
 DEFAULT_DAEMON_URL = "http://127.0.0.1:7421"
@@ -51,6 +56,8 @@ def _client() -> GroveClient:
     return GroveClient(
         BackendConfig(
             label="watch",
+            # A container agent carries its workspace credential; a host one mints.
+            daemon_token=os.environ.get("GROVE_API_TOKEN") or None,
             daemon_url=os.environ.get("GROVE_MAILBOX_URL", DEFAULT_DAEMON_URL),
             daemon_socket=Path(socket_path) if socket_path else None,
         )
@@ -242,4 +249,65 @@ def watch_cancel(
         _fail(exc)
 
 
-__all__ = ["watch_app"]
+trigger_app = typer.Typer(
+    name="trigger",
+    help=(
+        "Grove's configured session instructions. `ls` shows the rules this repo "
+        "resolves; `fire` sends one now to the workspaces you name."
+    ),
+    no_args_is_help=True,
+)
+
+
+@trigger_app.command("ls")
+def trigger_ls() -> None:
+    """Every trigger rule the current repo's config cascade resolves."""
+    try:
+        cfg = load_config(detect_root(Path.cwd()))
+    except GroveError as exc:
+        _fail(exc)
+    typer.echo(cfg.triggers.model_dump_json(indent=2))
+
+
+@trigger_app.command("fire")
+def trigger_fire(
+    rule: str = typer.Argument(..., help="The rule's name, as `grove trigger ls` shows it."),
+    workspace: Annotated[
+        list[str] | None, typer.Option("--workspace", "-w", help="A workspace id. Repeatable.")
+    ] = None,
+    every_workspace: bool = typer.Option(False, "--all", help="Every running workspace."),
+    repo: str | None = typer.Option(None, "--repo", help="Only workspaces of this repo root."),
+    agent: str | None = typer.Option(None, "--agent", help="Only workspaces running this agent."),
+    phase: str | None = typer.Option(None, "--phase", help="Only workspaces in this phase."),
+    ticket: str | None = typer.Option(
+        None, "--ticket", help="Only workspaces with this ticket attached, e.g. gitea:42."
+    ),
+    title_prefix: str | None = typer.Option(
+        None, "--title-prefix", help="Only workspaces whose title starts with this."
+    ),
+) -> None:
+    """Send one trigger rule now. Filters narrow; a selector that names nothing is refused.
+
+    Only a running workspace whose session is live receives it. A stopped
+    session is never restarted to deliver it, and the rule's own send cap
+    still applies.
+    """
+    try:
+        request = TriggerFireRequest(
+            rule=rule,
+            target=TriggerTarget(
+                workspace_ids=list(workspace or []),
+                all=every_workspace,
+                repo=str(Path(repo).expanduser().resolve()) if repo else None,
+                agent=agent,
+                phase=phase,
+                ticket=ticket,
+                title_prefix=title_prefix,
+            ),
+        )
+        _emit(_run(lambda client: client.fire_trigger(request)))
+    except (GroveClientError, OSError, ValidationError) as exc:
+        _fail(exc)
+
+
+__all__ = ["trigger_app", "watch_app"]

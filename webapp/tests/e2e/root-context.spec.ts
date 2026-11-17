@@ -19,7 +19,11 @@ test("Activity and footer use current primary context rather than child or lifet
   await page.route("**/api/grove/activity", (route) => route.fulfill({ json: snapshot }));
   // Keep connectivity online without letting the fake daemon replace this
   // scenario with its default snapshot. Closing an empty SSE response instead
-  // tests the offline footer and hides every subscription row.
+  // tests the offline footer and hides every subscription row. A connected
+  // stream is the app's only source of the fleet snapshot (the activity query
+  // is just the offline backstop), so this stream connects and then delivers
+  // THIS scenario's snapshot, read from the routed activity endpoint, in the
+  // daemon's own `snapshot` envelope.
   await page.addInitScript(() => {
     class ScenarioEvents extends EventTarget {
       readyState = 1;
@@ -27,7 +31,12 @@ test("Activity and footer use current primary context rather than child or lifet
       onerror = null;
       constructor() {
         super();
-        setTimeout(() => this.onopen?.(), 0);
+        setTimeout(async () => {
+          this.onopen?.();
+          const snapshot = await (await fetch("/api/grove/activity")).json();
+          const frame = JSON.stringify({ kind: "snapshot", seq: 1, snapshot });
+          this.dispatchEvent(new MessageEvent("snapshot", { data: frame, lastEventId: "1" }));
+        }, 0);
       }
       close(): void { this.readyState = 2; }
     }

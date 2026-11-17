@@ -373,3 +373,20 @@ def test_a_high_cardinality_fact_is_an_attribute_and_never_a_tag() -> None:
     assert identity.attributes()[GroveIdentityAttr.WORKTREE] == "/tmp/proj/.worktrees/fix-auth"
     buried = [tag for tag in identity.tags() if "/.worktrees/" in tag or "fix auth" in tag]
     assert not buried, buried
+
+
+@pytest.mark.parametrize(
+    ("principal", "user", "expected"),
+    [
+        ("alice", "hostacct", "alice"),
+        ("local", "hostacct", "hostacct"),
+        ("", "hostacct", "hostacct"),
+    ],
+)
+def test_the_langfuse_user_is_the_signed_in_principal_else_the_host_account(
+    principal: str, user: str, expected: str
+) -> None:
+    """#967: the user axis names the person behind the work, never a group or email."""
+    attrs = TraceIdentity(principal=principal, user=user).attributes()
+    assert attrs[LangfuseAttr.USER_ID] == expected
+    assert not any("email" in key or "group" in key for key in attrs)

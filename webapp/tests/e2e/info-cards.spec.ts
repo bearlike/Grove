@@ -228,6 +228,9 @@ test.describe("Info cards keep their facts legible in the work panel", () => {
   test("reflows six facts without orphaning one, in light and dark", async ({
     page,
   }) => {
+    // Ten full page loads (two themes by five widths) in one test: the shared
+    // 90 s budget is sized for one load, and a loaded runner overran it.
+    test.setTimeout(240_000);
     let scenario: Scenario = {};
     await useScenario(page, () => scenario);
 

@@ -202,6 +202,26 @@ class Complete:
         return _candidates(produce)
 
     @staticmethod
+    def runtimes(incomplete: str) -> list[tuple[str, str]]:
+        """``host``, ``container`` and every resident remote runtime the cascade configures.
+
+        The same list ``WorkspaceDefaultsView.targets`` publishes, so this never
+        offers a block the create would refuse.
+        """
+        del incomplete
+
+        def produce() -> list[tuple[str, str]]:
+            manager = _manager()
+            names = manager.config.resident_runtimes if manager is not None else ()
+            return [
+                ("host", "this host"),
+                ("container", "a devcontainer"),
+                *((name, "remote runtime") for name in names),
+            ]
+
+        return _candidates(produce)
+
+    @staticmethod
     def agents(incomplete: str) -> list[tuple[str, str]]:
         """Agent names from the resolved config cascade.
 

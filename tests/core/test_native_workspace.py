@@ -24,6 +24,7 @@ from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.views import WorkspaceStateView
 from grove.core.errors import (
     CapabilityUnavailable,
+    EffortNotSupported,
     MacroNotFound,
     ResumeNotSupported,
     SteeringUnsupported,
@@ -31,6 +32,7 @@ from grove.core.errors import (
     WorkspaceStateError,
 )
 from grove.core.manager import WorkspaceEvent, WorkspaceManager
+from grove.core.native_worker import NativeWorkerConfig
 from grove.core.store import JsonWorkspaceStore
 from grove.core.workspace import (
     LIVE_STATUSES,
@@ -54,6 +56,7 @@ class FakeNativeSteer:
         self.messages: list[tuple[str, str]] = []
         self.interrupts: list[str] = []
         self.models: list[tuple[str, str]] = []
+        self.efforts: list[tuple[str, str]] = []
         self.answers: list[tuple[str, dict[str, object]]] = []
         self.compactions: list[str] = []
         self.controls: list[tuple[str, str]] = []
@@ -71,6 +74,9 @@ class FakeNativeSteer:
 
     def set_model(self, state: WorkspaceState, model: str) -> None:
         self.models.append((state.id, model))
+
+    def set_effort(self, state: WorkspaceState, effort: str) -> None:
+        self.efforts.append((state.id, effort))
 
     def answer(self, state: WorkspaceState, plan: str) -> None:
         self.answers.append((state.id, json.loads(plan)))
@@ -129,6 +135,26 @@ def test_the_builtin_claude_creates_a_native_workspace_and_launches_the_worker(
     assert cmd.endswith(" -m grove.core.native_worker")  # provider argv stays in config
 
 
+@pytest.mark.parametrize(
+    ("agent", "flag"),
+    [
+        ("claude", ["--effort", "high"]),
+        # The override is global to Codex, so it reaches `app-server` as well.
+        ("codex", ["-c", "model_reasoning_effort=high"]),
+    ],
+)
+def test_a_native_launch_carries_the_effort_into_the_provider_argv(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, agent: str, flag: list[str]
+) -> None:
+    """The native arm composes its own argv, so effort must ride it too or a
+    native workspace would silently run on the tool's default."""
+    manager.create(CreateWorkspaceRequest(agent_name=agent, title="native", effort="high"))
+    [(_, decoration)] = fake_tmux.launch_decorations
+    config = NativeWorkerConfig.model_validate_json(Path(decoration[1]).read_text())
+    pairs = list(zip(config.command, config.command[1:], strict=False))
+    assert tuple(flag) in pairs
+
+
 def test_the_terminal_twin_creates_an_ordinary_pane_workspace(
     manager: WorkspaceManager, fake_tmux: FakeTmux
 ) -> None:
@@ -162,6 +188,69 @@ def test_steer_verbs_take_the_control_channel_and_never_the_pane(
         manager.send_keys(state.id, tmux.SendKey.TAB)
 
 
+def test_switch_effort_reaches_the_native_channel_with_a_listed_level_only(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, steer: FakeNativeSteer
+) -> None:
+    """A live effort change takes the control channel, never the pane, and the
+    level is checked against the adapter's list because Claude would ack a typo.
+    Every refusal is asserted to deliver NOTHING, not merely to raise."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude", title="native"))
+    events: list[WorkspaceEvent] = []
+    manager.subscribe(events.append)
+
+    manager.switch_effort(state.id, "xhigh")
+
+    assert steer.efforts == [(state.id, "xhigh")]
+    assert fake_tmux.sent_texts == []
+    assert ("control_invoked", "effort") in [(e.kind, e.detail.get("control")) for e in events]
+    with pytest.raises(EffortNotSupported, match="accepted levels"):
+        manager.switch_effort(state.id, "bogus")
+    assert steer.efforts == [(state.id, "xhigh")]
+
+
+def test_switch_effort_is_refused_for_a_kind_that_lists_no_levels(
+    manager: WorkspaceManager, steer: FakeNativeSteer
+) -> None:
+    """OpenCode's variants are per model, so it publishes no ladder and a live
+    change is refused up front rather than reaching its owner."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="opencode", title="native"))
+
+    with pytest.raises(EffortNotSupported, match="none"):
+        manager.switch_effort(state.id, "high")
+    assert steer.efforts == []
+
+
+def test_switch_effort_is_refused_on_a_terminal_session(
+    manager: WorkspaceManager, fake_tmux: FakeTmux, steer: FakeNativeSteer
+) -> None:
+    """A TUI session has no control channel to carry the change; typing `/effort`
+    into its pane could not report back, so the verb refuses instead."""
+    state = manager.create(CreateWorkspaceRequest(agent_name="claude-terminal", title="tui"))
+
+    with pytest.raises(EffortNotSupported, match="not a native session"):
+        manager.switch_effort(state.id, "high")
+    assert steer.efforts == [] and fake_tmux.sent_texts == []
+
+
+def test_session_controls_offer_efforts_only_where_a_native_channel_carries_them(
+    manager: WorkspaceManager, steer: FakeNativeSteer
+) -> None:
+    """The controls read is what tells the composer whether to draw a selector:
+    the adapter's ladder for a native session, nothing for a terminal one even
+    though that kind lists launch levels."""
+    native = manager.create(CreateWorkspaceRequest(agent_name="claude", title="native"))
+    terminal = manager.create(CreateWorkspaceRequest(agent_name="claude-terminal", title="tui"))
+
+    assert manager.session_controls(native.id).efforts == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+    assert manager.session_controls(terminal.id).efforts == ()
+
+
 def test_native_invoke_control_uses_the_provider_operation_not_a_slash_message(
     manager: WorkspaceManager, fake_tmux: FakeTmux, steer: FakeNativeSteer
 ) -> None:
@@ -176,6 +265,35 @@ def test_native_invoke_control_uses_the_provider_operation_not_a_slash_message(
     assert steer.compactions == [state.id]
     assert steer.messages == []
     assert fake_tmux.sent_texts == []
+
+
+@pytest.mark.parametrize("control", ["compact", "review --staged"])
+def test_a_native_control_the_owner_cannot_perform_is_refused_before_dispatch(
+    tmp_repo: Path, tmp_path: Path, steer: FakeNativeSteer, control: str
+) -> None:
+    """A native control crosses the daemon fire-and-forget, so the owner's own
+    refusal would reach the caller as "delivered". The adapter declares which
+    controls exist, and the engine refuses the rest before sending anything."""
+    cfg = GroveConfig.model_validate(
+        {
+            "worktree": {"root_template": str(tmp_path / "trees"), "branch_prefix": "test/"},
+            "tmux": {"session_prefix": "test-"},
+            "agents": [
+                {"name": "codex", "command": "codex", "kind": "codex"},
+            ],
+        }
+    )
+    manager = WorkspaceManager(
+        repo_root=tmp_repo,
+        cfg=cfg,
+        store=JsonWorkspaceStore(path=tmp_path / "state.json"),
+        native_steer=steer,
+    )
+    state = manager.create(CreateWorkspaceRequest(agent_name="codex", title="native"))
+
+    with pytest.raises(CapabilityUnavailable, match="no native"):
+        manager.invoke_control(state.id, control)
+    assert steer.controls == [] and steer.compactions == []
 
 
 def test_the_record_decides_not_the_roster(
@@ -300,15 +418,34 @@ def test_attach_to_a_native_workspace_is_a_read_only_viewer(manager: WorkspaceMa
 
     viewer = manager.attach(native.id)
     assert viewer.read_only is True
-    assert viewer.terminal_argv() == ["tmux", "attach", "-r", "-t", native.tmux_session]
-    writer = manager.attach(terminal.id)
-    assert writer.read_only is False
-    assert writer.terminal_argv() == ["tmux", "attach", "-t", terminal.tmux_session]
-    assert replace(viewer, inside_outer_tmux=True).terminal_argv() == [
+    # Each host workspace is on its own tmux server (`-L`).
+    assert viewer.terminal_argv() == [
         "tmux",
-        "switch-client",
+        "-L",
+        native.tmux_socket,
+        "attach",
+        "-r",
         "-t",
         native.tmux_session,
+    ]
+    writer = manager.attach(terminal.id)
+    assert writer.read_only is False
+    assert writer.terminal_argv() == [
+        "tmux",
+        "-L",
+        terminal.tmux_socket,
+        "attach",
+        "-t",
+        terminal.tmux_session,
+    ]
+    # Inside an outer tmux a private server cannot be switched to, so a new
+    # outer window runs the attach — and the viewer flag rides it intact.
+    assert replace(viewer, inside_outer_tmux=True).terminal_argv() == [
+        "tmux",
+        "new-window",
+        "-n",
+        native.tmux_session,
+        f"env -u TMUX tmux -L {native.tmux_socket} attach -r -t {native.tmux_session}",
     ]
 
 
@@ -345,6 +482,7 @@ def test_respawn_continues_the_native_session_rather_than_minting_a_new_one(
     assert "--resume" in worker["command"] and pinned in worker["command"]
     # Nothing to re-deliver: the resumed conversation already holds the task.
     assert worker["initial_prompt"] == ""
+    assert worker["resume"] is True
 
 
 def test_respawn_mints_when_the_pinned_session_never_materialized(
@@ -368,6 +506,27 @@ def test_respawn_mints_when_the_pinned_session_never_materialized(
     worker = json.loads(Path(decoration[1]).read_text(encoding="utf-8"))
     assert "--resume" not in worker["command"]
     assert "--session-id" in worker["command"]
+    # A minted session is a FRESH one: it must be booted, or it writes no transcript.
+    assert worker["resume"] is False
+
+
+def test_a_promptless_native_create_is_fresh_not_a_resume(
+    manager: WorkspaceManager, fake_tmux: FakeTmux
+) -> None:
+    """The incident: a TUI create carries no task, and an empty prompt was the resume signal.
+
+    So the worker skipped the boot turn and the peer preamble, the provider
+    never wrote a transcript, and every surface answered "no session recorded"
+    for a workspace that was running. Fresh-versus-resumed is the verb's own
+    decision and the worker config records it, whatever the prompt holds.
+    """
+    fake_tmux.launch_decorations.clear()
+    manager.create(CreateWorkspaceRequest(agent_name="claude", title="n"))
+
+    [(_, decoration)] = fake_tmux.launch_decorations
+    worker = json.loads(Path(decoration[1]).read_text(encoding="utf-8"))
+    assert worker["initial_prompt"] == ""
+    assert worker["resume"] is False
 
 
 def test_a_message_to_a_dead_native_session_revives_it(
@@ -475,6 +634,7 @@ def test_explicit_respawn_restarts_a_live_native_owner_without_removing_work(
     config = json.loads(Path(decoration[1]).read_text(encoding="utf-8"))
     assert "--resume" in config["command"]
     assert config["initial_prompt"] == ""
+    assert config["resume"] is True
 
 
 def test_explicit_native_recovery_refuses_failed_runtime_teardown(
@@ -485,7 +645,7 @@ def test_explicit_native_recovery_refuses_failed_runtime_teardown(
     )
     launches = len(fake_tmux.layouts)
 
-    def failed_stop(name: str, *, wait_for_exit: bool = False) -> None:
+    def failed_stop(name: str, *, wait_for_exit: bool = False, server: object = None) -> None:
         assert wait_for_exit, "native recovery must wait for the old provider to exit"
         raise TmuxError(f"could not stop {name}")
 

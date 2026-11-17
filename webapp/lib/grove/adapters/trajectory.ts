@@ -115,9 +115,13 @@ export function buildTrajectory(input: TrajectoryInput): Trajectory {
     const childId = entry.session.session_id;
     const id = `a:${childId}`;
     const spawn = entry.session.spawn_tool_use_id;
-    const spawnSpan = spawn ? `c:${sessionId}:${spawn}` : null;
+    // The spawning call is the root's own step, or for a nested child a step
+    // of the child that asked — its span is keyed by THAT child's id, so it is
+    // found by its tool_use_id (unique within one session's transcript) among
+    // the call spans already placed. Children arrive parent-first.
+    const spawnSpan = spawn ? callSpan(placed, spawn) : null;
     const reported = instant(entry.activity.started_at ?? null);
-    const parent = spawnSpan && placed.has(spawnSpan) ? spawnSpan : reported !== null ? turnAt(reported) : null;
+    const parent = spawnSpan ?? (reported !== null ? turnAt(reported) : null);
     if (parent === null) continue;
     const start = reported ?? startOf(parent);
     const status = childStatus(entry.activity.state, rootSettled);
@@ -135,6 +139,8 @@ export function buildTrajectory(input: TrajectoryInput): Trajectory {
     for (const step of steps) {
       spans.push(step.span);
       details.set(step.span.id, step.detail);
+      // A nested child spawned by this child's own call nests under it.
+      placed.add(step.span.id);
     }
   }
 
@@ -170,6 +176,13 @@ interface Step {
  * keeps its ORDER on the axis without claiming a time of its own. Several
  * entries can share one call (a batch edit fans out); the call is one span.
  */
+/** The placed call span for a `tool_use_id`, whichever session made the call. */
+function callSpan(placed: ReadonlySet<string>, toolUseId: string): string | null {
+  const suffix = `:${toolUseId}`;
+  for (const id of placed) if (id.startsWith("c:") && id.endsWith(suffix)) return id;
+  return null;
+}
+
 function stepSpans(
   sessionId: string,
   entries: readonly DigestEntryView[],

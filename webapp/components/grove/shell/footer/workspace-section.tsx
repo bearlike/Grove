@@ -11,6 +11,7 @@ import {
 
 import { AgentMark } from "@/components/grove/agent-mark";
 import { runtimeGlyph, runtimeLabel } from "@/components/grove/fleet/tokens";
+import { workspaceRuntimeLabel } from "@/lib/grove/adapters/launch-flow";
 import { Glyph, Groups, Section, Value } from "@/components/grove/shell/footer/primitives";
 import { contextTone, formatContextWindow, type ContextTone } from "@/lib/grove/adapters/context";
 import type { FooterContext } from "@/lib/grove/adapters/footer";
@@ -73,11 +74,11 @@ export function WorkspaceSection({ context }: { context: FooterContext }): React
         {RuntimeIcon ? (
           <span
             className="inline-flex shrink-0 items-center gap-1"
-            title={`This workspace runs on the ${runtimeLabel(context.runtime!).toLowerCase()}`}
+            title={`This workspace runs on ${workspaceRuntimeLabel({ runtime: context.runtime!, remote_runtime: context.remoteRuntime }, runtimeLabel)}`}
             data-testid="footer-runtime"
           >
             <Glyph Icon={RuntimeIcon} />
-            <span>{runtimeLabel(context.runtime!)}</span>
+            <span>{workspaceRuntimeLabel({ runtime: context.runtime!, remote_runtime: context.remoteRuntime }, runtimeLabel)}</span>
           </span>
         ) : null}
         {context.branch ? (

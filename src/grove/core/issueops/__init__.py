@@ -33,7 +33,7 @@ from grove.core.contracts.assignment_events import (
     AssignmentTicketEvent,
     AssignmentTicketIdentity,
 )
-from grove.core.issueops.engine import IssueOpsEngine, StatusPublisher
+from grove.core.issueops.engine import IssueOpsEngine, RecentKeys, StatusPublisher
 from grove.core.issueops.handover import HandoverEntry, HandoverKey, HandoverLog
 from grove.core.issueops.marker import SIGNATURE_MARKER, STICKY_MARKER
 from grove.core.issueops.parser import CommandParser, ParsedCommand
@@ -66,6 +66,7 @@ __all__ = [
     "PickupPlan",
     "ProviderResolver",
     "PublishSnapshot",
+    "RecentKeys",
     "StatusPublisher",
     "TicketStatusPublisher",
     "TodoResolver",

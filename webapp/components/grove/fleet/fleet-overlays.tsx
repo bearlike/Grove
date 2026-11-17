@@ -1,29 +1,18 @@
 "use client";
 
-import type { DashboardSnapshotView } from "@/lib/grove/api";
-
-import { CreateWorkspaceDialog } from "./create-workspace-dialog";
-import { useCreateWorkspaceUi } from "./create-store";
+import { MoreOptionsDialog } from "@/components/grove/launch/more-options-dialog";
 import { FleetPalette, type FleetSearchController } from "./fleet-palette";
 
-/** The shell's single search overlay and the existing create dialog. */
+/** The shell's single search overlay and the More options create dialog. */
 export function FleetOverlays({
-  snapshot,
   search,
   onSearchOpenChange,
   onSearchCloseAutoFocus,
 }: {
-  snapshot: DashboardSnapshotView | undefined;
   search: FleetSearchController;
   onSearchOpenChange(open: boolean): void;
   onSearchCloseAutoFocus(): void;
 }): React.ReactNode {
-  const open = useCreateWorkspaceUi((state) => state.open);
-  const repoRoot = useCreateWorkspaceUi((state) => state.repoRoot);
-  const setOpen = useCreateWorkspaceUi((state) => state.setOpen);
-  const setRepoRoot = useCreateWorkspaceUi((state) => state.setRepoRoot);
-  const firstRepoRoot = snapshot?.projects[0]?.repo_root ?? "";
-
   return (
     <>
       <FleetPalette
@@ -31,13 +20,7 @@ export function FleetOverlays({
         onOpenChange={onSearchOpenChange}
         onCloseAutoFocus={onSearchCloseAutoFocus}
       />
-      <CreateWorkspaceDialog
-        open={open}
-        onOpenChange={setOpen}
-        repoRoot={repoRoot || firstRepoRoot}
-        onRepoRootChange={setRepoRoot}
-        projects={snapshot?.projects ?? []}
-      />
+      <MoreOptionsDialog />
     </>
   );
 }

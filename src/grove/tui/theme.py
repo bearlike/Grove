@@ -201,6 +201,7 @@ _LIGHT_PHASE_BLOCKED: Final = _LIGHT_WARNING
 # host case, the info blue for the container's "worth noticing, not a warning".
 _LIGHT_RUNTIME_HOST: Final = _LIGHT_FG_MUTED
 _LIGHT_RUNTIME_CONTAINER: Final = _LIGHT_INFO
+_LIGHT_RUNTIME_REMOTE: Final = _LIGHT_REF
 
 
 # ─── variables dicts (consumed by Theme.variables → $varname in TCSS) ──────
@@ -384,6 +385,7 @@ RUNTIME_HEX: Final[dict[bool, dict[Runtime, str]]] = {
     False: {
         Runtime.HOST: _LIGHT_RUNTIME_HOST,
         Runtime.CONTAINER: _LIGHT_RUNTIME_CONTAINER,
+        Runtime.REMOTE: _LIGHT_RUNTIME_REMOTE,
     },
 }
 

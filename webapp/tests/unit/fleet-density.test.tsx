@@ -34,6 +34,13 @@ describe("dense workspace scan contracts", () => {
     expect(row).toContain('aria-current={active ? "page" : undefined}');
     expect(row).not.toContain("opacity-80");
   });
+  it("keeps rail rows memoized across fresh wrappers for unchanged workspaces", () => {
+    const tree = readFileSync(new URL("../../components/grove/fleet/fleet-tree.tsx", import.meta.url), "utf8");
+    expect(tree).toContain("const WorkspaceRow = memo(function WorkspaceRow(");
+    expect(tree).toContain("previous.row.workspace === next.row.workspace");
+    expect(tree).toContain("previous.row.repoName === next.row.repoName");
+    expect(tree).toContain("previous.onPinChange === next.onPinChange");
+  });
   it("gives a project heading more room above it than below, without a separator", () => {
     const tree = readFileSync(new URL("../../components/grove/fleet/fleet-tree.tsx", import.meta.url), "utf8");
     // A heading belongs to the group BELOW it. The old stack put 34.6px above

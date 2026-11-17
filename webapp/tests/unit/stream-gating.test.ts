@@ -9,6 +9,7 @@ import {
   type StreamAction,
 } from "@/lib/grove/adapters";
 import { backstopInterval } from "@/lib/grove/hooks";
+import { sessionSetChanged } from "@/lib/grove/hooks/stream";
 import type {
   CommitSummaryView,
   DashboardEvent,
@@ -53,6 +54,19 @@ describe("backstopInterval", () => {
 
   it("falls back to the documented cadence once the stream drops", () => {
     expect(backstopInterval(false, 2_000)).toBe(2_000);
+  });
+});
+
+describe("sessionSetChanged", () => {
+  it("ignores activity and order but detects added or removed sessions", () => {
+    const a = workspace({ id: "a" });
+    const b = workspace({ id: "b" });
+    const both = { ...a, sessions: [...a.sessions, ...b.sessions] };
+    expect(sessionSetChanged(null, a)).toBe(true);
+    expect(sessionSetChanged(a, { ...a, dirty_files: 3 })).toBe(false);
+    expect(sessionSetChanged(both, { ...both, sessions: [...both.sessions].reverse() })).toBe(false);
+    expect(sessionSetChanged(a, both)).toBe(true);
+    expect(sessionSetChanged(both, a)).toBe(true);
   });
 });
 

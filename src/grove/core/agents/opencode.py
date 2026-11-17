@@ -62,7 +62,8 @@ from a provider that enumerates nothing, so the picker rendered disabled with
 no way to tell the difference.
 
 The bound still only guards a wedged binary: this is a create-form/controls
-read, never the ~1 Hz activity tick, and the result is memoized upstream.
+read, never the ~1 Hz activity tick, and the result is memoized upstream by
+`registry.ModelProbeMemo` for `models.catalog_ttl_seconds`.
 """
 
 
@@ -643,12 +644,29 @@ class OpencodeAdapter:
     resumable = True
     reports_queue = False
     reports_tool_errors = True
+    # OpenCode's `--variant` exists on `opencode run` only: the interactive TUI
+    # exits 1 on it (measured 1.18.31), and its variants are named per model
+    # rather than as one ladder. So no launch-time effort is offered.
+    efforts: tuple[str, ...] = ()
+    native_controls: frozenset[str] = frozenset({"compact", "command"})
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         return ["--session", session_id] if resume else []
 
+    def fork_decoration(self, source_session_id: str) -> list[str]:
+        # Not implemented. Measured 1.19.5: `POST /session/{id}/fork` and
+        # `--session <id> --fork` keep the SOURCE session's `directory` even when
+        # the server runs in another worktree, so a fork would be invisible to
+        # this adapter's directory-keyed reads and could act on the source tree.
+        del source_session_id
+        return []
+
     def model_decoration(self, model: str) -> list[str]:
         return ["--model", model]
+
+    def effort_decoration(self, effort: str) -> list[str]:
+        del effort
+        return []
 
     def offline_decoration(self) -> list[str]:
         return []
@@ -680,6 +698,14 @@ class OpencodeAdapter:
 
     def tool_version(self, command: str) -> str | None:
         return AgentVersionProbe.version(command, "--version")
+
+    def transcript_root(self, path: Path) -> Path | None:
+        """``None``: the one SQLite database is written in place, never appended."""
+        del path
+        return None
+
+    def transcript_home(self) -> Path | None:
+        return None
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         """Return OpenCode's shared DB, because it has no per-session transcript files."""

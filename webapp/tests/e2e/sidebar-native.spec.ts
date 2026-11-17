@@ -434,7 +434,7 @@ test.describe("native sidebar project context", () => {
     await expect(railRows(page)).toHaveCount(4);
     await page.addStyleTag({ content: "aside { width: 320px !important; } aside [data-testid='rail-metadata'] { font-size: 32px !important; line-height: 1.4 !important; }" });
     const row = railRow(page, WORKSPACES.consoleBlocked.id);
-    const amounts = ["rail-dirty", "rail-added", "rail-removed", "rail-created"];
+    const amounts = ["rail-times"];
     for (const id of amounts) {
       const cell = row.getByTestId(id);
       const bounds = await cell.evaluate((el) => {
@@ -545,7 +545,7 @@ test.describe("native sidebar project context", () => {
         // Intentional name truncation is allowed. These cells alone are values
         // whose clipped glyphs would become different values, so only they are
         // checked for overflow.
-        const quantities = ["rail-dirty", "rail-added", "rail-removed", "rail-created"].flatMap(
+        const quantities = ["rail-times"].flatMap(
           (testId) => {
             const element = blocked.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
             return element ? [{ testId, clipped: element.scrollWidth > element.clientWidth + 1 }] : [];
@@ -555,7 +555,6 @@ test.describe("native sidebar project context", () => {
         const metadata = blocked.querySelector<HTMLElement>("[data-testid='rail-metadata']")!;
         const semanticOrder = (container: HTMLElement): string[] => {
           const semanticIds = new Set([
-            "rail-branch",
             "fleet-row-attention-mark",
             "fleet-row-phase-mark",
           ]);
@@ -572,7 +571,7 @@ test.describe("native sidebar project context", () => {
             context: rect(context),
             contextOrder: semanticOrder(context),
             title: rect(title),
-            branch: rect(blocked.querySelector("[data-testid='rail-branch']")),
+            metadata: rect(metadata),
             titleFont: Number.parseFloat(getComputedStyle(title).fontSize),
             metadataFont: Number.parseFloat(getComputedStyle(metadata).fontSize),
             clipped: blockedLink.scrollHeight > blockedLink.clientHeight + 1,
@@ -589,16 +588,11 @@ test.describe("native sidebar project context", () => {
           blockedPhaseText: blocked
             .querySelector<HTMLElement>("[data-testid='fleet-row-phase-mark']")
             ?.textContent?.trim(),
-          shortBranchGaps: {
-            branchToAttention:
-              rect(blocked.querySelector("[data-testid='fleet-row-attention-mark']"))!.x -
-              rect(blocked.querySelector("[data-testid='rail-branch']"))!.right,
-            attentionToPhase:
-              rect(blocked.querySelector("[data-testid='fleet-row-phase-mark']"))!.x -
-              rect(blocked.querySelector("[data-testid='fleet-row-attention-mark']"))!.right,
-            branchWidth: rect(blocked.querySelector("[data-testid='rail-branch']"))!.right -
-              rect(blocked.querySelector("[data-testid='rail-branch']"))!.x,
-          },
+          attentionToPhase:
+            rect(blocked.querySelector("[data-testid='fleet-row-phase-mark']"))!.x -
+            rect(blocked.querySelector("[data-testid='fleet-row-attention-mark']"))!.right,
+          hasBranch: blocked.querySelector("[data-testid='rail-branch']") !== null,
+          hasLedger: blocked.querySelector("[data-testid='rail-ledger']") !== null,
           quantities,
         };
       },
@@ -609,34 +603,31 @@ test.describe("native sidebar project context", () => {
       },
     );
 
-    // Tile-and-three-lines anatomy plus the hairline divider above the ledger:
-    // 96px measured at the 80% root. The ceiling catches a fourth line or a
-    // reserved slot (a line here is ~17px), not the tile's own height.
-    expect(geometry.blocked.box!.height).toBeLessThanOrEqual(101);
+    // Tile beside TWO lines: the title, then the claims with the times flush
+    // right. The branch and the change ledger are gone from the row (they live
+    // in the overview and on Info/Changes), so a third line is a regression.
+    const heights = await page.evaluate((ids) => ids.map((id) =>
+      document.querySelector(`aside [data-workspace-id="${id}"] a`)!.getBoundingClientRect().height,
+    ), [WORKSPACES.root.id, WORKSPACES.consoleDone.id, WORKSPACES.consoleBlocked.id]);
+    for (const height of heights) expect(height).toBeLessThanOrEqual(72);
+    expect(geometry.hasBranch).toBe(false);
+    expect(geometry.hasLedger).toBe(false);
     expect(geometry.blocked.clipped).toBe(false);
     expect(geometry.blocked.titleFont).toBeCloseTo(11.2, 1);
     expect(geometry.blocked.metadataFont).toBeCloseTo(10.4, 1);
-    expect(geometry.blocked.branch!.y).toBeGreaterThan(geometry.blocked.title!.y);
+    expect(geometry.blocked.metadata!.y).toBeGreaterThan(geometry.blocked.title!.y);
     expect(geometry.blocked.context!.height).toBeGreaterThan(0);
     // Status is readable content on the body line, not an icon reservation in
     // the title. The same body order applies when one or both reports are gone.
     expect(geometry.blocked.contextOrder).toEqual([
-      "rail-branch",
       "fleet-row-attention-mark",
       "fleet-row-phase-mark",
     ]);
-    expect(geometry.root.contextOrder).toEqual(["rail-branch"]);
-    expect(geometry.attentionOnly.contextOrder).toEqual([
-      "rail-branch",
-      "fleet-row-attention-mark",
-    ]);
-    // `main` cannot be a wide empty slot just because the row also has two
-    // status words. Both gaps are the compact rhythm, not flex remainder.
-    expect(geometry.shortBranchGaps.branchToAttention).toBeGreaterThanOrEqual(4);
-    expect(geometry.shortBranchGaps.branchToAttention).toBeLessThanOrEqual(10);
-    expect(geometry.shortBranchGaps.attentionToPhase).toBeGreaterThanOrEqual(4);
-    expect(geometry.shortBranchGaps.attentionToPhase).toBeLessThanOrEqual(10);
-    expect(geometry.shortBranchGaps.branchWidth).toBeLessThan(48);
+    expect(geometry.root.contextOrder).toEqual([]);
+    expect(geometry.attentionOnly.contextOrder).toEqual(["fleet-row-attention-mark"]);
+    // The gap between the two claims is the compact rhythm, not flex remainder.
+    expect(geometry.attentionToPhase).toBeGreaterThanOrEqual(4);
+    expect(geometry.attentionToPhase).toBeLessThanOrEqual(10);
     expect(geometry.donePhaseText).toMatch(/handoff/i);
     expect(geometry.blockedPhaseText).toMatch(/build/i);
     for (const quantity of geometry.quantities) expect(quantity.clipped, quantity.testId).toBe(false);

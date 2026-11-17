@@ -79,7 +79,7 @@ if TYPE_CHECKING:
 
 from loguru import logger
 
-from grove.core.agents.base import AgentVersionProbe
+from grove.core.agents.base import AgentVersionProbe, containing_root
 from grove.core.agents.model import (
     AgentActivity,
     AgentActivityState,
@@ -122,6 +122,10 @@ _PREAMBLE_MARKERS: tuple[str, ...] = (
     "# AGENTS.md",
     "<permissions instructions>",
 )
+
+# Codex's fork subcommand (`codex fork <id>`). The native worker strips the same
+# two tokens off an app-server argv and forks over JSON-RPC instead.
+FORK_SUBCOMMAND = "fork"
 
 _DIGEST_MAX_ENTRIES = 60
 _DIGEST_TEXT_CAP = 200
@@ -609,8 +613,8 @@ class _RolloutLine:
         if self.role != "user":
             return False
         body = self._content_text()
-        if not body.strip() or GroveInstruction.is_reminder(body):
-            # A daemon reminder rides the user channel and is not a person's turn.
+        if not body.strip() or GroveInstruction.is_authored(body):
+            # A Grove trigger rides the user channel and is not a person's turn.
             return False
         return not any(marker in body for marker in _PREAMBLE_MARKERS)
 
@@ -1939,6 +1943,11 @@ class CodexAdapter:
     # payload keys across 31,373 real records are exactly
     # {type, call_id, output} (+ an id/metadata variant), zero error-shaped.
     reports_tool_errors = False
+    # `model_reasoning_effort` values every current Codex model accepts. The
+    # enum is open (`none`, `max`, ...), but a level a model does not support
+    # fails the turn, so the picker offers the common ladder only.
+    efforts: tuple[str, ...] = ("minimal", "low", "medium", "high", "xhigh")
+    native_controls: frozenset[str] = frozenset()
 
     def launch_decoration(self, session_id: str, *, resume: bool = False) -> list[str]:
         """Empty for a fresh run — Codex mints its own thread id, with no flag to
@@ -1958,6 +1967,22 @@ class CodexAdapter:
         del session_id
         return []
 
+    def fork_decoration(self, source_session_id: str) -> list[str]:
+        """``fork <uuid>``, the subcommand that copies a session into a new thread.
+
+        It rides after the configured command for the same reason ``resume``
+        does. Codex mints the new thread id itself, so Grove discovers it the
+        way it discovers any fresh Codex session. A native owner reads the same
+        two tokens and calls ``thread/fork`` instead (``CodexNativeOwner``).
+
+        Args:
+            source_session_id: The thread whose conversation is copied.
+
+        Returns:
+            The subcommand and its argument.
+        """
+        return [FORK_SUBCOMMAND, source_session_id]
+
     def model_decoration(self, model: str) -> list[str]:
         """``--model <id>`` — Codex CLI's per-launch model selector.
 
@@ -1966,6 +1991,15 @@ class CodexAdapter:
         ``launch_decoration`` is empty.
         """
         return ["--model", model]
+
+    def effort_decoration(self, effort: str) -> list[str]:
+        """``-c model_reasoning_effort=<level>``, Codex's config override.
+
+        A global option, so it applies to the interactive TUI, ``resume`` and
+        ``app-server`` alike, which is what lets one decoration serve the
+        terminal and the native launch.
+        """
+        return ["-c", f"model_reasoning_effort={effort}"]
 
     def offline_decoration(self) -> list[str]:
         """Pin the sandbox to ``workspace-write`` with networking off:
@@ -2032,6 +2066,13 @@ class CodexAdapter:
         0.147.0`` — the distribution name is part of the vendor's own answer and
         is kept rather than parsed off)."""
         return AgentVersionProbe.version(command, "--version")
+
+    def transcript_root(self, path: Path) -> Path | None:
+        """``$CODEX_HOME``: rollouts live date-partitioned under its ``sessions/``."""
+        return containing_root(path, (_CodexHome.base_dir(),))
+
+    def transcript_home(self) -> Path | None:
+        return _CodexHome.base_dir()
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:
         try:

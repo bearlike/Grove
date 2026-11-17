@@ -656,7 +656,7 @@ def test_read_state_is_one_get_carrying_body_and_comment_count(
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
-        return httpx.Response(200, json=payload)
+        return httpx.Response(200, json=[] if request.url.path.endswith("/reviews") else payload)
 
     cfg: Any = (GiteaTicketConfig if provider == "gitea" else GitHubTicketConfig)(
         enabled=True, owner="o", repo="r", token_env="T"
@@ -664,10 +664,37 @@ def test_read_state_is_one_get_carrying_body_and_comment_count(
     cls: Any = GiteaProvider if provider == "gitea" else GitHubProvider
     state = cls(cfg, env={"T": "tok"}, transport=httpx.MockTransport(handler)).read_state("9", kind)
 
-    assert seen == [path]
+    assert seen[0] == path
     assert (state.ref.kind, state.ref.status, state.body, state.comment_count) == (
         kind,
         "merged",
         "b",
         3,
     )
+
+
+def test_github_pull_request_state_counts_every_submitted_review_across_pages() -> None:
+    """A review never moves GitHub's ``comments``, so the PR read counts reviews itself.
+
+    101 submitted reviews span two pages; a private ``PENDING`` draft is not counted.
+    """
+    reviews = [
+        {"id": n, "state": "COMMENTED", "body": "", "user": {"login": "cursor[bot]"}}
+        for n in range(101)
+    ]
+    reviews.append({"id": 999, "state": "PENDING", "body": "draft", "user": {"login": "me"}})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/reviews"):
+            page = int(request.url.params["page"])
+            return httpx.Response(200, json=reviews[(page - 1) * 100 : page * 100])
+        return httpx.Response(200, json={"number": 9, "state": "open", "body": "", "comments": 3})
+
+    p = GitHubProvider(
+        GitHubTicketConfig(enabled=True, owner="o", repo="r", token_env="T"),
+        env={"T": "tok"},
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert p.read_state("9", "pull_request").comment_count == 3 + 101
+    assert p.list_reviews("9")[0].body == "Submitted a review (commented); see its inline comments."

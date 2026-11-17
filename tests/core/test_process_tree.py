@@ -14,10 +14,24 @@ import pytest
 from grove.core.errors import ProcessError
 from grove.core.process import ProcessTree
 
-pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Linux process identities")
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX process identities")
 
 
-def test_process_tree_waits_for_a_provider_ignoring_hup(tmp_path: Path) -> None:
+@pytest.fixture(params=["procfs", "ps"])
+def proc_root(request: pytest.FixtureRequest, tmp_path: Path) -> Path:
+    """Both identity sources: procfs where the host has one, ``ps`` everywhere.
+
+    A missing ``proc_root`` is what selects ``ps``, so the macOS path runs on a
+    Linux CI host too.
+    """
+    if request.param == "ps":
+        return tmp_path / "no-procfs"
+    if not Path("/proc").is_dir():
+        pytest.skip("host has no procfs")
+    return Path("/proc")
+
+
+def test_process_tree_waits_for_a_provider_ignoring_hup(tmp_path: Path, proc_root: Path) -> None:
     stopped = tmp_path / "stopped"
     child_code = (
         "import signal,time,sys\n"
@@ -45,7 +59,7 @@ def test_process_tree_waits_for_a_provider_ignoring_hup(tmp_path: Path) -> None:
     try:
         assert parent.stdout is not None
         child = int(parent.stdout.readline())
-        tree = ProcessTree.capture((parent.pid,))
+        tree = ProcessTree.capture((parent.pid,), proc_root=proc_root)
         assert {pid for pid, _ in tree.identities} == {parent.pid, child}
         # tmux's HUP removes the pane/worker first, but the provider can survive.
         parent.send_signal(signal.SIGHUP)
@@ -53,7 +67,7 @@ def test_process_tree_waits_for_a_provider_ignoring_hup(tmp_path: Path) -> None:
         os.kill(child, signal.SIGHUP)
         tree.terminate_and_wait()
         assert stopped.read_text() == "stopped"
-        assert ProcessTree.capture((child,)).identities == ()
+        assert ProcessTree.capture((child,), proc_root=proc_root).identities == ()
     finally:
         if parent.poll() is None:
             parent.kill()
@@ -63,7 +77,7 @@ def test_process_tree_waits_for_a_provider_ignoring_hup(tmp_path: Path) -> None:
                 os.kill(child, signal.SIGKILL)
 
 
-def test_process_tree_refuses_to_overlap_a_provider_that_does_not_exit() -> None:
+def test_process_tree_refuses_to_overlap_a_provider_that_does_not_exit(proc_root: Path) -> None:
     code = (
         "import signal,time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
@@ -74,7 +88,7 @@ def test_process_tree_refuses_to_overlap_a_provider_that_does_not_exit() -> None
     try:
         assert child.stdout is not None
         child.stdout.readline()
-        tree = ProcessTree.capture((child.pid,))
+        tree = ProcessTree.capture((child.pid,), proc_root=proc_root)
         with pytest.raises(ProcessError, match="refusing to launch another owner"):
             tree.terminate_and_wait(timeout=0.1)
         assert child.poll() is None
@@ -83,7 +97,7 @@ def test_process_tree_refuses_to_overlap_a_provider_that_does_not_exit() -> None
         child.wait(timeout=5)
 
 
-def test_stop_timeout_keeps_ancestry_available_for_retry() -> None:
+def test_stop_timeout_keeps_ancestry_available_for_retry(proc_root: Path) -> None:
     child_code = (
         "import signal,time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
@@ -105,7 +119,7 @@ def test_stop_timeout_keeps_ancestry_available_for_retry() -> None:
         assert parent.stdout is not None
         child = int(parent.stdout.readline())
         for _ in range(2):
-            tree = ProcessTree.capture((parent.pid,), include_roots=False)
+            tree = ProcessTree.capture((parent.pid,), proc_root=proc_root, include_roots=False)
             assert [pid for pid, _ in tree.identities] == [child]
             with pytest.raises(ProcessError, match="refusing to launch another owner"):
                 tree.terminate_and_wait(timeout=0.1)
@@ -128,11 +142,20 @@ def test_process_lookup_race_is_an_exited_process(
     assert ProcessTree._identity(tmp_path) is None
 
 
-def test_process_tree_never_signals_a_reused_pid(monkeypatch: pytest.MonkeyPatch) -> None:
-    tree = ProcessTree(((os.getpid(), "not-this-incarnation"),))
+def test_process_tree_never_signals_a_reused_pid(
+    monkeypatch: pytest.MonkeyPatch, proc_root: Path
+) -> None:
+    tree = ProcessTree(((os.getpid(), "not-this-incarnation"),), proc_root)
 
     def unexpected_signal(*args: object) -> None:
         pytest.fail("reused PID was signalled")
 
     monkeypatch.setattr(os, "kill", unexpected_signal)
     tree.terminate_and_wait()
+
+
+def test_ps_identity_of_an_exited_pid_is_none(tmp_path: Path) -> None:
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(timeout=5)
+    tree = ProcessTree(((child.pid, "gone"),), tmp_path / "no-procfs")
+    assert tree._current(child.pid) is None

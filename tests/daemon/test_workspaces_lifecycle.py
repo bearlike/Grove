@@ -1,4 +1,4 @@
-"""GET /workspaces/{id}, POST pause/resume/respawn/kill."""
+"""GET /workspaces/{id}, POST pause/resume/respawn/fork/kill."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon import build_app
 from tests.conftest import FakeTmux
@@ -88,3 +89,34 @@ def test_respawn_offline_workspace(
     resp = daemon.post(f"/workspaces/{created_ws}/respawn")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] in {"running", "active", "idle"}
+
+
+def test_fork_returns_the_new_workspace(
+    daemon: TestClient, created_ws: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    source = JsonWorkspaceStore().get(created_ws)
+    assert source.agent_session_id is not None
+    folder = home / "projects" / _ClaudeHome.encode_cwd(source.agent_cwd)
+    folder.mkdir(parents=True)
+    (folder / f"{source.agent_session_id}.jsonl").write_text(
+        f'{{"type":"user","cwd":"{source.agent_cwd}"}}\n', encoding="utf-8"
+    )
+
+    resp = daemon.post(f"/workspaces/{created_ws}/fork")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] != created_ws
+    assert body["title"] == "lifecycle test (fork)"
+
+
+def test_fork_of_a_sessionless_workspace_is_404(daemon: TestClient, tmp_repo: Path) -> None:
+    shell = daemon.post(
+        "/workspaces",
+        json={"agent_name": "shell", "title": "plain", "repo_root": str(tmp_repo)},
+    ).json()["id"]
+    resp = daemon.post(f"/workspaces/{shell}/fork")
+    assert resp.status_code == 404
+    assert "no agent session to fork" in resp.text

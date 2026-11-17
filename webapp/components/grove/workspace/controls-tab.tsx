@@ -19,6 +19,7 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { TerminalBlock } from "@/components/elements/terminal-block";
 import { runtimeLabel } from "@/components/grove/fleet/tokens";
+import { workspaceRuntimeLabel } from "@/lib/grove/adapters/launch-flow";
 import { HelpLabel } from "./help-hint";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +33,7 @@ import type {
   WorkspaceStateView,
 } from "@/lib/grove/api";
 import { useInvokeControl, useSessionControls } from "@/lib/grove/hooks";
+import { ArtifactControlsCard } from "./artifacts";
 import { LifecycleActions } from "./lifecycle-actions";
 import { SendKeysCard } from "./send-keys";
 import { ShareCard } from "./share-card";
@@ -71,6 +73,7 @@ export function ControlsTab({
         native={state.native}
       />
       <ShareCard workspaceId={workspaceId} />
+      <ArtifactControlsCard state={state} />
     </>
   );
 
@@ -195,9 +198,9 @@ function SessionCard({
           >
             <span
               className="block min-w-0 truncate text-xs"
-              title={`${runtimeLabel(state.runtime)} · ${state.agent_name} · ${state.branch}`}
+              title={`${workspaceRuntimeLabel(state, runtimeLabel)} · ${state.agent_name} · ${state.branch}`}
             >
-              {runtimeLabel(state.runtime)} · {state.agent_name} · {state.branch}
+              {workspaceRuntimeLabel(state, runtimeLabel)} · {state.agent_name} · {state.branch}
             </span>
           </SessionRegion>
         </div>

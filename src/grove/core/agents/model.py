@@ -1534,6 +1534,35 @@ class QueuedMessage:
     says now, not a promise about delivery order."""
 
 
+def label_queue(
+    queued: Sequence[QueuedMessage], sent: Sequence[tuple[str, datetime]]
+) -> tuple[QueuedMessage, ...]:
+    """Give text to the entries the harness queued without recording any.
+
+    A headless Claude Code (2.1.314+) narrates a queued prompt as a contentless
+    ``enqueue`` and names it only when it delivers it, so the queue it reports
+    is right in count, order and time and blank in text. The text is what Grove
+    itself submitted (``sent``, oldest first): newest blank entry to newest
+    send, skipping a send made AFTER the entry was queued, which is one still on
+    its way in. The harness still decides which entries exist; this only labels
+    them, and an entry nothing matches stays blank.
+    """
+    out = list(queued)
+    j = len(sent) - 1
+    for i in range(len(out) - 1, -1, -1):
+        entry = out[i]
+        if entry.text:
+            continue
+        # One second of slack: Grove stamps a send just BEFORE the harness does.
+        while j >= 0 and entry.sent_at and (sent[j][1] - entry.sent_at).total_seconds() > 1:
+            j -= 1
+        if j < 0:
+            break
+        out[i] = replace(entry, text=sent[j][0])
+        j -= 1
+    return tuple(out)
+
+
 @dataclass(slots=True, frozen=True)
 class SessionTurn:
     """One conversation turn: a human prompt plus everything until the next one.
@@ -1699,7 +1728,8 @@ class SessionSummary:
     cwd: str | None
     created_at: datetime | None
     modified_at: datetime | None
-    size_bytes: int
+    # ``None`` where no local file exists to measure (a remote workspace's session).
+    size_bytes: int | None
     git_branch: str | None = None
     title: str | None = None
     first_prompt: str | None = None
@@ -1757,6 +1787,10 @@ class SessionControls:
     models: tuple[str, ...] = ()
     current_model: str | None = None
     permission_mode: str | None = None
+    efforts: tuple[str, ...] = ()
+    """Effort levels this session can be switched to NOW, over a native control
+    channel. Empty for a terminal session even when its kind lists launch
+    levels: nothing can carry the change, so no control is offered."""
 
     @classmethod
     def empty(cls) -> SessionControls:

@@ -12,7 +12,7 @@ export default function FleetPage() {
   return (
     <>
       <ShellHeader />
-      <div className="min-h-0 flex-1 overflow-auto p-4" data-testid="fleet-page">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4" data-testid="fleet-page">
         <FleetDashboard />
       </div>
     </>

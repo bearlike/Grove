@@ -33,6 +33,7 @@ const USD = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 4,
 });
 import { ChecklistMeter, PhaseMeter, phaseSummary } from "./phase-meter";
+import { ArtifactsCard } from "./artifacts";
 import { TicketRefsCard } from "./ticket-refs";
 import { WorkspaceHistoryDialog } from "./history-dialog";
 import {
@@ -277,6 +278,12 @@ export function InfoTab({
         onNavigate={onNavigate}
       />
 
+      {/* What the work PRODUCED, directly under what it is about. Owner-only
+          and gated on `identity` like the card at the bottom: a file artifact
+          is a host path and its bytes come from an authenticated route, so the
+          public payload carries none and a shared page mounts nothing here. */}
+      {identity && <ArtifactsCard state={identity} />}
+
       {/* Ages, not instants: "is this still moving" is the question a timeline
           is asked, and the exact instant stays one hover away rather than being
           the thing you have to parse first. `Updated` is the newer of the two
@@ -319,8 +326,9 @@ export function InfoTab({
               hours reported itself four hours idle. The rail has always shown
               the derived instant; this card was reading the raw field and
               labelling it "Updated", which a reader takes to mean "last did
-              something". Falls back to the record's stamp inside the
-              derivation, so a session-less workspace still reports an age. */}
+              something". Falls back to creation inside the derivation, so a
+              session-less workspace still reports an age; never to
+              `updated_at`, which a rename moves (#919). */}
           <CardField label="Last activity">
             {/* The record's stamps are passed IN rather than read off an
                 embedded workspace state, because the public payload carries
@@ -329,12 +337,8 @@ export function InfoTab({
             <PreciseAge
               iso={
                 activity
-                  ? newestActivityIso(
-                      activity.sessions,
-                      state.updated_at,
-                      state.created_at,
-                    )
-                  : state.updated_at
+                  ? newestActivityIso(activity.sessions, state.created_at)
+                  : state.created_at
               }
             />
           </CardField>

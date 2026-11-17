@@ -55,9 +55,10 @@ class AttachInstructionResult(BaseModel):
     ``command`` is ready to paste into a shell on the daemon's host, whatever
     the workspace's runtime: ``tmux attach`` for a host workspace, and the
     ``devcontainer exec … tmux`` that enters the container's own tmux for a
-    containerized one. ``inside_outer_tmux`` warns that the user is
-    already in a tmux client and should switch (``tmux switch-client``) rather
-    than nest.
+    containerized one. A host workspace on its own tmux server carries
+    ``tmux -L <socket>`` in the command. ``inside_outer_tmux`` warns that the
+    user is already in a tmux client and should not nest: switch to a session
+    on the same server, or open the command in a new outer window.
 
     ``tmux_session`` is null for a containerized workspace and that is the
     honest answer rather than a gap: the session it would name lives on the

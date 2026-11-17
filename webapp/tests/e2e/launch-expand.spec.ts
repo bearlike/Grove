@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { barInset } from "./sharp-surface-probe";
+import { chooseProfile } from "./_launch";
 
 /**
  * A click that lands before React attaches its handler is silently dropped —
@@ -87,9 +88,7 @@ test.describe("launch composer expand", () => {
     await page.goto("/");
     await expect(page.getByTestId("launch-controls")).toBeVisible({ timeout: 60_000 });
 
-    const controls = page.getByTestId("launch-controls");
-    await controls.getByRole("combobox", { name: "Agent" }).click();
-    await page.getByText("Claude Code (default)", { exact: true }).click();
+    await chooseProfile(page, "Claude", "Claude Code (default)");
 
     // Scoped to the PAGE, not to the shelf: the model pill moved into the
     // composer's own toolbar beside send, because it configures the message's
@@ -116,6 +115,39 @@ test.describe("launch composer expand", () => {
     await customModel.fill("invalid model");
     await expect(page.getByTestId("launch-custom-model-error")).toContainText("ASCII letters");
     await expect(send).toBeDisabled();
+  });
+
+  test("offers a reasoning effort only for an agent that has levels, and sends the choice", async ({ page }) => {
+    const creates: Record<string, unknown>[] = [];
+    await page.route("**/api/grove/workspaces", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      creates.push(route.request().postDataJSON() as Record<string, unknown>);
+      await route.fulfill({ status: 422, json: { detail: { error: "stop", message: "captured" } } });
+    });
+    await page.goto("/");
+    const controls = page.getByTestId("launch-controls");
+    await expect(controls).toBeVisible({ timeout: 60_000 });
+
+    const agent = controls.getByRole("combobox", { name: "Agent", exact: true });
+    const effort = page.locator('[data-pill="effort"]');
+    // A plain shell lists no levels, so the control is absent rather than dead.
+    await clickUntil(agent, () => expect(agent).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 }));
+    // The tool row truncates its description, so pick the row by the kind it
+    // names: a generic roster entry is the plain shell.
+    await page.locator('[data-slot="model-selector-item"]').filter({ hasText: /^generic/ }).click();
+    await expect(agent).toContainText("generic");
+    await expect(effort).toHaveCount(0);
+
+    await chooseProfile(page, "Claude", "Claude Code (default)");
+    await expect(effort).toHaveText(/Agent default/);
+    await effort.click();
+    await page.getByRole("option", { name: "Extra high" }).click();
+    await expect(effort).toHaveText(/Extra high/);
+
+    await page.getByTestId("launch-input").fill("Think harder about this");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect.poll(() => creates.length).toBe(1);
+    expect(creates[0]?.effort).toBe("xhigh");
   });
 
   test("returns focus to the restored inline editor, not to the body", async ({ page }) => {
@@ -153,9 +185,7 @@ test.describe("launch composer expand", () => {
     const shelf = page.getByTestId("launch-controls");
     await expect(shelf).toBeVisible({ timeout: 60_000 });
 
-    const agent = shelf.getByRole("combobox", { name: "Agent", exact: true });
-    await clickUntil(agent, () => expect(agent).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 }));
-    await page.getByText("Claude Code (default)", { exact: true }).click();
+    await chooseProfile(page, "Claude", "Claude Code (default)");
     const project = shelf.getByRole("combobox", { name: "Project" });
     await clickUntil(project, () => expect(project).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 }));
 

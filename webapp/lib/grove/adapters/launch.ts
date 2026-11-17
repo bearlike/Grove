@@ -1,7 +1,17 @@
-import { Md5 } from "ts-md5";
-
-import type { BranchPlan, CreateWorkspaceRequest, TicketSelector } from "@/lib/grove/api";
-import type { LaunchState, LaunchTicket, LaunchValues } from "@/components/grove/launch/launch-state";
+import type {
+  BranchPlan,
+  LaunchPreviewView,
+  LaunchProblemView,
+  CreateWorkspaceRequest,
+  TicketSelector,
+  WorkspaceDefaultsView,
+} from "@/lib/grove/api";
+import type {
+  LaunchField,
+  LaunchState,
+  LaunchTicket,
+  LaunchValues,
+} from "@/components/grove/launch/launch-state";
 import {
   attachmentCountError,
   attachmentError,
@@ -11,6 +21,19 @@ import {
 const MAX_TITLE_LENGTH = 120;
 const MAX_PROMPT_LENGTH = 10_000;
 const MAX_MODEL_LENGTH = 64;
+
+/**
+ * Why Send must wait, or `null` when the draft can be built honestly.
+ *
+ * Only the project. Every other untouched field — agent and placement included
+ * — is OMITTED and the engine's resolver answers it at create, so a send made
+ * before `GET /defaults` returns gets exactly what that response would have
+ * shown. (Before #1093 the request had to carry `branch_plan`, and Send waited
+ * for THIS project's defaults so it could not pin the placeholder.)
+ */
+export function launchBlocker(state: Pick<LaunchState, "values">): string | null {
+  return state.values.repoRoot === null ? "Choose a project first" : null;
+}
 
 /**
  * Validate a manually entered model id before the composer sends it.
@@ -38,64 +61,32 @@ export function customModelError(value: string): string | null {
     : "Use ASCII letters, numbers, and - . _ / : [ ] only.";
 }
 
-/** How much of the digest is shown. Nine hex chars is 36 bits — far past any
- * plausible collision across one host's workspaces, and short enough to sit in
- * a rail row without truncating. */
-const TITLE_DIGEST_LENGTH = 9;
-
 /**
- * A letter ahead of the digest, so the title can NEVER be a bare digit run.
+ * The saved model an untouched create of `agentName` will launch with.
  *
- * The title becomes the auto branch's slug, and the numeric ticket providers
- * claim a leading digit run at the head of a branch as an issue id. About one
- * brief in 110 digests to all digits, and one such workspace shipped attached
- * to a phantom issue with a phase claim seeded and recorded for it. The prefix
- * is the fix at the smallest seam: the branch grammar is right to read
- * `123-fix` as #123, and a machine handle simply must not look like one.
+ * Mirrors `GroveConfig.default_model_for`, which decides it: a model saved for
+ * the saved agent is not another roster entry's, so another entry shows the
+ * agent's own default. With no saved agent the saved model stays global.
  */
-const TITLE_DIGEST_PREFIX = "t";
-
-/**
- * The default workspace name: a digest of the brief, not a slice of it.
- *
- * A first line makes a decent title only when the first line happens to be a
- * summary; for a pasted stack trace, a wrapped paragraph or a sentence that
- * starts with "So I was thinking", it produces a name nobody would have
- * written. A digest is at least honest about being a machine-assigned handle,
- * and it slugs cleanly into a worktree path.
- *
- * **The digest is SALTED per draft** (`newTitleSalt`), because an unsalted one
- * gave two launches of the same brief the same name — a second "fix the tests"
- * was indistinguishable from the first on every surface that lists by title.
- * The composer holds one salt per draft, so the name shown under the input is
- * the name that gets submitted, and rotates it once a create lands.
- *
- * **This is a DEFAULT, and it is only defensible because renaming is one
- * right-click away** — the rail's own menu writes `title`/`description` through
- * `PATCH /workspaces/{id}`. If that affordance ever goes, this should go with
- * it: an unreadable name with no way to change it is not a design.
- *
- * MD5 rather than Web Crypto: `crypto.subtle` deliberately omits MD5, and its
- * digest API is async, which this cannot be — the composer renders the derived
- * name live under the input as you type. Nothing here is a security boundary;
- * it is a short stable handle.
- */
-export function deriveTitle(prompt: string, salt = ""): string {
-  const text = prompt.trim();
-  if (!text) return "Untitled task";
-  const seed = salt ? `${salt}\n${text}` : text;
-  return TITLE_DIGEST_PREFIX + Md5.hashStr(seed).slice(0, TITLE_DIGEST_LENGTH);
+export function inheritedModel(
+  defaults: Pick<WorkspaceDefaultsView, "agent" | "model"> | undefined,
+  agentName: string | null,
+): string | null {
+  if (!defaults?.model) return null;
+  if (defaults.agent && defaults.agent !== agentName) return null;
+  return defaults.model;
 }
 
 /**
- * One draft's title salt: the time it was minted plus a random part.
+ * The word a picker shows for one reasoning-effort level.
  *
- * `Math.random` rather than `crypto.randomUUID`, which exists only in a secure
- * context and so is absent on a plain-HTTP LAN deployment; the salt separates
- * names, it guards nothing.
+ * The wire carries the tool's own spelling (`xhigh`), which is what gets sent
+ * back; only the display changes, and only for the one level that is not a
+ * word on its own.
  */
-export function newTitleSalt(): string {
-  return `${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}`;
+export function effortLabel(effort: string): string {
+  if (effort === "xhigh") return "Extra high";
+  return effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
 /** Convert the form's branch vocabulary into the engine's discriminated wire shape. */
@@ -121,29 +112,110 @@ export function branchPlanFor(values: Pick<LaunchValues, "branchMode" | "branchN
 }
 
 /**
- * Build the one create payload from the form's display state and the composer text.
- *
- * Values seeded from the defaults read describe the cascade's current answer, not a
- * user override. Only a touched field belongs in this request, so create resolves
- * untouched fields at the moment it runs.
- *
- * `attachments` is the composer's staged file list, and it is the ONE input here
- * that is not a control value — it rides the create because the workspace it
- * would otherwise be uploaded to does not exist yet.
+ * Which draft field answers each request field, so an engine verdict about a
+ * request field lands on the control that owns it. Only the fields a create
+ * form edits; an unmapped field's problem is shown at the form level instead.
  */
-export function buildCreateRequest(
-  state: LaunchState,
-  prompt: string,
-  attachments: readonly StagedAttachment[] = [],
-  titleSalt = "",
-): CreateWorkspaceRequest {
+export const DRAFT_FIELD: Readonly<Record<string, LaunchField>> = {
+  agent_name: "agentName",
+  agent_kind: "agentKind",
+  runtime: "runtime",
+  remote_runtime: "runtime",
+  node: "node",
+  branch_plan: "branchMode",
+  model: "model",
+  effort: "effort",
+  native: "native",
+  project_cwd: "projectCwd",
+  brief: "brief",
+  skip_init: "skipInit",
+};
+
+/**
+ * The engine's refusals that apply to the draft as it stands.
+ *
+ * A preview of the CURRENT launch request is the whole answer: it saw every
+ * touched value, so its problems need no filtering. Before one exists (or while
+ * it describes an older draft), the seed's problems apply — they describe the
+ * untouched create, so a field the person changed is no longer theirs to judge.
+ */
+export function openProblems(
+  state: Pick<LaunchState, "values" | "touched" | "problems" | "preview" | "refusal">,
+): LaunchProblemView[] {
+  // The create's own refusal of this exact request outranks every prediction
+  // about it: the engine has already said no to it, live.
+  const key = previewKey(state);
+  if (state.refusal !== undefined && state.refusal.request === key) return [state.refusal.problem];
+  const preview = currentPreview(state);
+  if (preview) return [...preview.problems];
+  return (state.problems ?? []).filter((problem) => {
+    const draft = DRAFT_FIELD[problem.field];
+    return draft === undefined || !state.touched.has(draft);
+  });
+}
+
+/**
+ * The sentence that disarms Send for this draft, or `null`.
+ *
+ * Shown at FORM level on both surfaces whatever field it names: the pill that
+ * owns a field may be hidden (no branch pill for the current checkout) or may
+ * not exist (`node`, `brief`), and a
+ * refusal nobody can read is a Send button that does nothing. Pills
+ * additionally mark their own field; this is the fallback that cannot hide.
+ */
+export function launchVerdict(
+  state: Pick<LaunchState, "values" | "touched" | "problems" | "preview" | "refusal">,
+): string | null {
+  // Not `launchBlocker`: a missing project is the page's own loading state, not
+  // a refusal, and a red sentence on a fresh page would be one nobody earned.
+  return openProblems(state)[0]?.message ?? null;
+}
+
+/** The engine's preview of THIS draft, or `null` while none describes it. */
+export function currentPreview(
+  state: Pick<LaunchState, "values" | "touched" | "preview">,
+): LaunchPreviewView | null {
+  return state.preview !== undefined && state.preview.request === previewKey(state)
+    ? state.preview.view
+    : null;
+}
+
+/**
+ * The identity of a draft's launch half, or `null` when it cannot be built.
+ * Serialised, so two drafts that would send the same request share a key.
+ */
+export function previewKey(state: Pick<LaunchState, "values" | "touched">): string | null {
+  try {
+    return JSON.stringify(launchRequest(state as LaunchState));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The wire pair one runtime choice means: host and container name a runtime,
+ * any other value names a remote block and implies `remote`. The engine's
+ * `CreateWorkspaceRequest.runtime_fields` is the same rule; whether the block
+ * exists is the engine's refusal, never this adapter's.
+ */
+export function runtimeFields(
+  choice: string,
+): Pick<CreateWorkspaceRequest, "runtime" | "remote_runtime"> {
+  if (choice === "host" || choice === "container") return { runtime: choice };
+  return { runtime: "remote", remote_runtime: choice };
+}
+
+/**
+ * The launch half of a create: every field that decides WHAT runs WHERE, and
+ * none of what the agent is told (prompt, title, files). This is the body the
+ * preview checks, so the preview and the create can never disagree about a
+ * launch field — they are the same object.
+ *
+ * Untouched fields are omitted so the engine's resolver answers them.
+ */
+export function launchRequest(state: LaunchState): CreateWorkspaceRequest {
   const { values, touched } = state;
-  const title = values.titleOverride ?? deriveTitle(prompt, titleSalt);
-  if (!values.agentName) throw new RangeError("Choose an agent before creating a workspace");
   if (!values.repoRoot) throw new RangeError("Choose a project before creating a workspace");
-  if (!title) throw new RangeError("Workspace title must not be empty");
-  if (title.length > MAX_TITLE_LENGTH) throw new RangeError("Workspace title must be at most 120 characters");
-  if (prompt.length > MAX_PROMPT_LENGTH) throw new RangeError("Prompt must be at most 10,000 characters");
   if (values.model && values.model.length > MAX_MODEL_LENGTH) {
     throw new RangeError("Model must be at most 64 characters");
   }
@@ -153,6 +225,68 @@ export function buildCreateRequest(
     const error = customModelError(values.model ?? "");
     if (error) throw new RangeError(error);
   }
+
+  const request: CreateWorkspaceRequest = { repo_root: values.repoRoot };
+  // A Profile pick names one roster entry; an Agent pick names only the tool,
+  // so the engine can choose its runtime-compatible profile.
+  if (touched.has("agentName") && values.agentName) request.agent_name = values.agentName;
+  else if (touched.has("agentKind") && values.agentKind) request.agent_kind = values.agentKind;
+  if (touched.has("model")) {
+    request.model = values.customModel ? values.model?.trim() ?? null : values.model;
+  }
+  // Omitted unless chosen, so the tool's own default applies; there is no
+  // saved effort default for the engine to resolve instead.
+  if (values.effort !== null) request.effort = values.effort;
+  if (values.ticket) request.ticket = ticketFor(values.ticket);
+
+  // Omitting project_cwd delegates to the engine's `agent_cwds.default`. An
+  // explicit pill choice wins; a nested project's own cwd is otherwise its
+  // identity, not a form default.
+  if (touched.has("projectCwd")) {
+    request.project_cwd = values.projectCwd;
+  } else if (values.selectedProjectCwd !== values.repoRoot) {
+    request.project_cwd = values.selectedProjectCwd;
+  }
+  if (touched.has("runtime") && values.runtime !== null) {
+    Object.assign(request, runtimeFields(values.runtime));
+  }
+  if (touched.has("node")) request.node = values.node;
+  if (touched.has("brief")) request.brief = values.brief;
+  if (touched.has("native")) request.native = values.native;
+  if (touched.has("skipInit")) request.skip_init = values.skipInit;
+  // Placement follows the touched rule like every other field: omitted, the
+  // engine resolves the saved branch mode (or the current checkout). A saved
+  // `new`/`existing`/`remote` mode names no branch, so the engine reports it as
+  // a problem and the draft asks for the branch instead of guessing one.
+  if (touched.has("branchMode")) request.branch_plan = branchPlanFor(values);
+  return request;
+}
+
+/**
+ * The one create payload: the launch half plus what the agent is told.
+ *
+ * It refuses, with the engine's own sentence, while any problem the engine
+ * reported for this draft is still open — sending it would only move that
+ * sentence to after a round trip, and the draft is kept either way.
+ *
+ * `attachments` is the composer's staged file list, the ONE input that is not a
+ * control value — it rides the create because the workspace it would otherwise
+ * be uploaded to does not exist yet.
+ */
+export function buildCreateRequest(
+  state: LaunchState,
+  prompt: string,
+  attachments: readonly StagedAttachment[] = [],
+): CreateWorkspaceRequest {
+  const request = launchRequest(state);
+  const refused = openProblems(state)[0];
+  if (refused) throw new RangeError(refused.message);
+  // An untyped title is OMITTED, never derived from the prompt: the engine names
+  // the workspace `wk-` plus random hex (the one rule every client shares) and
+  // asks the agent to rename it once it knows the task.
+  const title = state.values.titleOverride?.trim() || undefined;
+  if (title && title.length > MAX_TITLE_LENGTH) throw new RangeError("Workspace title must be at most 120 characters");
+  if (prompt.length > MAX_PROMPT_LENGTH) throw new RangeError("Prompt must be at most 10,000 characters");
   // Both checks also run at the picker, where they cost nothing and answer
   // immediately. They are repeated here because this is the single request
   // builder: a file list assembled any other way still cannot get past it.
@@ -163,57 +297,20 @@ export function buildCreateRequest(
     if (refusal) throw new RangeError(refusal);
   }
 
-  const request: Partial<CreateWorkspaceRequest> = {
-    repo_root: values.repoRoot,
-    agent_name: values.agentName,
-    title,
-    initial_prompt: prompt,
-  };
+  request.initial_prompt = prompt;
+  if (title) request.title = title;
+  if (attachments.length > 0) request.attachments = attachmentsFor(attachments);
+  return request;
+}
 
-  // Unlike branch_plan, omitting project_cwd really does delegate to the engine:
-  // its cascade resolves agent_cwds.default. An explicit pill choice wins; a
-  // nested project's own cwd is otherwise its identity, not a form default.
-  if (touched.has("projectCwd")) {
-    request.project_cwd = values.projectCwd;
-  } else if (values.selectedProjectCwd !== values.repoRoot) {
-    request.project_cwd = values.selectedProjectCwd;
-  }
-  if (touched.has("model")) {
-    request.model = values.customModel ? values.model?.trim() ?? null : values.model;
-  }
-  if (touched.has("runtime")) request.runtime = values.runtime;
-  if (touched.has("brief")) request.brief = values.brief;
-  if (touched.has("native")) request.native = values.native;
-  if (touched.has("skipInit")) request.skip_init = values.skipInit;
-  // branch_plan is the ONE field that does not follow the touched rule, and it
-  // has to break it to stay honest. For model/runtime/brief/skip_init, omitting
-  // the field means "resolve it from the cascade at create time" — which the
-  // ENGINE now does, reading the same saved `defaults` that `GET /defaults`
-  // reports, so an untouched pill showing the cascade's answer and sending
-  // nothing agree with each other. (They did not until then: the engine read
-  // `container.enabled` while this surface displayed `defaults.runtime`, so a
-  // saved `host` default produced a container on every project that had not
-  // turned containers off.)
-  //
-  // branch_plan still has no such symmetry: the request defaults it to
-  // AutoBranch(), so an omitted plan is indistinguishable from an explicit auto
-  // one and there is no "unspecified" for the engine to resolve. Omitting it
-  // means "force auto", and a user whose saved default is `root` would watch
-  // the pill say Work in place while Grove quietly cut a branch. Send what the
-  // pill displays.
-  request.branch_plan = branchPlanFor(values);
-  if (values.ticket) request.ticket = ticketFor(values.ticket);
-  // An empty list is OMITTED rather than sent as `[]`, so a create with nothing
-  // staged is byte-identical to the one this surface has always built. `size` is
-  // dropped with it: the create contract forbids fields it does not declare.
-  if (attachments.length > 0) {
-    request.attachments = attachments.map(({ name, content_base64 }) => ({
-      name,
-      content_base64,
-    }));
-  }
-
-  return request as CreateWorkspaceRequest;
+/**
+ * The staged files as the create contract takes them. An empty list is OMITTED
+ * by the caller rather than sent as `[]`, so a create with nothing staged is
+ * byte-identical to the one this surface has always built. `size` is dropped:
+ * the create contract forbids fields it does not declare.
+ */
+function attachmentsFor(attachments: readonly StagedAttachment[]): CreateWorkspaceRequest["attachments"] {
+  return attachments.map(({ name, content_base64 }) => ({ name, content_base64 }));
 }
 
 function ticketFor(ticket: LaunchTicket): TicketSelector {

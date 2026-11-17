@@ -28,7 +28,7 @@ from grove.core.config import GroveConfig
 from grove.core.store import JsonWorkspaceStore
 from grove.daemon import build_app
 
-#: Every ``(method, path)`` the daemon serves without ``require_session``.
+#: Every ``(method, path)`` the daemon serves without ``require_principal``.
 #:
 #: Each entry is here for a stated reason, and an entry with no reason is a bug:
 #:
@@ -54,6 +54,9 @@ EXPECTED_UNAUTHENTICATED: frozenset[tuple[str, str]] = frozenset(
     {
         ("POST", "/auth/pair"),
         ("GET", "/auth/pair/{challenge_id}"),
+        # The OIDC exchange is how a person ACQUIRES a bearer, the pairing
+        # handshake's twin: the ID token in its body is the credential.
+        ("POST", "/auth/oidc/session"),
         ("GET", "/healthz"),
         ("POST", "/hooks/agent-events"),
         ("GET", "/public/{token}"),
@@ -78,7 +81,7 @@ EXPECTED_UNAUTHENTICATED: frozenset[tuple[str, str]] = frozenset(
 
 
 def _unauthenticated_routes(app: object) -> set[tuple[str, str]]:
-    """Every ``(method, path)`` whose dependency tree lacks ``require_session``.
+    """Every ``(method, path)`` whose dependency tree lacks ``require_principal``.
 
     Reads the resolved ``dependant`` rather than the decorator's kwargs, so a
     route that acquires the gate some other way (a router-level dependency, a
@@ -90,7 +93,7 @@ def _unauthenticated_routes(app: object) -> set[tuple[str, str]]:
         if not isinstance(route, APIRoute):
             continue
         names = {getattr(dep.call, "__name__", "") for dep in route.dependant.dependencies}
-        if any("require_session" in name for name in names):
+        if "require_principal" in names:
             continue
         # Mailboxes use a separate session dependency so scoped credentials
         # never gain the ordinary owner's authority. Keep this exception local
@@ -126,3 +129,22 @@ def test_only_the_declared_routes_answer_without_a_session(tmp_path: object) -> 
         "these routes were expected to be reachable without a session but now "
         f"require one: {sorted(missing)}"
     )
+
+
+def test_no_route_is_gated_by_the_bare_session_dependency(tmp_path: object) -> None:
+    """#965: ``require_principal`` replaced ``require_session``; a route on the old one
+    would skip the federation refusal and leave ``request.state.principal`` unset."""
+    app = build_app(
+        cfg=GroveConfig(),
+        store=JsonWorkspaceStore(path=tmp_path / "state.json"),  # type: ignore[operator]
+    )
+    stale = sorted(
+        (sorted(route.methods)[0], route.path)
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and any(
+            getattr(dep.call, "__name__", "") == "require_session"
+            for dep in route.dependant.dependencies
+        )
+    )
+    assert stale == []

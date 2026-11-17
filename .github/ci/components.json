@@ -46,7 +46,8 @@
         "src/grove/daemon/"
       ],
       "tests": [
-        "tests/daemon/"
+        "tests/daemon/",
+        "tests/restart/"
       ],
       "dependents": [
         "webapp"
@@ -86,9 +87,9 @@
     "tooling": {
       "sources": [
         "tools/",
-        "install.sh",
-        "install.ps1",
-        "reinstall.sh",
+        "tools/install.sh",
+        "tools/install.ps1",
+        "tools/reinstall.sh",
         "packaging/"
       ],
       "tests": [

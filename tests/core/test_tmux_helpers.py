@@ -11,6 +11,7 @@ not a substitute for verifying the actual subprocess argv we emit.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -55,12 +56,12 @@ def test_native_stop_failure_keeps_tmux_session_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     killed: list[str] = []
-    monkeypatch.setattr(tmux, "has_session", lambda name: True)
+    monkeypatch.setattr(tmux, "has_session", lambda name, server=tmux.DEFAULT_SERVER: True)
     server = SimpleNamespace(
         cmd=lambda *args: SimpleNamespace(stdout=["123"], stderr=[]),
         kill_session=lambda *, target_session: killed.append(target_session),
     )
-    monkeypatch.setattr(tmux, "_server", lambda: server)
+    monkeypatch.setattr(tmux, "_server", lambda _server=tmux.DEFAULT_SERVER: server)
     monkeypatch.setattr(
         ProcessTree, "capture", classmethod(lambda cls, roots, **kwargs: ProcessTree(()))
     )
@@ -87,12 +88,12 @@ def test_kill_session_reaps_survivors_on_an_ordinary_teardown(
     """
     killed: list[str] = []
     reaped: list[tuple[int, ...]] = []
-    monkeypatch.setattr(tmux, "has_session", lambda name: True)
+    monkeypatch.setattr(tmux, "has_session", lambda name, server=tmux.DEFAULT_SERVER: True)
     server = SimpleNamespace(
         cmd=lambda *args: SimpleNamespace(stdout=["4242"], stderr=[]),
         kill_session=lambda *, target_session: killed.append(target_session),
     )
-    monkeypatch.setattr(tmux, "_server", lambda: server)
+    monkeypatch.setattr(tmux, "_server", lambda _server=tmux.DEFAULT_SERVER: server)
     monkeypatch.setattr(
         ProcessTree,
         "capture",
@@ -111,12 +112,12 @@ def test_kill_session_reap_failure_never_fails_the_teardown(
 ) -> None:
     """The sweep is a courtesy after the real work succeeded — it cannot raise."""
     killed: list[str] = []
-    monkeypatch.setattr(tmux, "has_session", lambda name: True)
+    monkeypatch.setattr(tmux, "has_session", lambda name, server=tmux.DEFAULT_SERVER: True)
     server = SimpleNamespace(
         cmd=lambda *args: SimpleNamespace(stdout=["4242"], stderr=[]),
         kill_session=lambda *, target_session: killed.append(target_session),
     )
-    monkeypatch.setattr(tmux, "_server", lambda: server)
+    monkeypatch.setattr(tmux, "_server", lambda _server=tmux.DEFAULT_SERVER: server)
     monkeypatch.setattr(
         ProcessTree, "capture", classmethod(lambda cls, roots, **kwargs: ProcessTree(()))
     )
@@ -652,6 +653,29 @@ def test_send_text_wraps_subprocess_errors(
         tmux.send_text("sess:agent", "hello")
 
 
+def _record_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record the CALLING thread's `time.sleep` calls; every other thread really sleeps.
+
+    `tmux.time` IS the global `time` module, so a bare patch reaches every
+    thread. A polling thread leaked by an earlier test (a command watch sleeps
+    10 ms per poll) kept sleeping through the patch window in a full-suite run
+    and filled the list with up to ~900k entries, failing whichever of these
+    tests it happened to overlap. Only one of three copies had been fixed.
+    """
+    sleeps: list[float] = []
+    caller = threading.get_ident()
+    real_sleep = tmux.time.sleep
+
+    def _sleep(seconds: float) -> None:
+        if threading.get_ident() == caller:
+            sleeps.append(seconds)
+        else:
+            real_sleep(seconds)
+
+    monkeypatch.setattr(tmux.time, "sleep", _sleep)
+    return sleeps
+
+
 def test_send_text_settles_before_enter_and_before_verify(
     fake_run: list[list[str]],
     monkeypatch: pytest.MonkeyPatch,
@@ -660,8 +684,7 @@ def test_send_text_settles_before_enter_and_before_verify(
     (so it lands after the paste-accumulation window closes) and once more
     before the post-Enter verify snapshot — both using the configured
     `settle_ms`, converted to seconds."""
-    sleeps: list[float] = []
-    monkeypatch.setattr(tmux.time, "sleep", sleeps.append)
+    sleeps = _record_sleeps(monkeypatch)
 
     tmux.send_text("sess:agent", "hi", settle_ms=250)
 
@@ -672,8 +695,7 @@ def test_send_text_settle_ms_zero_skips_delay(
     fake_run: list[list[str]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sleeps: list[float] = []
-    monkeypatch.setattr(tmux.time, "sleep", sleeps.append)
+    sleeps = _record_sleeps(monkeypatch)
 
     tmux.send_text("sess:agent", "hi", settle_ms=0)
 
@@ -804,8 +826,7 @@ def test_send_keys_settles_between_every_op(
     Claude Code 2.1.x: an unsettled 4-question batch answered question 1, skipped
     the multiSelect and collapsed the rest to option 1, silently.
     """
-    sleeps: list[float] = []
-    monkeypatch.setattr(tmux.time, "sleep", sleeps.append)
+    sleeps = _record_sleeps(monkeypatch)
     monkeypatch.setattr(tmux.shutil, "which", lambda _: "/usr/bin/tmux")
 
     def _run(_argv: list[str], **_kwargs: Any) -> Any:
@@ -970,7 +991,7 @@ def fake_session(monkeypatch: pytest.MonkeyPatch) -> _FakeSession:
     pane = _FakePane()
     session = _FakeSession(_FakeWindow(pane))
     server = _FakeServer(session)
-    monkeypatch.setattr(tmux, "_server", lambda: server)
+    monkeypatch.setattr(tmux, "_server", lambda _server=tmux.DEFAULT_SERVER: server)
     return session
 
 

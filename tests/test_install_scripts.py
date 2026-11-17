@@ -24,8 +24,9 @@ import pytest
 from grove import __version__
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_INSTALL_SH = (_REPO_ROOT / "install.sh").read_text(encoding="utf-8")
-_INSTALL_PS1 = (_REPO_ROOT / "install.ps1").read_text(encoding="utf-8")
+_INSTALL_SH = (_REPO_ROOT / "tools" / "install.sh").read_text(encoding="utf-8")
+_INSTALL_PS1 = (_REPO_ROOT / "tools" / "install.ps1").read_text(encoding="utf-8")
+_REINSTALL_SH = (_REPO_ROOT / "tools" / "reinstall.sh").read_text(encoding="utf-8")
 _MAKEFILE = (_REPO_ROOT / "Makefile").read_text(encoding="utf-8")
 
 
@@ -48,7 +49,7 @@ def _bash_is_real() -> bool:
 
 @pytest.mark.skipif(not _bash_is_real(), reason="no real bash available")
 def test_install_sh_is_valid_bash() -> None:
-    subprocess.run(["bash", "-n", str(_REPO_ROOT / "install.sh")], check=True, timeout=10)
+    subprocess.run(["bash", "-n", str(_REPO_ROOT / "tools" / "install.sh")], check=True, timeout=10)
 
 
 def test_install_sh_defaults_to_git_source() -> None:
@@ -61,6 +62,12 @@ def test_install_sh_defaults_to_git_source() -> None:
 def test_install_sh_verification_is_not_masked() -> None:
     assert "grove version 2>/dev/null || true" not in _INSTALL_SH
     assert "grove version" in _INSTALL_SH
+
+
+def test_reinstall_fails_when_the_restarted_daemon_never_becomes_healthy() -> None:
+    assert 'wait_for_http "$daemon/healthz" 180 200' in _REINSTALL_SH
+    assert 'die "daemon /healthz did not answer 200 within 180s' in _REINSTALL_SH
+    assert 'warn "daemon /healthz answered' not in _REINSTALL_SH
 
 
 def test_install_ps1_defaults_to_git_source() -> None:

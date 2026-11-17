@@ -390,6 +390,28 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
+  /* Reasoning effort is a SEQUENTIAL scale (§4.1): the hue climbs with the
+     level — blue, green, yellow, orange, orange (xhigh and max share the top).
+     Solved for 4.5:1 on the light page. */
+  --effort-low: oklch(0.5 0.19 255);
+  --effort-medium: oklch(0.52 0.15 155);
+  --effort-high: oklch(0.55 0.14 95);
+  --effort-xhigh: oklch(0.56 0.18 55);
+  --effort-max: oklch(0.56 0.18 55);
+  /* The task phase is the same KIND of scale (§4.1): six ordinal rungs from
+     a cool scope to a green handoff, so the board's columns read "how far
+     along" by hue before a word is read. Unreported is deliberately the
+     tertiary ink, not a rung — no claim is not step zero. */
+  --phase-scope: oklch(0.52 0.14 290);
+  --phase-plan: oklch(0.5 0.19 255);
+  --phase-build: oklch(0.5 0.15 215);
+  --phase-verify: oklch(0.55 0.14 95);
+  --phase-deliver: oklch(0.56 0.18 55);
+  --phase-handoff: var(--success);
+  /* Runtime is fixed identity, not status: hues only tint its glyph. */
+  --runtime-host: oklch(0.47 0.10 250);
+  --runtime-container: oklch(0.47 0.10 155);
+  --runtime-remote: oklch(0.47 0.10 295);
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.141 0.005 285.823);
   --sidebar-primary: oklch(0.21 0.006 285.885);
@@ -402,26 +424,17 @@
 }
 
 .dark {
-  --surface-header-start: oklch(0.238649 0.006 286);
-  --surface-header-end: oklch(0.201374 0.006 286);
-  --surface-header-highlight: oklch(0.275924 0.006 286);
-  /* Dark keeps its own ladder. The card body is the `raised` rung above the
-     page; popovers retain the overlay rung. Every content tier clears AA
-     across the ladder, including the header's darker stop.
-
-     QUIET BY LUMINANCE, NOT BY L. Every dark fill here — the ladder, the header
-     band, and the `muted`/`accent`/`secondary` washes — sits at 75% of the WCAG
-     relative luminance it had when work-panel cards, their cells and the rail
-     picker read as louder than the content they frame. Luminance, because a
-     fixed ΔL darkens the near-black rungs far less than the bright ones. The
-     one exception is `sunken`, held at 0.0905 so `sunken → base` keeps the
-     0.05 L floor; foreground text still clears 14:1 on every rung.
-
-     THE CARD TIER GOES FURTHER, to 65% of that again: `raised`, the header
-     band and the `muted`/`accent`/`secondary` washes. Card structure is meant
-     to recede into the page, not be read, so `base → raised` is 0.027 L —
-     deliberately UNDER the 0.05 floor. The card's edge and radius carry its
-     boundary, which is the redundancy §4.3 specifies for exactly this case. */
+  --surface-header-start: oklch(0.3 0.006 286);
+  --surface-header-end: oklch(0.27 0.006 286);
+  --surface-header-highlight: oklch(0.33 0.006 286);
+  /* Dark keeps its own ladder, and it is THE CHATGPT LADDER, sampled off the
+     reference (2026-10-17): the page is #0e0e0e, a card and the composer bar
+     are #212121, the rail is #000. Those are `base`, `raised` and `--rail`;
+     `sunken` stays at 0.0905 for the inset wells, and `overlay` sits one full
+     floor above `raised`. So every step clears the 0.05 L floor — the earlier
+     "card recedes into its page" decision (0.027 L) is gone, because the
+     reference lifts its cards and composer plainly off the page.
+     `tests/unit/dark-card-backgrounds.test.ts` pins the sampled values. */
   --background: var(--surface-base);
   --foreground: oklch(1 0 0);
   --card: var(--surface-raised);
@@ -435,11 +448,13 @@
   --primary-foreground: oklch(0.21 0.006 285.885);
   --warning: oklch(0.72 0.16 75);
   --warning-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.215714 0.006 286.033);
+  /* The washes sit one step above `raised` (#2a2a2a), the reference's hover
+     tint on a card, so a hovered row still lifts off a #212121 card. */
+  --secondary: oklch(0.28 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.215714 0.006 286.033);
+  --muted: oklch(0.28 0.006 286.033);
   --muted-foreground: oklch(0.78 0.012 286);
-  --accent: oklch(0.215714 0.006 286.033);
+  --accent: oklch(0.28 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   /* The surface below supplies the other 70% of every decorative seam; keeping
@@ -465,19 +480,20 @@
      apart by about 5 points each, so reading order survives the lift. */
   --content-secondary: oklch(0.9 0.008 286);
   /*
-   * The ladder, DARK. Two steps clear the 0.05 floor (sunken→base 0.050352,
-   * raised→overlay 0.091141); base→raised is 0.026975 BY DECISION, see above.
-   * Dark mode still carries no shadow — `surface-raised`'s shadow resolves to
-   * `none` here — so the small tonal step plus the edge does the lifting.
+   * The ladder, DARK — the reference's planes. `sunken` is the rail's pure
+   * black, the one chroma-zero value the bottom of the ladder permits (§4.2),
+   * and the terminal, diff wells and status band share it. sunken→base 0.164, base→raised
+   * 0.084 (#0e0e0e → #212121), raised→overlay 0.062; every step clears the
+   * 0.05 floor. Dark mode still carries no shadow — `surface-raised`'s shadow
+   * resolves to `none` here — so the tonal step plus the edge does the lifting.
    *
-   * The same OKLCH delta buys LESS WCAG contrast near black: `sunken → base` is
-   * 0.050 L and only 1.04:1, where a comparable step in light mode reaches
-   * 1.21:1. Never treat a lightness delta as if it were a contrast ratio.
+   * The same OKLCH delta buys LESS WCAG contrast near black, so never treat a
+   * lightness delta as if it were a contrast ratio.
    */
-  --surface-sunken: oklch(0.0905 0.005 286);
-  --surface-base: oklch(0.140852 0.005 286);
-  --surface-raised: oklch(0.167827 0.006 286);
-  --surface-overlay: oklch(0.258968 0.006 286);
+  --surface-sunken: oklch(0 0 0);
+  --surface-base: oklch(0.1638 0 0);
+  --surface-raised: oklch(0.2478 0 0);
+  --surface-overlay: oklch(0.31 0.004 286);
   /* This remains the source for attachment fills; only its edge output below
      becomes translucent. */
   --surface-edge-source: oklch(0.36 0.008 286);
@@ -508,11 +524,28 @@
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.006 285.885);
+  /* The effort ladder, lifted for the dark page; same hues, same order. */
+  --effort-low: oklch(0.72 0.16 255);
+  --effort-medium: oklch(0.76 0.17 155);
+  --effort-high: oklch(0.84 0.17 95);
+  --effort-xhigh: oklch(0.76 0.18 55);
+  --effort-max: oklch(0.76 0.18 55);
+  /* The phase ladder, lifted for the dark page; same hues, same order. */
+  --phase-scope: oklch(0.74 0.13 290);
+  --phase-plan: oklch(0.72 0.16 255);
+  --phase-build: oklch(0.76 0.14 215);
+  --phase-verify: oklch(0.84 0.17 95);
+  --phase-deliver: oklch(0.76 0.18 55);
+  --phase-handoff: var(--success);
+  --runtime-host: oklch(0.70 0.10 250);
+  --runtime-container: oklch(0.70 0.10 155);
+  --runtime-remote: oklch(0.70 0.10 295);
+  /* The rail is the `sunken` rung, which in dark is the reference's BLACK. */
+  --sidebar: var(--surface-sunken);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.215714 0.006 286.033);
+  --sidebar-accent: oklch(0.2478 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   /* Sidebar divisions share the decorative edge output. */
   --sidebar-border: var(--border);
@@ -1294,6 +1327,165 @@
 .rail-agent-tile:has([data-brand="codex"]) { --agent-hue: #7a9dff; }
 .rail-agent-tile:has([data-brand="gemini"]) { --agent-hue: #3186ff; }
 
+/* The fleet board's phase bar: the board compressed to one line. The pill
+   radius is the vendored `Progress` track's, so a bar and a meter are one
+   shape; each segment takes its column's hue (`data-column` below), so the
+   bar and the board are one palette. */
+.fleet-phase-bar { border-radius: var(--radius-full, 9999px); }
+
+/* The board reads its column's hue off ONE custom property, set per column
+   by `data-column`, so the header pill, the well's tint, every card's edge
+   and the progress bar's segment agree without any of them naming a phase.
+   Unreported takes the tertiary ink; a blocked CARD overrides to warning. */
+[data-column="unreported"] { --column-hue: var(--content-tertiary); }
+[data-column="scope"] { --column-hue: var(--phase-scope); }
+[data-column="plan"] { --column-hue: var(--phase-plan); }
+[data-column="build"] { --column-hue: var(--phase-build); }
+[data-column="verify"] { --column-hue: var(--phase-verify); }
+[data-column="deliver"] { --column-hue: var(--phase-deliver); }
+[data-column="handoff"] { --column-hue: var(--phase-handoff); }
+.fleet-column {
+  background-color: color-mix(in oklab, var(--column-hue) 6%, var(--surface-sunken));
+  border-color: color-mix(in oklab, var(--column-hue) 24%, transparent);
+}
+.fleet-column-pill {
+  background-color: var(--column-hue);
+  color: var(--surface-raised);
+  border-radius: var(--radius-full, 9999px);
+}
+.fleet-column-count {
+  background-color: var(--surface-raised);
+  color: var(--content-primary);
+  border-radius: var(--radius-full, 9999px);
+}
+/* A card's leading edge is its column's hue, the reference's own device for
+   "which lane is this in" once a card has been dragged… or here, once it is
+   read out of its column in a screenshot. Blocked outranks the column. */
+.fleet-board-card > * > [data-slot="card"] { border-left: 3px solid var(--column-hue); }
+.fleet-board-card[data-blocked="true"] > * > [data-slot="card"] { border-left-color: var(--warning); }
+/* An empty column folds to a vertical rail: the phase's glyph and word read
+   top-to-bottom, the count beneath, so the ladder keeps its order and its
+   place at ~2.5rem of width. */
+.fleet-column[data-collapsed="true"] { width: 2.75rem; min-width: 2.75rem; flex: 0 0 2.75rem; }
+.fleet-column-vertical { writing-mode: vertical-rl; }
+.fleet-phase-bar [data-segment] { background-color: var(--column-hue); }
+
+/* A hover overview is a glance, not a second Info tab: the dense `text-xs`
+   step, a 24rem measure, 2px rows and two columns of short labels. It must
+   never scroll; short viewports shed the note and ticket rows instead. */
+/* The overview INVERTS against the page — a dark panel on the light theme, a
+   white one on the dark theme — so a glance finds it before reading anything.
+   A fill swap alone is not enough: every state hue is tuned for its own
+   theme's ground, so each block re-declares the OPPOSITE theme's tokens and
+   the panel's text, icons, phase colours and code chips follow. Values are
+   copied from the two theme blocks above; keep them in step with those. */
+.session-overview-tooltip {
+  --overview-fill: oklch(0.21 0.006 286);
+  --overview-edge: oklch(0.38 0.01 286);
+  --foreground: oklch(1 0 0);
+  --content-primary: oklch(1 0 0);
+  --content-secondary: oklch(0.9 0.008 286);
+  --content-tertiary: oklch(0.78 0.012 286);
+  --muted-foreground: oklch(0.78 0.012 286);
+  --primary: oklch(0.66 0.13 45);
+  --success: oklch(0.7 0.17 162.48);
+  --warning: oklch(0.72 0.16 75);
+  --destructive: oklch(0.704 0.191 22.216);
+  --info: oklch(0.7 0.14 250);
+  --merged: oklch(0.72 0.16 295);
+  --border-source: oklch(0.36 0.008 286);
+  width: min(24rem, calc(100vw - 1rem));
+  max-width: var(--radix-tooltip-content-available-width);
+  padding: 0.5rem 0.625rem;
+  background: var(--overview-fill);
+  color: var(--content-primary);
+  border: 1px solid var(--overview-edge);
+  border-radius: var(--radius-lg);
+  /* Black ink, never --foreground: that token flips with the theme, so a
+     shadow built from it glows on one of them. Contact + ambient layers. */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 0 0 1px rgb(0 0 0 / 0.2),
+    0 2px 4px rgb(0 0 0 / 0.16),
+    0 12px 24px -6px rgb(0 0 0 / 0.28),
+    0 32px 64px -12px rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(10px) saturate(1.1);
+  text-align: left;
+  text-wrap: wrap;
+}
+.dark .session-overview-tooltip {
+  --overview-fill: oklch(1 0 0);
+  --overview-edge: oklch(0.82 0.008 286);
+  --foreground: oklch(0.141 0.005 285.823);
+  --content-primary: oklch(0.141 0.005 285.823);
+  --content-secondary: oklch(0.4 0.012 285.9);
+  --content-tertiary: oklch(0.495 0.016 286);
+  --muted-foreground: oklch(0.495 0.016 286);
+  --primary: oklch(0.56 0.145 45);
+  --success: oklch(0.47 0.14 155);
+  --warning: oklch(0.49 0.14 75);
+  --destructive: oklch(0.48 0.245 27.325);
+  --info: oklch(0.47 0.14 250);
+  --merged: oklch(0.54 0.24 295);
+  --border-source: oklch(0.83 0.006 286);
+  /* Brightness already lifts a white panel off a near-black page, so the
+     shadow only has to seat it: soft, wide and dark, no inner highlight. */
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.5),
+    0 2px 6px rgb(0 0 0 / 0.45),
+    0 20px 48px -8px rgb(0 0 0 / 0.75);
+}
+/* No pointer: the panel anchors to the card's top or bottom edge, so a
+   centred arrow would point at the wrong place, and the lift already says
+   which card owns it. Radix wraps the arrow svg in a span. */
+.session-overview-tooltip span:has(> svg[class*="rotate-45"]) { display: none; }
+/* Loosened from the step's own 1.33 for reading: dense type, not cramped lines. */
+.session-overview { font-size: var(--text-xs); line-height: 1.5; }
+/* Group dividers are a full tier stronger than row rules, so the three groups
+   read before the rows inside them. */
+.session-overview > [data-slot="separator"] { margin-block: 0.3125rem; background: var(--overview-edge); }
+.session-overview-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 0.75rem; }
+.session-overview-field {
+  display: grid;
+  grid-template-columns: 3.75rem minmax(0, 1fr);
+  align-items: baseline;
+  min-width: 0;
+  padding-block: 0.0625rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--overview-edge) 45%, transparent);
+}
+.session-overview-field:last-child { border-bottom: 0; }
+.session-overview-wide { grid-column: 1 / -1; }
+.session-overview-field dt { color: var(--content-tertiary); }
+.session-overview-field dd { min-width: 0; padding-left: 0.375rem; border-left: 1px solid color-mix(in oklab, var(--overview-edge) 45%, transparent); color: var(--content-primary); font-variant-numeric: tabular-nums; }
+.session-overview-mark { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.session-overview-name, .session-overview code { display: inline-block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.session-overview-note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.session-overview code {
+  padding: 0 0.25rem;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  background: color-mix(in srgb, var(--info) 18%, var(--overview-fill));
+  color: var(--info);
+}
+.session-overview-count { margin-left: auto; color: var(--content-tertiary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.session-overview-mark > .session-overview-count { margin-left: 0.25rem; }
+.session-overview-progress { display: flex; align-items: center; gap: 0.5rem; }
+.session-overview-progress > [data-slot="progress"] { flex: 1; height: 0.25rem; }
+.session-overview-caption { margin-top: 0.125rem; color: var(--content-tertiary); }
+.session-overview-tickets { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.session-overview-tickets td { padding-block: 0.0625rem; border-bottom: 1px solid color-mix(in oklab, var(--overview-edge) 45%, transparent); text-align: left; }
+.session-overview-tickets tr:last-child td { border-bottom: 0; }
+.session-overview-tickets td:last-child { width: 6rem; padding-left: 0.375rem; border-left: 1px solid color-mix(in oklab, var(--overview-edge) 45%, transparent); }
+.session-overview-tickets td:first-child { padding-right: 0.375rem; }
+@media (max-width: 480px) {
+  .session-overview-fields { column-gap: 0.375rem; }
+  .session-overview-field { grid-template-columns: 3.25rem minmax(0, 1fr); }
+}
+/* Shed previews on short viewports rather than clipping or adding a scrollbar. */
+@media (max-height: 520px) {
+  .session-overview-field:has(.session-overview-note), .session-overview-tickets, .session-overview-caption { display: none; }
+}
+
 /* A rail row's fill, named by `fleet/fleet-tree.tsx`: one ladder of the card
    token mixed toward the rail it lies on, stepped by INTERACTION state and
    never by what a row reports. Resting sits darkest (50%), hover and keyboard
@@ -1315,35 +1507,192 @@
   background-color: color-mix(in oklab, var(--card) 75%, var(--surface-sunken));
 }
 
-/* The landing configuration shelf, below the writing surface. Its fill is a
-   sunken wash on a sunken page, so the EDGE is the only thing that draws it —
-   and on the decorative 30% hairline it measured 1.07:1 light and 1.12:1 dark,
-   a pill nobody could find. It takes the prominent edge (`--input`) mixed 60%
-   over the rung beneath it instead: ~1.8:1 in both themes, above the peer band
-   (Primer 1.45, M3 outline-variant 1.70) and well short of a 3:1 control ring,
-   because the pills inside carry their own labels. Its pills are toolbar
-   controls and take the ghost rule below. Callers own geometry. */
+/* The shelf TUCKS UNDER the bar, as the reference's does: it is inset by the
+   bar's own 24px corner on each side and pulled up behind the bar's bottom
+   edge, so the bar's rounded corners sit over shelf fill rather than leaving
+   a notch of it showing on both flanks. A full-width sibling with square
+   top corners is exactly that notch — the defect this replaces. The mix
+   places it between page and bar (#1b1b1b in the dark reference). */
 .composer-shelf {
-  background-color: color-mix(in oklab, var(--surface-sunken) 55%, transparent);
-  border: 1px solid color-mix(in oklab, var(--input) 60%, var(--surface-sunken));
-  border-radius: var(--radius-lg);
+  background-color: color-mix(in oklab, var(--surface-raised) 70%, var(--surface-base));
+  border: 0;
+  border-radius: 0 0 20px 20px;
+  margin-inline: 24px;
+  margin-top: -24px;
+  padding: calc(24px + var(--spacing) * 1.5) calc(var(--spacing) * 3) calc(var(--spacing) * 1.5);
+}
+/* The bar paints OVER the tucked shelf, so it needs a stacking position. */
+[data-slot="composer"] > [data-slot="composer-bar"] {
+  position: relative;
+  z-index: 1;
 }
 
-/* Decorative and static. Markup supplies aria-hidden; the mask softens the grid
-   edge. Drawn from the OPAQUE edge source, not `--surface-edge`: that token is
-   already 30% alpha for hairlines, and a further 70% on top left a 21% line
-   nobody could see. The mask holds the grid solid through its middle third
-   before fading, for the same reason — a fade that starts at the centre spends
-   the whole field fading. Still one neutral from the ladder, still no palette. */
-.launch-brand-field {
-  --launch-grid-line: color-mix(in oklab, var(--surface-edge-source) 75%, transparent);
-  background-image:
-    repeating-linear-gradient(to right, var(--launch-grid-line) 0 1px, transparent 1px 100%),
-    repeating-linear-gradient(to bottom, var(--launch-grid-line) 0 1px, transparent 1px 100%);
-  background-size: calc(var(--text-sm) * 2.75) calc(var(--text-sm) * 2.75);
-  /* Alpha only — a mask reads the channel, never the hue. */
-  mask-image: radial-gradient(closest-side, rgb(0 0 0) 35%, rgb(0 0 0 / 0) 100%);
-  pointer-events: none;
+/* The launch outcome is an alert-shaped LINE, not a second card. The engine's
+   adjustment wording is the authority, so this only assigns its severity. */
+[data-slot="alert"][data-note] {
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: 0.5rem;
+  /* The bar is its own straight box: the vendor's rounded corners bend a
+     left border, and an inset shadow, into "(" because both follow the radius. */
+  border: 0;
+  background: transparent;
+  padding: 0.125rem 0 0.125rem 0.5rem;
+}
+[data-slot="alert"][data-note]::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 2px;
+  background: var(--note-bar, var(--muted-foreground));
+}
+[data-slot="alert"][data-note] > [data-runtime-kind] > svg {
+  width: 1rem;
+  height: 1rem;
+}
+[data-slot="alert"][data-note] > [data-slot="alert-description"] {
+  display: flex;
+  grid-column: 2;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted-foreground);
+}
+[data-slot="alert"][data-note] > [data-slot="alert-description"] > button {
+  height: auto;
+  padding: 0;
+}
+[data-slot="alert"][data-note="warning"] { --note-bar: var(--warning); }
+[data-slot="alert"][data-note="caution"] { --note-bar: var(--destructive); }
+
+/* Runtime hue is a redundant identity cue: only the glyph takes it. */
+[data-runtime-kind="host"] > svg { color: var(--runtime-host); }
+[data-runtime-kind="container"] > svg { color: var(--runtime-container); }
+[data-runtime-kind="remote"] > svg { color: var(--runtime-remote); }
+
+/* Suggestions share the native composer's soft corner, not the work panel's
+   compact card geometry. They remain native buttons with keyboard focus. */
+.launch-suggestion {
+  background-color: var(--surface-raised);
+  border-radius: 24px;
+  border-color: var(--border);
+}
+.launch-suggestion:hover {
+  background-color: var(--accent);
+}
+/* Try is a pill, the reference's: the full round is the theme's call. */
+.launch-suggestion [data-testid^="launch-try-"] {
+  border-radius: 9999px;
+  padding-inline: calc(var(--spacing) * 3.5);
+}
+
+/* DICTATION MOTION — one slot, four moments, all owned here so the landing
+   and workspace bars move identically.
+
+   1. Text → voice. The bar's editor and toolbar unmount and this strip mounts
+      in their place; `@starting-style` fades and lifts it in while the bar's
+      own height tween (the bar is a flex column) carries the pill collapse.
+   2. Recording. `grove/dictation-waveform` pushes one measured level per
+      sample and the strip slides left; the NEWEST bar is the live point and
+      wears the accent, so the eye finds where audio is arriving.
+   3. Transcribing. The strip freezes, dims, and a highlight sweeps it left to
+      right for as long as the upload is in flight — motion that says
+      "being read", distinct from the recording's "being written".
+   4. Voice → text. The strip unmounts and the editor's `@starting-style`
+      (below) fades the draft back in with the transcript on it.
+
+   `prefers-reduced-motion` keeps the state changes and drops every tween. */
+[data-slot="dictation"] {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 180ms ease-out, transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  @starting-style {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+[data-slot="dictation-waveform"] {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+[data-slot="dictation-bar"] {
+  flex: 0 0 3px;
+  /* Each bar is one 60 ms chunk; `--level` is the chunk's loudest moment so
+     far, so the bar GROWS while its moment is still being recorded. Centred in
+     the strip, it grows from both ends. `sqrt` because RMS is honest and
+     timid (a 0.4 sine reads 0.28); the display lifts it, the measurement
+     stays the measurement. The ease is what makes the growth read as the
+     bar "recording" rather than snapping to its value. */
+  height: max(3px, calc(sqrt(var(--level, 0)) * 36px));
+  border-radius: 9999px;
+  background-color: var(--content-primary);
+  transition: height 80ms ease-out, background-color 240ms ease-out, opacity 240ms ease-out;
+  /* A chunk arrives from nothing: it scales in over its first frames. */
+  animation: dictation-chunk-in 100ms ease-out both;
+}
+@keyframes dictation-chunk-in {
+  from { transform: scaleY(0.2); opacity: 0.4; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+/* The live point: where the next sample lands. */
+[data-slot="dictation"][data-phase="recording"] [data-slot="dictation-bar"]:last-child {
+  background-color: var(--info);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--info) 60%, transparent);
+}
+/* Transcribing: frozen and dimmed, with a highlight travelling across. */
+[data-slot="dictation"][data-phase="transcribing"] [data-slot="dictation-bar"] {
+  background-color: var(--content-tertiary);
+  opacity: 0.55;
+}
+/* The sweep is a highlight ON THE BARS, not a block over them: the overlay is
+   masked to the bars' own silhouette by painting the same bars as its mask
+   would be, which `mask-image` can't do cheaply — so instead the bars
+   themselves carry a moving gradient through `background-attachment` on a
+   shared, strip-wide background. One animation, every bar lit in turn. */
+[data-slot="dictation"][data-phase="transcribing"] [data-slot="dictation-bar"] {
+  background-image: linear-gradient(
+    90deg,
+    var(--content-tertiary) 0%,
+    var(--content-primary) 50%,
+    var(--content-tertiary) 100%
+  );
+  background-size: 300% 100%;
+  background-position: var(--sweep, 100%) 0;
+  background-color: transparent;
+  animation: dictation-sweep 1.6s ease-in-out infinite;
+  animation-delay: calc(var(--index, 0) * -8ms);
+}
+@keyframes dictation-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+/* The draft returning: the editor fades in over the strip's exit. */
+[data-slot="composer-bar"] > [data-slot="textarea"],
+[data-slot="composer-bar"] > .aui-composer-input,
+[data-slot="composer-bar"] > [data-slot="composer-input"] {
+  opacity: 1;
+  transition: opacity 200ms ease-out;
+  @starting-style {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="composer-bar"],
+  [data-slot="dictation"],
+  [data-slot="dictation-bar"],
+  [data-slot="composer-bar"] > [data-slot="textarea"],
+  [data-slot="composer-bar"] > .aui-composer-input,
+  [data-slot="composer-bar"] > [data-slot="composer-input"] {
+    transition: none;
+  }
+  [data-slot="dictation"][data-phase="transcribing"] [data-slot="dictation-bar"],
+  [data-slot="dictation-bar"] {
+    animation: none;
+  }
 }
 
 /* Both editors follow the reading ramp rather than upstream pixel literals. */
@@ -1354,6 +1703,13 @@
   line-height: var(--text-base--line-height);
 }
 
+/* The blank brief is the landing page's reading surface: one ramp step above
+   the reply composer, as the reference's empty-state editor is. */
+.launch-surface [data-slot="composer-bar"] [data-slot="textarea"] {
+  font-size: var(--text-lg);
+  line-height: var(--text-lg--line-height);
+}
+
 /* The bar owns the editor's boundary and focus indicator, not a nested box. */
 [data-slot="composer-bar"] [data-slot="textarea"] {
   border: 0;
@@ -1362,14 +1718,14 @@
 }
 
 /* The editor's focus is the vendor's `focus-within` step: the bar's line moves
-   up to the prominent focus tier. A focused text field ALWAYS matches
-   `:focus-visible`, and both composers autofocus, so a `--ring` outline here
-   was the bar's resting look — the loud perimeter. The caret carries focus;
-   toolbar controls keep their ring. */
+   HALFWAY from its resting edge toward `--ring`. A focused text field ALWAYS
+   matches `:focus-visible`, and both composers autofocus, so focus is the
+   bar's usual look; a full `--ring` step there was the loud perimeter. The
+   caret carries focus; toolbar controls keep their ring. */
 [data-slot="composer-bar"]:has([data-slot="textarea"]:focus-visible),
 [data-slot="composer-bar"]:has(.aui-composer-input:focus-visible),
 [data-slot="composer-bar"]:has([data-slot="composer-input"]:focus-visible) {
-  border-color: var(--ring);
+  border-color: color-mix(in oklab, var(--ring) 50%, var(--border));
 }
 
 /* Placeholder contrast follows the same theme tier as metadata. */
@@ -1384,8 +1740,7 @@
    row's remove control floors itself at its call site (`grove/attachment-file`)
    because the vendored File element gives that slot no name. */
 [data-slot="composer-send"],
-[data-slot="composer-attach"],
-[data-slot="composer-voice-button"] {
+[data-slot="composer-attach"] {
   min-width: 24px;
   min-height: 24px;
 }
@@ -1445,11 +1800,61 @@
    or adding another token: its editor remains the most legible part of the page
    while the surrounding transcript or landing surface still has its own rung. */
 [data-slot="composer-bar"] {
-  background-color: var(--surface-base);
-  /* Its fill is the page's own rung, so this line alone says where the writing
-     surface ends: 43% of the source, ~1.4x the decorative tier's 30%. Still
-     one hairline — a tinted fill instead would fight the vendor's surfaces. */
-  border-color: color-mix(in srgb, var(--border-source) 43%, transparent);
+  /* The bar is the reference's #212121 card plane, lifted off the page by
+     fill; its edge is the decorative hairline, not a drawn outline. */
+  background-color: var(--surface-raised);
+  border-color: var(--border);
+  /* The pill collapse between text and voice is a Web Animations tween owned
+     by `useHeightTween` (an auto→auto height has no CSS transition); only the
+     focus edge transitions here. */
+  transition: border-color 150ms ease-out;
+}
+/* The vendor's send is `inkButton` (foreground on background); the reference
+   draws it in its accent blue. `--info` is the app's blue, already a token. */
+[data-slot="composer-send"]:not(:disabled) {
+  background-color: var(--info);
+  color: oklch(1 0 0);
+}
+
+
+/* A routing tier's glyph climbs the same sequential ramp as effort: one
+   vocabulary for "bigger", on the mark's `data-tier`. */
+[data-testid="model-mark"][data-tier="small"] { color: var(--effort-low); }
+[data-testid="model-mark"][data-tier="medium"] { color: var(--effort-medium); }
+[data-testid="model-mark"][data-tier="large"] { color: var(--effort-high); }
+[data-testid="model-mark"][data-tier="xlarge"] { color: var(--effort-xhigh); }
+
+/* Each effort level in its own hue, wherever its mark is drawn. */
+[data-testid="effort-mark"][data-level="low"] { color: var(--effort-low); }
+[data-testid="effort-mark"][data-level="medium"] { color: var(--effort-medium); }
+[data-testid="effort-mark"][data-level="high"] { color: var(--effort-high); }
+[data-testid="effort-mark"][data-level="xhigh"] { color: var(--effort-xhigh); }
+[data-testid="effort-mark"][data-level="max"] { color: var(--effort-max); }
+
+/* THE MODEL AND EFFORT MARKS ARE THE PICKER'S IDENTITY, SO THEY ARE LARGE.
+   The vendored selector boxes its icon at `size-3.5` (11.2px at this root)
+   in both the trigger and every row, which left a brand mark reading as a
+   smudge beside the name it identifies. Sized here by the mark's own
+   identity rather than per call site: 20px in a row and 18px on the trigger
+   (the trigger is a 28px control, so the mark takes most of its height). The
+   vendored box around it (`[&_svg]:size-3.5`) is overridden by the same rule
+   so the box grows with the glyph. */
+[data-slot="model-selector-item"] [data-testid="model-mark"],
+[data-slot="model-selector-item"] [data-testid="effort-mark"] {
+  width: 20px;
+  height: 20px;
+}
+[data-slot="model-selector-trigger"] [data-testid="model-mark"],
+[data-slot="model-selector-trigger"] [data-testid="effort-mark"] {
+  width: 18px;
+  height: 18px;
+}
+[data-slot="model-selector-item"] span:has(> [data-testid="model-mark"]),
+[data-slot="model-selector-item"] span:has(> [data-testid="effort-mark"]),
+[data-slot="model-selector-trigger"] span:has(> [data-testid="model-mark"]),
+[data-slot="model-selector-trigger"] span:has(> [data-testid="effort-mark"]) {
+  width: auto;
+  height: auto;
 }
 
 /* An open menu is the overlay rung (§4.3): edge AND shadow, in BOTH themes.
@@ -1548,14 +1953,6 @@
   background-color: var(--surface-base);
   border-radius: var(--radius-lg);
   overflow: hidden;
-}
-
-/* The launch page has one object on it, the composer, and the composer bar's
-   fill IS `surface-base` — so on the ordinary panel the page and the bar were
-   the same grey and the whole screen read as the composer. Here the panel sinks
-   to the rail's plane and the bar is the only lifted surface. */
-.shell-panel:has(.launch-surface) {
-  background-color: var(--surface-sunken);
 }
 
 /*
@@ -1781,10 +2178,6 @@
 
 @utility scroll-edge-top {
   background-image: linear-gradient(to bottom, var(--scroll-depth-ink), transparent);
-}
-
-@utility scroll-edge-bottom {
-  background-image: linear-gradient(to top, var(--scroll-depth-ink), transparent);
 }
 
 /* Fixed chrome casts into the rail, not onto the adjacent page. The inner

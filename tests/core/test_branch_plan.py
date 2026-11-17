@@ -166,12 +166,12 @@ def test_request_dispatches_to_root_variant_by_kind() -> None:
     assert isinstance(req.branch_plan, RootBranch)
 
 
-def test_request_default_branch_plan_is_auto_branch() -> None:
-    """Callers that don't care about branch semantics get the historical
-    Grove behavior for free — Grove auto-generates the branch."""
+def test_request_omitted_branch_plan_stays_unspecified() -> None:
+    """An omitted plan is ``None`` on the request, so the engine can tell it from
+    an explicit auto one and resolve it from saved defaults."""
     req = CreateWorkspaceRequest(agent_name="claude", title="demo")
-    assert isinstance(req.branch_plan, AutoBranch)
-    assert req.branch_plan.base_ref == "HEAD"
+    assert req.branch_plan is None
+    assert "branch_plan" not in req.model_fields_set
 
 
 def test_request_round_trips_through_json() -> None:

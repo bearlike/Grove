@@ -41,6 +41,7 @@ from grove.core.agents.claude_code import (
 )
 from grove.core.agents.codex import CodexAdapter
 from grove.core.agents.generic import GenericAdapter
+from grove.core.agents.model import label_queue
 from grove.core.instructions import GroveInstruction
 
 # ── record builders (real shapes, sanitized) ───────────────────────────────
@@ -124,15 +125,53 @@ def test_a_queued_human_prompt_is_a_human_turn() -> None:
     assert rec.text() == "do the thing"
 
 
-def test_a_missing_origin_is_never_human() -> None:
-    """``origin`` is absent on every real ``task-notification`` (999/999), so
-    defaulting it to human would file every background notice as a user turn.
-    The mode is checked FIRST, the origin second — a ``prompt`` with no origin
-    at all is still not a human."""
-    orphan = _Record(raw=_queued("...", at="2026-08-01T10:00:00Z", origin=None), index=0)
+def test_a_missing_origin_on_a_task_notice_is_never_human() -> None:
+    """``origin`` is absent on most real ``task-notification`` records, so the
+    MODE is checked first: a notice with no origin never becomes a user turn."""
+    notice = _Record(
+        raw=_queued(
+            "<task-notification>\n<task-id>b1</task-id>\n</task-notification>",
+            at="2026-08-01T10:00:00Z",
+            mode="task-notification",
+            origin=None,
+        ),
+        index=0,
+    )
 
-    assert not orphan.is_queued_prompt
-    assert not orphan.is_human_turn
+    assert not notice.is_queued_prompt
+    assert not notice.is_human_turn
+
+
+def test_a_native_session_queued_prompt_with_no_origin_is_a_human_turn() -> None:
+    """The headless ``-p`` stream a native session runs on writes ``prompt``-mode
+    queued messages with NO ``origin`` key (348 of 370 human-looking ones on
+    the reference host, 2.1.272-2.1.289). Requiring ``origin.kind == "human"``
+    dropped every message a person typed at a busy native session from the
+    transcript, so the chat showed no bubble for it."""
+    steer = _Record(
+        raw=_queued("look at the queue bug too", at="2026-08-01T10:00:00Z", origin=None),
+        index=0,
+    )
+
+    assert steer.is_queued_prompt
+    assert steer.is_human_turn
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        '<agent-message from="peer">\nhi\n</agent-message>',
+        '<cross-session-message from="uds:/tmp/a.sock">hi</cross-session-message>',
+        '<grove-mailbox version="1">\n{}\n</grove-mailbox>',
+        "<task-notification>\n<task-id>b1</task-id>\n</task-notification>",
+    ],
+)
+def test_an_originless_queued_envelope_is_still_machine_traffic(envelope: str) -> None:
+    """With no origin the TEXT decides, by the same markers a plain user line
+    is filtered by — so admitting origin-less prompts admits no relay."""
+    rec = _Record(raw=_queued(envelope, at="2026-08-01T10:00:00Z", origin=None), index=0)
+
+    assert not rec.is_human_turn
 
 
 def test_a_queued_peer_relay_routes_to_the_teammate_home() -> None:
@@ -399,6 +438,111 @@ def test_a_contentless_dequeue_with_no_witness_pops_the_front() -> None:
     ).pending_queue()
 
     assert [m.text for m in queued] == ["second in"]
+
+
+def test_a_plain_user_line_answers_a_dequeue_by_content_not_by_position() -> None:
+    """The live-session incident: Claude takes a human prompt AHEAD of queued
+    background notices and delivers it as a plain ``type:"user"`` line. A FIFO
+    pop removed the notice instead, so the prompt stayed "queued" on screen for
+    the rest of the session while the agent was already answering it."""
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z", content="<task-notification>a"),
+            _op("enqueue", at="2026-08-01T10:00:01Z", content="fix the queue"),
+            _op("dequeue", at="2026-08-01T10:00:02Z"),
+            _user("fix the queue", at="2026-08-01T10:00:02Z", uuid="u1"),
+        ]
+    ).pending_queue()
+
+    assert [m.text for m in queued] == ["<task-notification>a"]
+
+
+def test_a_merged_delivery_takes_every_message_it_contains() -> None:
+    """Claude merges several queued items into one turn and may wrap a relay
+    in its own preamble; every queued text the delivered line carries left."""
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z", content="first ask"),
+            _op("enqueue", at="2026-08-01T10:00:01Z", content="second ask"),
+            _op("enqueue", at="2026-08-01T10:00:02Z", content="still waiting"),
+            _op("dequeue", at="2026-08-01T10:00:03Z"),
+            _user(
+                "Another session sent a message:\nfirst ask\nsecond ask",
+                at="2026-08-01T10:00:03Z",
+                uuid="u1",
+            ),
+        ]
+    ).pending_queue()
+
+    assert [m.text for m in queued] == ["still waiting"]
+
+
+def test_a_resumed_process_starts_with_an_empty_queue() -> None:
+    """The harness queue is the PROCESS's memory. A respawn writes a contentless
+    enqueue and an ``isMeta`` continuation turn; what the dead process held is
+    gone, so it must not read as waiting forever."""
+    resume = _user("Continue from where you left off.", at="2026-08-01T11:00:01Z", uuid="u1")
+    resume["isMeta"] = True
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z", content="sent before the crash"),
+            _op("enqueue", at="2026-08-01T11:00:00Z", content=""),
+            _op("dequeue", at="2026-08-01T11:00:00Z"),
+            resume,
+        ]
+    ).pending_queue()
+
+    assert queued == ()
+
+
+def test_a_headless_session_queues_contentless_and_names_on_remove() -> None:
+    """Claude Code 2.1.314+ headless: every prompt enqueue is contentless and the
+    text appears first on the delivering ``remove``. Two steers queued behind a
+    busy turn both wait; delivering one leaves the other."""
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z"),
+            _op("enqueue", at="2026-08-01T10:00:05Z"),
+        ]
+    ).pending_queue()
+    assert [(m.text, m.position) for m in queued] == [("", 0), ("", 1)]
+
+    queued = _parse(
+        [
+            _op("enqueue", at="2026-08-01T10:00:00Z"),
+            _op("enqueue", at="2026-08-01T10:00:05Z"),
+            _op("remove", at="2026-08-01T10:01:00Z", content="first steer"),
+            _queued("first steer", at="2026-08-01T10:00:00Z"),
+        ]
+    ).pending_queue()
+    assert [(m.text, m.sent_at) for m in queued] == [
+        ("", datetime(2026, 8, 1, 10, 0, 5, tzinfo=UTC))
+    ]
+
+
+def test_label_queue_fills_blank_entries_from_what_grove_sent() -> None:
+    def at(s: int) -> datetime:
+        return datetime(2026, 8, 1, 10, 0, s, tzinfo=UTC)
+
+    queued = (
+        QueuedMessage("", at(10), 0),
+        QueuedMessage("<task-notification>x", at(11), 1),
+        QueuedMessage("", at(20), 2),
+    )
+    sent = [
+        ("delivered long ago", at(1)),
+        ("first", at(10)),
+        ("second", at(20)),
+        ("in flight", at(40)),
+    ]
+
+    assert [m.text for m in label_queue(queued, sent)] == [
+        "first",
+        "<task-notification>x",
+        "second",
+    ]
+    # Nothing to match: blank stays blank rather than borrowing a later send.
+    assert label_queue(queued[:1], [("later", at(30))]) == queued[:1]
 
 
 def test_pop_all_clears_the_queue() -> None:

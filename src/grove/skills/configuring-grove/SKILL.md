@@ -110,7 +110,8 @@ Two top-level scalars have no section of their own:
   the agents your own layers declare, hiding the built-ins below.
 - `projects` (list of strings, default `[]`). Repo (or subdirectory) paths that
   appear on the cross-project surfaces even with zero workspaces. A user-level
-  concern; `grove config add-project` edits it for you.
+  concern; `grove config add-project` edits it for you. A running daemon and an
+  open web dashboard pick the change up within seconds, with no restart.
 
 ### `worktree`
 - `root_template` (string, default `"${repo}/.worktrees"`). Parent directory for
@@ -397,16 +398,43 @@ dashboard. Leave the defaults unless there is a clear reason:
 - `pair_poll_per_minute` (int, minimum `1`, default `60`).
 
 ### `brief`
-- `enabled` (bool, default `true`). Hand a new workspace's agent a
-  one-paragraph brief on its first turn, pointing it at Grove's
-  `working-in-grove` skill. Resolved at create and persisted, so flipping it
-  never re-decides for a workspace that already exists; `grove create --no-brief`
-  overrides per workspace.
+- `enabled` (bool, default `true`). Hand a new workspace's agent a brief when
+  it starts working, pointing it at Grove's `working-in-grove` skill. Resolved
+  at create and persisted, so flipping it never re-decides for a workspace that
+  already exists; `grove create --no-brief` overrides per workspace.
 - `instructions` (string, default `""`). Appends your short project or user
   guidance to that brief through the normal cascade; use it for facts only your
   team knows, not rules already available in repository guidance.
-- `self_naming` (bool, default `true`). Nudges an agent to name a workspace whose
-  description is empty after it understands the task.
+
+### `triggers`
+Instructions the daemon puts into a WORKING session on its own. `enabled`
+(bool, `true`) stops every rule, the brief included; `check_seconds` (int,
+`60`) is how often each running workspace is checked. `rules` is a list merged
+by `name` across layers like `agents`, so naming a built-in changes only the
+fields you give. Each rule: `name`, `when` (`session_start` / `compaction` /
+`phase_stale` / `unnamed` / `manual`), `text` (with `{title}`, `{phase}`,
+`{age}`, `{missing}` filled in), `enabled`, `after_minutes` (for
+`phase_stale`, default `10`), `max_sends` (per session) and
+`include_instructions`. Built-ins: `start`, `compaction`, `phase`, `unnamed`
+(at most twice). A `manual` rule fires only through `grove trigger fire`, which
+targets `-w <id>`, `--all`, or filters (`--repo`, `--agent`, `--phase`,
+`--ticket`, `--title-prefix`). The retired `nudges.phase` and
+`brief.self_naming` still load and map onto the `phase` and `unnamed` rules.
+
+### `fleet_digest`
+`quiet_minutes` (float, `30`) is how long a working agent may go without a
+phase change before the fleet digest flags it quiet. A retired `master` section
+still loads and maps onto this one.
+
+### `speech`
+Dictation (a mic on the web composer) and read-aloud (a speaker under each
+answer), on every workspace. `base_url` (`https://api.openai.com/v1`) is any
+OpenAI-compatible endpoint. `api_key_env` (`OPENAI_API_KEY`) names the
+environment variable holding the key, never the key itself, the same pattern as
+`tickets.*.token_env`. `stt_model` (`whisper-1`), `tts_model` (`tts-1`) and
+`voice` (`alloy`) are passed through verbatim. The daemon reads all of it once
+at start, so a change needs a daemon restart. Without a key the web hides the
+mic and speaker. There is no extra to install.
 
 ### `notifications`
 Push on workspace edges, off by default. `enabled` (bool, `false`) is the master

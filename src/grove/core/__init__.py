@@ -40,7 +40,7 @@ if TYPE_CHECKING:
         WorkspaceDefaults,
         load_config,
         save_workspace_defaults,
-        user_defaults_keys,
+        shadowing_defaults_keys,
     )
     from grove.core.contracts import (
         AttachInstructionView,
@@ -94,7 +94,7 @@ _EXPORTS: dict[str, str] = {
     "WorkspaceDefaults": "grove.core.config",
     "load_config": "grove.core.config",
     "save_workspace_defaults": "grove.core.config",
-    "user_defaults_keys": "grove.core.config",
+    "shadowing_defaults_keys": "grove.core.config",
     "AttachInstructionView": "grove.core.contracts",
     "AutoBranch": "grove.core.contracts",
     "BranchInfo": "grove.core.contracts",
@@ -181,7 +181,7 @@ __all__ = [
     "build",
     "load_config",
     "save_workspace_defaults",
-    "user_defaults_keys",
+    "shadowing_defaults_keys",
 ]
 
 

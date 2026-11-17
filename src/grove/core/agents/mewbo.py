@@ -553,6 +553,9 @@ class MewboAdapter:
     # tool-result block to carry a flag. The backend's own timeline may know;
     # this seam is about `ContentBlock.is_error`, and that never exists here.
     reports_tool_errors = False
+    # No launch-time CLI, so there is no flag an effort could ride on.
+    efforts: tuple[str, ...] = ()
+    native_controls: frozenset[str] = frozenset()
 
     def __init__(self, client: MewboClient | None = None) -> None:
         self._client = client
@@ -580,10 +583,19 @@ class MewboAdapter:
         del session_id, resume
         return []
 
+    def fork_decoration(self, source_session_id: str) -> list[str]:
+        # The session lives server-side, so there is no launch flag to copy it.
+        del source_session_id
+        return []
+
     def model_decoration(self, model: str) -> list[str]:
         # No launch-time CLI: the model is a server-side concern selected when
         # the remote session is created, so there is no flag to decorate here.
         del model
+        return []
+
+    def effort_decoration(self, effort: str) -> list[str]:
+        del effort
         return []
 
     def offline_decoration(self) -> list[str]:
@@ -609,6 +621,14 @@ class MewboAdapter:
         # honest answer is "no version to report", not a probe of whatever
         # binary the command happens to name.
         del command
+        return None
+
+    def transcript_root(self, path: Path) -> Path | None:
+        # No local file to place; the backend holds the session.
+        del path
+        return None
+
+    def transcript_home(self) -> Path | None:
         return None
 
     def locate_transcripts(self, cwd: Path, session_id: str) -> list[Path]:

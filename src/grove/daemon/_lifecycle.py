@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
@@ -123,6 +123,17 @@ class _LifecycleRunner:
         self._pending = 0
         self._closed = False
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def bind(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the daemon loop so a worker-thread watcher can submit lifecycle work."""
+        self._loop = loop
+
+    def submit(self, key: str | None, fn: Callable[..., T], *args: Any) -> Future[T]:
+        """Submit one lifecycle verb from a non-loop caller without blocking it."""
+        if self._loop is None or self._closed:
+            raise WorkCapacityExceeded("lifecycle runner is not accepting work")
+        return asyncio.run_coroutine_threadsafe(self.run(key, fn, *args), self._loop)
 
     async def run(self, key: str | None, fn: Callable[..., T], *args: Any) -> T:
         """Await ``fn(*args)`` on the pool, exclusive against other verbs on ``key``.

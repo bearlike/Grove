@@ -1,6 +1,12 @@
 "use client";
 
-import { BellRingIcon, FolderTreeIcon, ListFilterIcon } from "lucide-react";
+import {
+  BellRingIcon,
+  FoldHorizontalIcon,
+  FolderTreeIcon,
+  ListFilterIcon,
+  UsersIcon,
+} from "lucide-react";
 
 import type { LucideIcon } from "lucide-react";
 
@@ -118,9 +124,27 @@ export function FleetFilterMenu({
         >
           Group by project
         </FilterCheckbox>
+        {variant === "fleet" ? (
+          <FilterCheckbox
+            checked={filter.foldEmpty}
+            onCheckedChange={() => onFilterChange({ ...filter, foldEmpty: !filter.foldEmpty })}
+            testId="fleet-filter-fold-empty"
+            icon={FoldHorizontalIcon}
+          >
+            Fold empty columns
+          </FilterCheckbox>
+        ) : null}
 
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Filter</DropdownMenuLabel>
+        <FilterCheckbox
+          checked={filter.everyone}
+          onCheckedChange={() => onFilterChange({ ...filter, everyone: !filter.everyone })}
+          testId="fleet-filter-everyone"
+          icon={UsersIcon}
+        >
+          Everyone&apos;s workspaces
+        </FilterCheckbox>
         <FilterCheckbox
           checked={filter.attentionOnly}
           onCheckedChange={() =>
@@ -179,6 +203,7 @@ export function FleetFilterMenu({
                   ...NO_FILTER,
                   query: filter.query,
                   groupBy: filter.groupBy,
+                  foldEmpty: filter.foldEmpty,
                 })
               }
               data-testid="fleet-filter-clear"

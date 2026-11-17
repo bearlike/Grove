@@ -1,10 +1,10 @@
 "use client";
 
-import { ClockIcon, FilePenLineIcon } from "lucide-react";
+import { CircleIcon, ClockIcon, HourglassIcon } from "lucide-react";
 
-import { absoluteTime, relativeTime, useNow } from "@/components/grove/relative-time";
+import { absoluteTime, ageToken, useNow } from "@/components/grove/relative-time";
+import { lastTranscriptIso } from "@/lib/grove/adapters";
 import { abbreviate } from "@/components/grove/usage/format";
-import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { WorkspaceActivity } from "./types";
 
@@ -14,8 +14,6 @@ const METRIC_TONE = {
   removed: "text-destructive",
   pending: "text-warning",
   neutral: "text-content-secondary",
-  /** The rail's file count: a size beside its glyph, not an alarm (see `SessionMetadata`). */
-  count: "text-content-primary",
 } as const;
 
 /**
@@ -44,19 +42,14 @@ function Figure({
 }
 
 /**
- * Keep quantities intact when enlarged text exceeds the compact ledger width.
- * Context is supplied by the row; creation age is not its activity sort time.
+ * The rail row's second and last line: the row's claims (`context`) flowing
+ * left, its age and last update flush right.
  *
- * The dirty count is NEUTRAL here and amber on the fleet card. The rail lists
- * every workspace at once, and nearly every live one has uncommitted files, so
- * amber on each row was a column of warnings saying nothing about any one row;
- * the diff figures beside it keep their hues because they have a direction.
- *
- * The three figures ALWAYS render, a measured zero in the quiet tier. A clean
- * row used to drop the group, which gave cards in one column two different
- * anatomies; a zero is a measurement, not an absence, so it keeps its cell.
- * One hairline closes the context above the ledger, and a short rule between
- * figures keeps `0 +363 −40` from reading as one number.
+ * The branch and the change ledger (dirty files, `+`/`−` deltas) used to take
+ * a line each, which made every row three lines tall for figures a reader
+ * scanning the rail does not act on. They remain one hover away in the row's
+ * overview and on the Info and Changes tabs; the rail keeps only what ranks
+ * and what asks for attention.
  */
 export function SessionMetadata({
   workspace,
@@ -65,120 +58,89 @@ export function SessionMetadata({
   workspace: WorkspaceActivity;
   context?: React.ReactNode;
 }): React.ReactNode {
-  const { dirty_files: dirty, diff_added: added, diff_removed: removed } = workspace;
   return (
-    <div className="flex min-w-0 flex-col gap-2" data-testid="rail-metadata">
-      {context}
-      <Separator data-testid="rail-divider" />
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1" data-testid="rail-ledger">
-          <MetricCell
-            Icon={FilePenLineIcon}
-            value={dirty}
-            tone="count"
-            detail={countLabel(dirty, "uncommitted files in the worktree")}
-            testid="rail-dirty"
-          />
-          <Separator orientation="vertical" className="data-[orientation=vertical]:h-3.5" />
-          <MetricCell
-            value={added}
-            tone="added"
-            prefix="+"
-            detail={countLabel(added, "lines added on the branch since its diff base")}
-            testid="rail-added"
-          />
-          <Separator orientation="vertical" className="data-[orientation=vertical]:h-3.5" />
-          <MetricCell
-            value={removed}
-            tone="removed"
-            prefix="−"
-            detail={countLabel(removed, "lines removed on the branch since its diff base")}
-            testid="rail-removed"
-          />
-        </span>
-        <CreatedAge iso={workspace.state.created_at} />
-      </div>
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" data-testid="rail-metadata">
+      <div className="min-w-0 flex-1">{context}</div>
+      <SessionTimes
+        createdIso={workspace.state.created_at}
+        updatedIso={lastTranscriptIso(workspace)}
+      />
     </div>
   );
 }
 
-/** The row's single hover/focus tooltip uses the same labels as its figures. */
-export function SessionMetricDetails({ workspace }: { workspace: WorkspaceActivity }): React.ReactNode {
-  return (
-    <>
-      <p>{countLabel(workspace.dirty_files, "uncommitted files in the worktree")}</p>
-      <p>{countLabel(workspace.diff_added, "lines added on the branch since its diff base")}</p>
-      <p>{countLabel(workspace.diff_removed, "lines removed on the branch since its diff base")}</p>
-    </>
-  );
-}
-
-/** "7 uncommitted files in the worktree", or the honest unknown. */
-function countLabel(value: number | null, detail: string): string {
-  if (value === null) return `An unknown number of ${detail}`;
-  return `${value.toLocaleString("en-US")} ${detail}`;
-}
-
 /**
- * One measurement, at exactly the width its value needs.
+ * Two instants, each labelled: how OLD the workspace is, and when its
+ * transcript last MOVED (#919). Replaces the single creation age, which a
+ * reader took for "last active" because it sat where an activity time sits.
  *
- * `shrink-0` AND NO `LoopingText`, both deliberate. A figure is compared, not
- * read: clipping or animating it would change the value being compared. The exact
- * figure's exact value and scope are available in the row's native tooltip.
+ * The update time is the rail's sort key, so the order the rows appear in and
+ * the times they print agree. The age is shown, never ranked by. A workspace
+ * whose agent has not reported prints its age alone rather than a creation
+ * time dressed as an update. Both are `ageToken`s (`2m`, `54d`): the glyph
+ * already says "time", and "ago" on the second value widened the cell enough
+ * to push the ledger's figures onto a fourth line (measured, #919). Both use
+ * the shared minute clock; before mount each is a capped absolute time that
+ * hydration replaces.
  */
-function MetricCell({
-  Icon,
-  value,
-  tone,
-  prefix,
-  detail,
-  testid,
+export function SessionTimes({
+  createdIso,
+  updatedIso,
 }: {
-  Icon?: React.ComponentType<React.SVGProps<SVGSVGElement>>;
-  value: number | null;
-  tone: keyof typeof METRIC_TONE;
-  prefix?: string;
-  detail: string;
-  testid: string;
+  createdIso: string;
+  updatedIso: string | null;
 }): React.ReactNode {
+  const now = useNow();
+  const label = updatedIso
+    ? `Created ${absoluteTime(createdIso)}. Last update ${absoluteTime(updatedIso)}`
+    : `Created ${absoluteTime(createdIso)}. No transcript update yet`;
   return (
-    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap" aria-label={detail} data-testid={testid}>
-      {Icon ? <Icon aria-hidden className="size-3.5 shrink-0 text-content-tertiary" /> : null}
-      <span className={cn("tabular-nums", figureTone(value, tone))}>
-        {figureText(value, prefix)}
+    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-content-tertiary" aria-label={label} data-testid="rail-times">
+      <span className="flex items-center gap-0.5" data-testid="rail-age">
+        <HourglassIcon aria-hidden className="size-3 shrink-0" />
+        <span className="sr-only">Age: </span>
+        <TimeValue iso={createdIso} now={now} format={ageToken} />
       </span>
+      {updatedIso ? (
+        <span className="flex items-center gap-0.5" data-testid="rail-updated">
+          <ClockIcon aria-hidden className="size-3 shrink-0" />
+          <span className="sr-only">Last update: </span>
+          <TimeValue iso={updatedIso} now={now} format={ageToken} />
+        </span>
+      ) : null}
     </span>
   );
 }
 
-/** Unknown and zero are both quiet; only a measurement that says something is toned. */
-function figureTone(value: number | null, tone: keyof typeof METRIC_TONE): string {
-  return value === null || value === 0 ? "text-content-tertiary" : METRIC_TONE[tone];
-}
-
-function figureText(value: number | null, prefix = ""): string {
-  return value === null ? "—" : `${prefix}${abbreviate(value)}`;
-}
-
 /**
- * When the workspace was CREATED — asked for by name, and not the value the
- * rail orders by.
- *
- * The rail orders by activity but labels this value as creation, and the row
- * tooltip names both instants. It uses the shared clock and compact age formatter;
- * the pre-mount absolute time is capped until hydration replaces it.
+ * The unread cue: new model responses since this browser last had the
+ * workspace open (#919). One mark for the rail row and the fleet card, so the
+ * two surfaces cannot disagree about what "new" looks like. `info` is the
+ * design system's informational hue; a mark, never a rank.
  */
-function CreatedAge({ iso }: { iso: string }): React.ReactNode {
-  const now = useNow();
-  const exact = absoluteTime(iso);
-  const label = `Created ${exact}`;
+export function UnreadDot({ className }: { className?: string }): React.ReactNode {
   return (
-    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-content-tertiary" aria-label={label} data-testid="rail-created">
-      <ClockIcon aria-hidden className="size-3.5 shrink-0" />
-      <span className="sr-only">Created: </span>
-      <span className={cn("tabular-nums", now === null && "max-w-16 truncate")}>
-        {now === null ? exact : relativeTime(iso, now)}
-      </span>
+    <CircleIcon
+      aria-label="New responses"
+      role="img"
+      data-testid="unread-dot"
+      className={cn("size-2.5 shrink-0 fill-info text-info", className)}
+    />
+  );
+}
+
+function TimeValue({
+  iso,
+  now,
+  format,
+}: {
+  iso: string;
+  now: number | null;
+  format: (iso: string, now: number) => string;
+}): React.ReactNode {
+  return (
+    <span className={cn("tabular-nums", now === null && "max-w-16 truncate")}>
+      {now === null ? absoluteTime(iso) : format(iso, now)}
     </span>
   );
 }

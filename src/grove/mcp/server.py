@@ -346,6 +346,8 @@ class GroveMcpServer:
         # deny it, since a registered tool an agent can see it will try to call.
         t = self._tools
         registrations = (
+            (t.get_fleet_digest, "grove_get_fleet_digest", False),
+            (t.send_mailbox_batch, "grove_send_mailbox_batch", True),
             (t.list_projects, "grove_list_projects", False),
             (t.list_workspaces, "grove_list_workspaces", False),
             (t.get_workspace, "grove_get_workspace", False),
@@ -378,6 +380,8 @@ class GroveMcpServer:
             (t.remap_workspace_session, "grove_remap_workspace_session", True),
             (t.attach_ticket, "grove_attach_ticket", True),
             (t.detach_ticket, "grove_detach_ticket", True),
+            (t.attach_artifact, "grove_attach_artifact", True),
+            (t.detach_artifact, "grove_detach_artifact", True),
             (t.set_workspace_phase, "grove_set_workspace_phase", True),
         )
         for fn, name, mutates in registrations:
@@ -496,4 +500,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     server.run()
 
 
-__all__ = ["GroveMcpServer", "McpServerConfig", "McpTransport", "SharedSecretVerifier", "main"]
+__all__ = [
+    "GroveMcpServer",
+    "McpServerConfig",
+    "McpTransport",
+    "SharedSecretVerifier",
+    "main",
+]

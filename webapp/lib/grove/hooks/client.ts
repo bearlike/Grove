@@ -50,6 +50,8 @@ export const POLL_MS = {
   sessions: 15_000,
   /** An open transcript. The stream fingerprint is what actually refreshes it. */
   turns: 30_000,
+  /** Sidebar pins shared across browsers. */
+  sidebarPins: 15_000,
   /** UNGATED. The host-wide session catalog — a browse surface, off the tick. */
   catalog: 30_000,
   /**

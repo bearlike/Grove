@@ -30,15 +30,17 @@ async function proxyParams(request: NextRequest, context: Context): Promise<Resp
 }
 
 function isEventStream(path: string[]): boolean {
-  return (path.length === 1 && path[0] === "events") || (path.length === 4 && path[0] === "workspaces" && path[2] === "pane" && path[3] === "stream") || (path.length === 4 && path[0] === "workspaces" && path[2] === "fleet" && path[3] === "stream");
+  return (path.length === 1 && path[0] === "events") || (path.length === 3 && path[0] === "workspaces" && path[2] === "live") || (path.length === 4 && path[0] === "workspaces" && path[2] === "pane" && path[3] === "stream") || (path.length === 4 && path[0] === "workspaces" && path[2] === "fleet" && path[3] === "stream");
 }
 
 async function proxyStream(request: NextRequest, path: string[]): Promise<Response> {
   const auth = await resolveAuth(request);
   if (!isAuthOk(auth)) return auth;
   try {
+    // A new browser EventSource cannot set the replay header itself.
+    const lastEventId = request.headers.get("last-event-id") || request.nextUrl.searchParams.get("last_event_id");
     const response = await fetch(upstreamUrl(path, request), {
-      headers: { accept: "text/event-stream", authorization: `Bearer ${auth.daemonToken}`, ...(request.headers.get("last-event-id") ? { "last-event-id": request.headers.get("last-event-id")! } : {}) },
+      headers: { accept: "text/event-stream", authorization: `Bearer ${auth.daemonToken}`, ...(lastEventId ? { "last-event-id": lastEventId } : {}) },
       cache: "no-store",
       signal: request.signal,
     });

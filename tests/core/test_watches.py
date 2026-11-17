@@ -380,22 +380,190 @@ async def test_an_unevaluable_watcher_never_kills_the_loop(tmp_path):
         scheduler.close()
 
 
+@pytest.mark.asyncio
+async def test_an_unreadable_log_during_a_pass_keeps_the_row_and_the_loop(tmp_path, monkeypatch):
+    """A log read that raises must cost one pass, never the scheduler or the row.
+
+    Measured 2026-10-09: a one-bit flip made `WatchLog.get` raise inside a
+    pass; the loop task died silently and NOTHING fired host-wide, even after
+    the file was repaired, until a daemon restart. The row the failed pass had
+    popped must also stay scheduled, or a standing watch is gone for good.
+    """
+    clock = FakeClock()
+    courier = RecordingCourier()
+    scheduler, log, _watcher, _ = await _build(
+        tmp_path, watcher=CountingWatcher(settle_after=1), courier=courier, clock=clock
+    )
+    monkeypatch.setattr(WatchScheduler, "_FAILED_PASS_BACKOFF_SECONDS", 0.0)
+    real_get = log.get
+    failures = {"left": 1}
+
+    def flaky_get(watch_id):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise GroveError("corrupt watch log")
+        return real_get(watch_id)
+
+    monkeypatch.setattr(log, "get", flaky_get)
+    try:
+        watch = scheduler.register(_registration())
+        clock.advance(31)
+        task = asyncio.create_task(scheduler._run())
+        for _ in range(200):
+            if courier.sent:
+                break
+            await asyncio.sleep(0.01)
+        assert not task.done(), "the scheduler loop must survive a failed pass"
+        assert [watch_id for watch_id, _ in courier.sent] == [watch.id]
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    finally:
+        scheduler.close()
+
+
 # ─── the registry itself ────────────────────────────────────────────────────
 
 
-def test_a_corrupt_registry_raises_rather_than_reading_as_empty(tmp_path):
-    """Empty and unreadable are different facts and must not be conflated."""
+def test_an_unreadable_registry_is_moved_aside_and_the_log_starts_empty(tmp_path):
+    """The 2026-10-15 crash loop: a log nothing in which can be trusted stopped startup.
+
+    Starting empty is safe for THIS store only: standing watches are rebuilt by
+    reconcile and every other row is a wait with a deadline. The file is kept
+    aside, never deleted, so a human can still recover what was in it.
+    """
     path = tmp_path / "watches.json"
     path.write_text("{not json", encoding="utf-8")
-    with pytest.raises(GroveError, match="corrupt watch log"):
-        WatchLog(path).all()
+    log = WatchLog(path)
+    assert log.all() == []
+    aside = [p.name for p in tmp_path.iterdir() if p.name.startswith("watches.json.unreadable-")]
+    assert len(aside) == 1
+    assert (tmp_path / aside[0]).read_text(encoding="utf-8") == "{not json"
 
 
 def test_a_version_mismatch_refuses_rather_than_discarding(tmp_path):
+    """Another Grove's file is not a damaged one: it is refused, never moved aside."""
     path = tmp_path / "watches.json"
     path.write_text(json.dumps({"version": 99, "watches": {}}), encoding="utf-8")
     with pytest.raises(GroveError, match="refusing to treat it as empty"):
         WatchLog(path).all()
+    assert path.exists()
+
+
+def test_a_newer_records_version_refuses_rather_than_discarding(tmp_path):
+    path = tmp_path / "watches.json"
+    path.write_text('{"format":"grove-records","store":"watches","version":99}\n')
+    with pytest.raises(GroveError, match="refusing to treat it as empty"):
+        WatchLog(path).all()
+    assert path.read_text().startswith('{"format"')
+
+
+def _seeded(tmp_path, count: int = 3):
+    clock = FakeClock()
+    log = WatchLog(tmp_path / "watches.json")
+    scheduler = WatchScheduler(
+        log=log,
+        watchers=WatcherRegistry([CountingWatcher(), TimerWatcher()]),
+        deliver=RecordingCourier(),
+        clock=clock,
+    )
+    ids = [scheduler.register(_registration()).id for _ in range(count)]
+    return log, ids
+
+
+def _flip(path, *, find: bytes, replace: bytes) -> None:
+    """Corrupt ONE occurrence the way the host did: the bytes change, the length does not."""
+    raw = path.read_bytes()
+    assert raw.count(find) >= 1 and len(find) == len(replace)
+    index = raw.index(find)
+    path.write_bytes(raw[:index] + replace + raw[index + len(find) :])
+
+
+def test_a_flipped_bit_costs_one_row_never_the_log(tmp_path):
+    """The exact 2026-10-15 fault: one bit turned a byte of a row into a `$`.
+
+    The old single-document format lost all 766 rows and the daemon's startup to
+    it. The row the flip landed in is quarantined; every other row loads.
+    """
+    log, ids = _seeded(tmp_path)
+    _flip(log.path, find=b'"state":"pending"', replace=b'"state"$"pending"')
+    damaged = next(line for line in log.path.read_text().splitlines() if "$" in line)
+    victim = next(i for i in ids if i in damaged)
+
+    fresh = WatchLog(log.path)
+    assert sorted(row.id for row in fresh.all()) == sorted(i for i in ids if i != victim)
+    quarantined = (tmp_path / "watches.json.corrupt").read_text(encoding="utf-8")
+    assert '"state"$"pending"' in quarantined
+    # The damaged line is gone from the log itself, so no later reader
+    # quarantines it a second time.
+    assert '"state"$"pending"' not in log.path.read_text(encoding="utf-8")
+
+
+def test_a_flip_that_still_parses_is_caught_by_the_checksum(tmp_path):
+    """A changed digit is valid JSON and a valid row; only the CRC can see it."""
+    log, _ids = _seeded(tmp_path, count=1)
+    _flip(log.path, find=b'"2026-09-23T12:00:00Z"', replace=b'"2026-09-28T12:00:00Z"')
+    assert WatchLog(log.path).all() == []
+    assert (tmp_path / "watches.json.corrupt").exists()
+
+
+def test_a_corrupted_kind_is_quarantined_not_kept_as_a_newer_builds_row(tmp_path):
+    """Without the CRC a mangled kind reads as `foreign` and is copied forward forever."""
+    log, _ids = _seeded(tmp_path, count=1)
+    _flip(log.path, find=b'"kind":"command"', replace=b'"kind":"commanf"')
+    fresh = WatchLog(log.path)
+    assert fresh.all() == []
+    assert "commanf" not in log.path.read_text(encoding="utf-8")
+    assert "commanf" in (tmp_path / "watches.json.corrupt").read_text(encoding="utf-8")
+
+
+def test_an_unchanged_log_is_never_parsed_twice(tmp_path):
+    """Every scheduler read used to re-parse the whole file: 21.4 ms on a real one."""
+    log, ids = _seeded(tmp_path, count=5)
+    reader = WatchLog(log.path)
+    reader.all()
+    decoded = reader._file.decodes
+    for _ in range(50):
+        reader.all()
+        reader.get(ids[0])
+        reader.active()
+    assert reader._file.decodes == decoded
+
+
+def test_a_reload_decodes_only_the_lines_that_changed(tmp_path):
+    log, ids = _seeded(tmp_path, count=5)
+    reader = WatchLog(log.path)
+    reader.all()
+    before = reader._file.decodes
+    log.reschedule(ids[0], FakeClock().now + timedelta(minutes=9))
+    assert reader.get(ids[0]).next_due == FakeClock().now + timedelta(minutes=9)
+    assert reader._file.decodes == before + 1
+
+
+def test_a_single_document_log_migrates_once_keeping_every_row(tmp_path):
+    """Upgrading must not lose a pending wait an agent has already halted on."""
+    rows = {}
+    for n in range(3):
+        row = WatchView(
+            id=f"wch_{n:032d}",
+            recipient=MailboxAddress(workspace_id=WS),
+            predicate=CommandPredicate(argv=["true"], workspace_id=WS),
+            state="pending",
+            created_at=FakeClock().now,
+            expires_at=FakeClock().now + timedelta(hours=1),
+        )
+        rows[row.id] = row.model_dump(mode="json")
+    future = {**rows["wch_" + "0" * 32], "id": "wch_" + "f" * 32}
+    future["predicate"] = {"kind": "from_the_future", "anything": 1}
+    rows[future["id"]] = future
+    path = tmp_path / "watches.json"
+    path.write_text(json.dumps({"version": 1, "watches": rows}, indent=2), encoding="utf-8")
+
+    log = WatchLog(path)
+    assert sorted(r.id for r in log.all()) == sorted(k for k in rows if k != future["id"])
+    assert path.read_text(encoding="utf-8").startswith('{"format":"grove-records"')
+    # The newer build's row survived migration verbatim and is written back.
+    log.put(log.all()[0])
+    assert '"from_the_future"' in path.read_text(encoding="utf-8")
 
 
 def test_a_row_this_build_cannot_read_is_kept_and_blinds_nothing_else(tmp_path):
@@ -415,19 +583,17 @@ def test_a_row_this_build_cannot_read_is_kept_and_blinds_nothing_else(tmp_path):
         clock=clock,
     )
     known = scheduler.register(_registration())
-    data = json.loads(log.path.read_text(encoding="utf-8"))
-    future = dict(data["watches"][known.id], id="wch_" + "f" * 32)
+    future = {**log.get(known.id).model_dump(mode="json"), "id": "wch_" + "f" * 32}
     future["predicate"] = {"kind": "from_the_future", "anything": 1}
-    data["watches"][future["id"]] = future
-    log.path.write_text(json.dumps(data), encoding="utf-8")
+    with log.path.open("a", encoding="utf-8") as fh:
+        fh.write(log._file._line(future))
 
     assert [row.id for row in log.all()] == [known.id]
     again = scheduler.register(_registration())  # a write: this was the 500
     log.settle(again.id, state="fired", now=clock.now)
     log.prune(clock.now + timedelta(days=30))
 
-    kept = json.loads(log.path.read_text(encoding="utf-8"))["watches"]
-    assert kept[future["id"]] == future
+    assert '"from_the_future"' in log.path.read_text(encoding="utf-8")
 
 
 def test_rescheduling_to_the_same_instant_writes_nothing(tmp_path):
@@ -814,3 +980,25 @@ async def test_a_workspace_listing_is_scoped_by_recipient(tmp_path):
     assert {row.note for row in listed} == {"mine", "mine, settled"}
     assert {row.id for row in listed} >= {mine.id, settled.id}
     assert len(scheduler.list().watches) == 3
+
+
+def test_an_unchanged_log_is_never_even_opened_twice(tmp_path, monkeypatch):
+    """The decode count alone cannot see a re-READ: unchanged lines are reused.
+
+    So the snapshot's first layer (one `stat`, no open) is pinned on opens.
+    """
+    log, ids = _seeded(tmp_path, count=5)
+    reader = WatchLog(log.path)
+    reader.all()
+    opened: list[object] = []
+    real_open = type(log.path).open
+
+    def counting_open(self, *args, **kwargs):
+        opened.append(self)
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(log.path), "open", counting_open)
+    for _ in range(20):
+        reader.all()
+        reader.get(ids[0])
+    assert opened == []

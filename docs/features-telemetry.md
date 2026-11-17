@@ -44,11 +44,39 @@ A raw harness span knows the model and the token counts. It does not know the wo
 | `grove.agent.kind`, `grove.agent.version` | Which harness, which version? |
 | `grove.runtime`, `grove.placement` | On the host, or in a container? |
 | `grove.ticket.ids` | Which tickets was it attached to? |
+| `grove.principal.subject` | Who created the workspace, or `local` for the host's own user? |
+| `grove.node.name` | Which Grove daemon owns it? |
 | `langfuse.session.id` | The join key. |
 
 - Grove composes that identity into `OTEL_RESOURCE_ATTRIBUTES` when it launches the agent, so every span the process emits carries it.
 - Grove's spans and the agent's come from two processes that share no context. Both carry the same `langfuse.session.id`, so LangFuse files them under one session rather than two unrelated traces.
 - The same identity is written flat as metadata, `grove_workspace_id`, `grove_repo`, `grove_branch` and the rest, so a cohort can be scoped to one repo or split by harness.
+
+## One request, followed across daemons
+
+Every HTTP request the daemon serves gets one request id and one trace context, and both travel with it when a [federation](features-federation.md) hub forwards the request to the node that owns the workspace.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as Hub daemon
+    participant N as Node daemon
+    participant B as OTLP backend
+    C->>H: request, with or without X-Request-ID
+    H->>H: keep the caller's id and traceparent, else mint them
+    H->>N: forward with the same headers
+    N->>N: run the verb under the hub's trace
+    N-->>H: answer
+    H-->>C: answer, X-Request-ID echoed
+    N->>B: audit span, node name, principal, request id
+    H->>B: audit span, node name, principal, request id
+```
+
+- **The request id is yours if you send one.** A caller's `X-Request-ID` and W3C `traceparent` are kept, otherwise the daemon mints them, and the id is echoed on the response.
+- **A forwarded request continues the same trace.** The hub passes both headers through untouched, so the node's span is a child of the hub's and both log the same request id.
+- **Each daemon emits one audit span per request**, naming the route, the method, the status, `grove.principal.subject` for the caller the auth gate admitted and `grove.node.name` for itself.
+- **Two daemons' logs reconcile on one id.** Search either side for the request id and you find the same request, on the hub where it arrived and on the node that ran it.
+- **With telemetry off this costs one id per request** and nothing else.
 
 ## Shell calls, in one shape you can grade
 

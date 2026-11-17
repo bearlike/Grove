@@ -156,8 +156,8 @@ class RuntimeSources:
             self._remove_workspace(event.workspace_id)
             await self._replace_scope()
             return
-        previous_liveness = self._host_tmux_liveness.get(state.tmux_session)
-        previous_activity = self._host_tmux_activity.get(state.tmux_session)
+        previous_liveness = self._host_tmux_liveness.get(_tmux_handle(state))
+        previous_activity = self._host_tmux_activity.get(_tmux_handle(state))
         fact = await asyncio.to_thread(
             self._state_fact, state, previous, previous_liveness, previous_activity
         )
@@ -192,10 +192,11 @@ class RuntimeSources:
             return (self._docker.state_of(state.container), None, None)
         if state.runtime is not Runtime.HOST:
             return (None, None, None)
-        if previous is not None and previous.tmux_session == state.tmux_session:
+        if previous is not None and _tmux_handle(previous) == _tmux_handle(state):
             return (None, previous_liveness, previous_activity)
-        alive = tmux.has_session(state.tmux_session)
-        age = tmux.pane_activity_seconds_ago(state.tmux_session) if alive else None
+        server = tmux.TmuxServer(socket=state.host_tmux_socket)
+        alive = tmux.has_session(state.tmux_session, server)
+        age = tmux.pane_activity_seconds_ago(state.tmux_session, server) if alive else None
         activity = datetime.now(UTC) - timedelta(seconds=age) if age is not None else None
         return (None, alive, activity)
 
@@ -220,9 +221,10 @@ class RuntimeSources:
             self._container_states[state.container.container_id] = container_state
             self._by_container.setdefault(state.container.container_id, set()).add(key)
         elif state.runtime is Runtime.HOST:
-            self._host_tmux_liveness[state.tmux_session] = liveness
-            self._host_tmux_activity[state.tmux_session] = activity
-            self._by_host_tmux.setdefault(state.tmux_session, set()).add(key)
+            handle = _tmux_handle(state)
+            self._host_tmux_liveness[handle] = liveness
+            self._host_tmux_activity[handle] = activity
+            self._by_host_tmux.setdefault(handle, set()).add(key)
 
     def _remove_workspace(self, workspace_id: str) -> None:
         state = self._states.pop(workspace_id, None)
@@ -235,10 +237,11 @@ class RuntimeSources:
             if state.container.container_id not in self._by_container:
                 self._container_states.pop(state.container.container_id, None)
         elif state.runtime is Runtime.HOST:
-            self._discard_route(self._by_host_tmux, state.tmux_session, key)
-            if state.tmux_session not in self._by_host_tmux:
-                self._host_tmux_liveness.pop(state.tmux_session, None)
-                self._host_tmux_activity.pop(state.tmux_session, None)
+            handle = _tmux_handle(state)
+            self._discard_route(self._by_host_tmux, handle, key)
+            if handle not in self._by_host_tmux:
+                self._host_tmux_liveness.pop(handle, None)
+                self._host_tmux_activity.pop(handle, None)
 
     @staticmethod
     def _discard_route(
@@ -322,7 +325,7 @@ class RuntimeSources:
         state = self._states.get(workspace_id)
         if state is None:
             return
-        observed_at = self._host_tmux_activity.get(state.tmux_session)
+        observed_at = self._host_tmux_activity.get(_tmux_handle(state))
         if observed_at is None:
             return
         cfg = self._registry.get(Path(repo_root)).config
@@ -345,7 +348,7 @@ class RuntimeSources:
 
     def _idle_due(self, repo_root: str, workspace_id: str, observed_at: datetime) -> None:
         state = self._states.get(workspace_id)
-        if state is None or self._host_tmux_activity.get(state.tmux_session) != observed_at:
+        if state is None or self._host_tmux_activity.get(_tmux_handle(state)) != observed_at:
             return
         self._idle_deadlines.pop(workspace_id, None)
         if not self._closing:
@@ -360,3 +363,13 @@ class RuntimeSources:
 
 
 __all__ = ["RuntimeSources"]
+
+
+def _tmux_handle(state: WorkspaceState) -> str:
+    """The liveness identity of *state*'s host session: name, qualified by its server.
+
+    Composed by `tmux.TmuxServer.handle`, the same call the manager reads back
+    through, so an observer and its reader cannot disagree on which server a
+    session lives on.
+    """
+    return tmux.TmuxServer(socket=state.host_tmux_socket).handle(state.tmux_session)

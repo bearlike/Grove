@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://factory.mewbo.com/"><img src="docs/img/banners/readme-banner.png" alt="Grove: your team's agents, one software factory. Works with Claude Code, Codex, OpenCode, Linear, GitHub and Gitea." width="100%" /></a>
+  <a href="https://factory.mewbo.com/"><img src="docs/img/banners/readme-banner.png" alt="Grove: your team's agents, one software factory. Works with Claude Code, Codex, OpenCode, Linear, GitHub, Gitea, Slack and Langfuse." width="100%" /></a>
 </p>
 
 <p align="center"><em>Run your coding agents as a software factory, each task in its own workspace and tracked from ticket to trace.</em></p>
@@ -18,6 +18,7 @@
   <a href="https://linear.app" title="Linear">Linear</a> ·
   <a href="https://github.com" title="GitHub">GitHub</a> ·
   <a href="https://about.gitea.com/" title="Gitea">Gitea</a> ·
+  <a href="https://slack.com" title="Slack">Slack</a> ·
   <a href="https://langfuse.com" title="Langfuse">Langfuse</a>
 </p>
 
@@ -27,7 +28,7 @@
 - **Give each task its own workspace.** Each agent gets a worktree and branch. Agents report phases for their workspace and each attached ticket. See what's planned, built or verified across the fleet.
 - **Choose how each agent runs.** Run agents in their usual host environment or a [container](https://factory.mewbo.com/latest/features-containers/) defined by your repository's `.devcontainer/`. Containers provide separate services and ports with resource limits.
 - **Choose where the work runs.** Concurrent tests and builds compete for CPU and memory. Reuse your container configuration on a shared team machine or serverless cloud to free your laptop.
-- **Let the tracker start the work.** Assign an issue and Grove starts its workspace. Progress returns to [the same ticket](https://factory.mewbo.com/latest/issue-ops/). Follow the task where you defined it.
+- **Let the tracker start the work.** Assign an issue and Grove starts its workspace. Progress returns to [the same ticket](https://factory.mewbo.com/latest/issue-ops/). Mention Grove in a [Slack thread](https://factory.mewbo.com/latest/features-slack/) and its answers come back there. Follow the task where you defined it.
 - **Show it instead of describing it.** Annotate a [screenshot](https://factory.mewbo.com/latest/features-attachments/) or draw a [diagram](https://factory.mewbo.com/latest/features-diagrams/) with your agent. Approve the diagram or mockup and attach it to a ticket to coordinate your fleet.
 
 ## ✨ Features
@@ -121,15 +122,15 @@ Every agent turn becomes a Langfuse trace. A small local decision model labels e
 
 **Also in the box:**
 
-- **[Branch-aware lifecycle](https://factory.mewbo.com/latest/features-workspace-lifecycle/).** Create, pause, resume, respawn or kill. Pausing keeps the branch.
+- **[Branch-aware lifecycle](https://factory.mewbo.com/latest/features-workspace-lifecycle/).** Create, [initialize](https://factory.mewbo.com/latest/configure-init-scripts/), pause, resume, respawn or kill. Pausing keeps the branch.
 - **[Configuration cascade](https://factory.mewbo.com/latest/features-cascade/).** A committed `.grove/config.json` sets team defaults, overridable locally.
-- **[Per-agent model selection](https://factory.mewbo.com/latest/use-webapp/).** Pick a model per workspace.
 - **[Session recovery](https://factory.mewbo.com/latest/features-workspace-lifecycle/).** Sessions survive restarts and reattach, and a lost one remaps in a click.
 - **[Feedback and evaluations](https://factory.mewbo.com/latest/features-feedback-evals/).** Human ratings and decision-model scores in Langfuse.
 - **[Ticket providers](https://factory.mewbo.com/latest/features-ticket-providers/).** Link Linear, GitHub or Gitea tickets to show workspace phase and status.
 - **[Push notifications](https://factory.mewbo.com/latest/features-notifications/).** Get pinged when an agent finishes a turn or needs you.
 - **[Attachments and annotation](https://factory.mewbo.com/latest/features-attachments/).** Attach files for your agent, and draw annotations on images.
 - **[Diagram collaboration](https://factory.mewbo.com/latest/features-diagrams/).** Sketch mockups and specs with your agent in [draw.io](https://www.drawio.com/).
+- **[Artifacts](https://factory.mewbo.com/latest/features-artifacts/).** Open the plan, report, diagram or link your agent attached to its workspace.
 - **[Subscription windows](https://factory.mewbo.com/latest/use-webapp/).** Track each plan's usage, reset and burn rate. See which limit comes first.
 - **[Usage trends](https://factory.mewbo.com/latest/use-webapp/).** Daily tokens, model cost and latency, and where agents spend time across projects.
 

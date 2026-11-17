@@ -32,7 +32,9 @@ from grove.core import (
 from grove.core.agents.claude_code import _ClaudeHome
 from grove.core.contracts.views import WorkspaceDefaultsView
 from grove.core.git import GitRepo
+from grove.core.manager import WorkspaceManager
 from grove.core.tmux import ContainerAttach, HostAttach
+from grove.core.workspace import Runtime, WorkspaceTitle
 from grove.tui.cli import app
 from grove.tui.cli_workspace import BranchFlags, QuickCreate
 from tests.conftest import FakeTmux
@@ -326,7 +328,8 @@ def test_attach_resolves_then_execs_tmux(
     assert captured["file"] == "tmux"
     args = captured["args"]
     assert isinstance(args, list)
-    assert args[0] == "tmux" and args[1] in {"attach", "switch-client"} and args[2] == "-t"
+    # A host workspace is on its own tmux server, so `-L <socket>` leads.
+    assert args[:2] == ["tmux", "-L"] and args[3] == "attach" and args[4] == "-t"
 
 
 # ─── resume-into-workspace (grove create --resume-session) ──────────────────
@@ -468,47 +471,26 @@ def _defaults(**over: object) -> WorkspaceDefaultsView:
 
 
 def test_quick_create_mints_a_short_id_title_when_none_is_given() -> None:
+    """The CLI uses the one rule every client shares, so the trigger recognises it."""
     title = QuickCreate(defaults=_defaults()).title(None)
-    assert title.startswith("wk-")
-    assert len(title) == len("wk-") + QuickCreate.ID_HEX_CHARS
+    assert WorkspaceTitle.is_generated(title)
 
 
 def test_quick_create_keeps_an_explicit_title() -> None:
     assert QuickCreate(defaults=_defaults()).title("fix login") == "fix login"
 
 
-def test_quick_create_agent_prefers_the_flag_then_the_saved_default() -> None:
-    quick = QuickCreate(defaults=_defaults(agent="claude"))
-    assert quick.agent("codex") == "codex"
-    assert quick.agent(None) == "claude"
-
-
-def test_quick_create_refuses_when_no_agent_is_reachable() -> None:
-    with pytest.raises(GroveError, match="no agent given"):
-        QuickCreate(defaults=_defaults(agent=None)).agent(None)
-
-
-def test_quick_create_branch_plan_honours_an_explicit_flag_over_the_default() -> None:
-    quick = QuickCreate(defaults=_defaults(branch_mode="root"))
-    assert quick.branch_plan(BranchFlags(branch="fix/login")) == NewNamedBranch(
+def test_branch_flags_leave_the_plan_to_the_engine_when_none_is_set() -> None:
+    """No flag means no plan on the request, so saved defaults and the built-in apply."""
+    assert not BranchFlags().any_set
+    assert BranchFlags(base="origin/main").any_set
+    assert BranchFlags(worktree=True).to_plan() == AutoBranch(base_ref="HEAD")
+    assert BranchFlags(base="origin/main").to_plan() == AutoBranch(base_ref="origin/main")
+    assert BranchFlags(branch="fix/login").to_plan() == NewNamedBranch(
         name="fix/login", base_ref="HEAD"
     )
-
-
-def test_quick_create_branch_plan_applies_a_saved_root_default() -> None:
-    quick = QuickCreate(defaults=_defaults(branch_mode="root"))
-    assert quick.branch_plan(BranchFlags()) == RootBranch()
-
-
-def test_quick_create_branch_plan_falls_back_to_auto_with_the_saved_base() -> None:
-    """`existing`/`remote` store no NAME, so they have nothing to check out.
-
-    ``WorkspaceDefaults`` deliberately refuses to save a concrete branch or
-    remote name — it names one task, never a default — so those two modes can
-    only mean Auto by the time they reach a create with no flags.
-    """
-    quick = QuickCreate(defaults=_defaults(branch_mode="existing", base_ref="origin/main"))
-    assert quick.branch_plan(BranchFlags()) == AutoBranch(base_ref="origin/main")
+    with pytest.raises(GroveError, match="mutually exclusive"):
+        BranchFlags(worktree=True, root=True).to_plan()
 
 
 # ─── the quick path end to end ───────────────────────────────────────────────
@@ -530,13 +512,16 @@ def test_bare_create_resolves_the_saved_defaults_and_mints_a_title(
     assert "title:    wk-" in result.output
 
 
-def test_bare_create_without_a_saved_agent_names_the_way_to_set_one(
+@pytest.mark.launch_builtins
+def test_bare_create_without_saved_defaults_uses_the_builtins(
     runner: CliRunner, project: Path
 ) -> None:
-    del project
-    result = runner.invoke(app, ["create"])
-    assert result.exit_code == 1
-    assert "no agent given" in result.output
+    """Nothing saved: the first agent, on the host, in the current checkout."""
+    result = runner.invoke(app, ["create", "--no-attach"])
+
+    assert result.exit_code == 0, result.output
+    assert "runtime:  host" in result.output
+    assert f"worktree: {project}" in result.output
 
 
 def test_create_cwd_flag_starts_the_agent_in_a_repo_relative_subdir(
@@ -569,3 +554,45 @@ def test_create_cwd_outside_the_repo_is_a_clean_error(runner: CliRunner, project
     result = runner.invoke(app, ["create", "out", "--agent", "claude", "--cwd", "../../elsewhere"])
     assert result.exit_code == 1
     assert "not within repo root" in result.output
+
+
+# ─── grove create: the request it composes ─────────────────────────────────
+
+
+def _capture_create(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Record the request the command composes, then stop before any launch."""
+    seen: list[object] = []
+
+    def fake_create(self: WorkspaceManager, request: object) -> object:
+        seen.append(request)
+        raise GroveError("stop after capture")
+
+    monkeypatch.setattr(WorkspaceManager, "create", fake_create)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("flags", "fields"),
+    [
+        (["--runtime", "host"], {"runtime": Runtime.HOST, "remote_runtime": None}),
+        (["--runtime", "container"], {"runtime": Runtime.CONTAINER, "remote_runtime": None}),
+        (
+            ["--runtime", "sandbox", "--node", "edge-1"],
+            {"runtime": Runtime.REMOTE, "remote_runtime": "sandbox", "node": "edge-1"},
+        ),
+    ],
+)
+def test_create_runtime_names_host_container_or_a_remote_block(
+    runner: CliRunner,
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flags: list[str],
+    fields: dict[str, object],
+) -> None:
+    del project
+    seen = _capture_create(monkeypatch)
+    result = runner.invoke(app, ["create", "t", "--agent", "claude", "--no-attach", *flags])
+    assert seen, result.output
+    (request,) = seen
+    for name, value in fields.items():
+        assert getattr(request, name) == value, name

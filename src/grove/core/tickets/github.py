@@ -35,7 +35,9 @@ precedent.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, ClassVar
 
 import httpx
@@ -53,6 +55,7 @@ from grove.core.tickets.provider import (
     CommitCheck,
     CommitChecks,
     NumberTicketProvider,
+    TicketState,
     TicketThread,
 )
 
@@ -69,6 +72,8 @@ class GitHubProvider(NumberTicketProvider):
     body_supported: ClassVar[bool] = True
     branch_view_segment: ClassVar[str] = "tree"
     viewer_path: ClassVar[str] = "/user"
+    PAGE_SIZE: ClassVar[int] = 100
+    """GitHub's largest ``per_page``; a list is one request until it outgrows this."""
 
     def __init__(
         self,
@@ -241,12 +246,42 @@ class GitHubProvider(NumberTicketProvider):
 
     # ─── comment I/O ────────────────────────────────────────────────────────
 
+    def read_state(self, ticket_id: str, kind: TicketKind) -> TicketState:
+        """The shared one-GET read, plus the submitted reviews on a pull request.
+
+        GitHub's ``comments`` counts conversation comments only; a review and its
+        inline comments never move it, so without this an AI reviewer's review
+        never reached the ticket watch. Every inline comment belongs to a review,
+        so counting reviews covers both.
+        """
+        state = super().read_state(ticket_id, kind)
+        if kind != "pull_request" or state.comment_count is None:
+            return state
+        return replace(state, comment_count=state.comment_count + len(self.list_reviews(ticket_id)))
+
     def list_comments(self, ticket_id: str) -> list[TicketComment]:
         owner, repo = self._scoped("list comments")
-        path = f"/repos/{owner}/{repo}/issues/{ticket_id}/comments"
-        payload = self._request("GET", path)
-        comments = payload if isinstance(payload, list) else []
-        return [self._to_comment(c) for c in comments if isinstance(c, dict)]
+        comments = self._paged(f"/repos/{owner}/{repo}/issues/{ticket_id}/comments")
+        return [self._to_comment(c) for c in comments]
+
+    def list_reviews(self, ticket_id: str) -> list[TicketComment]:
+        """Submitted reviews only: a ``PENDING`` one is a private draft nobody else can see."""
+        owner, repo = self._scoped("list reviews")
+        reviews = self._paged(f"/repos/{owner}/{repo}/pulls/{ticket_id}/reviews")
+        return [self._review_to_comment(r) for r in reviews if r.get("state") != "PENDING"]
+
+    def _paged(self, path: str) -> list[dict[str, Any]]:
+        """Every item of a list endpoint, oldest first; by default GitHub sends only 30."""
+        items: list[dict[str, Any]] = []
+        for page in itertools.count(1):
+            payload = self._request(
+                "GET", path, params={"per_page": str(self.PAGE_SIZE), "page": str(page)}
+            )
+            batch = payload if isinstance(payload, list) else []
+            items.extend(item for item in batch if isinstance(item, dict))
+            if len(batch) < self.PAGE_SIZE:
+                return items
+        return items
 
     def post_comment(self, ticket_id: str, body: str) -> TicketComment:
         owner, repo = self._scoped("post a comment")
@@ -344,6 +379,17 @@ class GitHubProvider(NumberTicketProvider):
             body=comment.get("body") or "",
             author=user.get("login") if isinstance(user, dict) else None,
             created_at=comment.get("created_at") or None,
+        )
+
+    @classmethod
+    def _review_to_comment(cls, review: dict[str, Any]) -> TicketComment:
+        """A review as a thread entry; a body-less one (a thread reply, a bare approval) says so."""
+        state = str(review.get("state") or "commented").lower().replace("_", " ")
+        comment = cls._to_comment({**review, "created_at": review.get("submitted_at")})
+        if comment.body:
+            return comment
+        return comment.model_copy(
+            update={"body": f"Submitted a review ({state}); see its inline comments."}
         )
 
 

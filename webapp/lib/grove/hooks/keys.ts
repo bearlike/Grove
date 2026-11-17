@@ -9,8 +9,11 @@
  */
 export const groveKeys = {
   activity: ["grove", "activity"] as const,
+  sidebarPins: ["grove", "sidebar", "pins"] as const,
+  projectCandidates: ["grove", "project-candidates"] as const,
   health: ["grove", "health"] as const,
   whoami: ["grove", "whoami"] as const,
+  me: ["grove", "me"] as const,
   mailboxContacts: ["grove", "mailboxes", "contacts"] as const,
 
   workspaces: ["grove", "workspaces"] as const,
@@ -47,6 +50,10 @@ export const groveKeys = {
     ["grove", "workspaces", id, "sessions", sessionId, "tools", toolUseId] as const,
 
   catalog: (limit?: number) => ["grove", "sessions", "catalog", limit ?? null] as const,
+  // NOT under `workspaces`: a workspace invalidation (any stream edge) would
+  // refetch an open document and reset the reader's place in it.
+  artifactContent: (id: string, artifactId: string) =>
+    ["grove", "artifact-content", id, artifactId] as const,
   gallery: () => ["grove", "gallery"] as const,
   galleryDocument: (id: string) => ["grove", "gallery", id, "document"] as const,
   galleryPreview: (id: string, digest: string) =>
@@ -71,6 +78,8 @@ export const groveKeys = {
   branches: (repo: string, scope: "local" | "remote") =>
     ["grove", "branches", repo, scope] as const,
   defaults: (repo: string) => ["grove", "defaults", repo] as const,
+  launchPreview: (request: string) => ["grove", "launch-preview", request] as const,
+  launchOptions: (repo: string) => ["grove", "launch-options", repo] as const,
   sharePolicy: (repo: string) => ["grove", "share-policy", repo] as const,
 
   usage: ["grove", "usage"] as const,

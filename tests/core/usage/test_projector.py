@@ -13,7 +13,7 @@ from grove.core.config import GroveConfig
 from grove.core.registry import RepoRegistry
 from grove.core.store import JsonWorkspaceStore
 from grove.core.usage._store import UsageStore
-from grove.core.usage.projector import UsageProjector
+from grove.core.usage.projector import UsageProjector, _profile_root
 
 
 @dataclass
@@ -876,4 +876,49 @@ def test_retention_drops_cross_cutoff_session_instead_of_leaking_old_totals(
 
     assert store.scalar("SELECT COUNT(*) FROM sessions") == 0
     assert store.scalar("SELECT COUNT(*) FROM usage_events") == 0
+    store.close()
+
+
+def test_codex_sessions_share_one_profile_and_any_recognized_edit_tool_counts(
+    tmp_path: Path,
+) -> None:
+    """Two codex sessions under one CODEX_HOME are one usage source and one
+    account, not one per session; and the projector asks ``FileEdit`` which
+    tools edit rather than keeping its own list, so ``str_replace`` counts."""
+    home = tmp_path / "codex-home"
+    first = home / "sessions" / "aaa" / "rollout.jsonl"
+    second = home / "sessions" / "bbb" / "rollout.jsonl"
+    assert _profile_root("codex", first) == _profile_root("codex", second) == home.resolve()
+
+    first.parent.mkdir(parents=True)
+    first.write_text('{"private":"x"}\n', encoding="utf-8")
+    at = datetime(2026, 10, 21, 8, tzinfo=UTC)
+    ref = SessionRef(
+        session_id="aaa",
+        adapter_kind="codex",
+        cwd=str(tmp_path),
+        transcript_path=first,
+        birth=at,
+        mtime=first.stat().st_mtime,
+    )
+    edit = ContentBlock(
+        type="tool_use",
+        tool_name="str_replace",
+        tool_use_id="t1",
+        tool_input={"path": "stats.py", "old_string": "a", "new_string": "b"},
+    )
+    adapter = _Adapter(
+        kind="codex",
+        ref=ref,
+        paths=[first],
+        messages=(AgentMessage(role="assistant", timestamp=at, content=(edit,)),),
+        activity=AgentActivity(state=AgentActivityState.WAITING, last_event_at=at),
+    )
+    cfg = GroveConfig()
+    store = UsageStore(tmp_path / "usage.db")
+    UsageProjector(
+        cfg=cfg, registry=_registry(tmp_path, cfg), store=store, adapters=(adapter,)
+    ).refresh()
+    assert store.scalar("SELECT files_changed FROM sessions") == 1
+    assert store.scalar("SELECT target FROM usage_events WHERE kind='file_edit'") == "stats.py"
     store.close()

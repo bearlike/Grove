@@ -65,7 +65,7 @@ class MailboxContact(BaseModel):
     address: MailboxAddress
     display_name: str
     provider: str
-    runtime: Literal["host", "container"]
+    runtime: Literal["host", "container", "remote"]
     live: bool
 
 

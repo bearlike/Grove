@@ -490,6 +490,20 @@ class PhaseFile:
         return cls._report(doc, datetime.fromtimestamp(mtime, tz=UTC))
 
     @classmethod
+    def from_text(cls, raw: str, updated_at: datetime) -> PhaseReport | None:
+        """The claim in a document read somewhere else, or ``None`` if it is not one.
+
+        The same tolerance as :meth:`read`, for a phase file that lives in a
+        worktree this host cannot open (a remote workspace's worker reads it).
+        """
+        try:
+            doc = PhaseDocument.model_validate_json(raw)
+        except ValidationError as exc:
+            logger.debug(f"remote phase file is not a valid phase document: {exc}")
+            return None
+        return cls._report(doc, updated_at)
+
+    @classmethod
     def _document(cls, worktree: Path | str, key: str) -> PhaseDocument | None:
         """Parse *key*'s document, or ``None`` for any failure. Never raises."""
         path = cls.path_for(worktree, key)

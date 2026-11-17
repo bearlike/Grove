@@ -7,6 +7,7 @@ Side effects (clock, RNG, file path) are injected so the tests run hermetic.
 
 from __future__ import annotations
 
+import json
 import secrets
 import stat
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ import pytest
 from grove.core.auth import (
     TOKEN_PREFIX,
     ChallengeState,
+    Session,
     SessionStore,
 )
 from grove.core.errors import (
@@ -72,6 +74,15 @@ def _fresh_store(
         ),
         clk,
     )
+
+
+def _pair(store: SessionStore, label: str) -> Session:
+    """One paired session through the real pairing flow."""
+    challenge = store.pair_init(label=label)
+    store.pair_approve(challenge.challenge_id)
+    _, token = store.pair_poll(challenge.challenge_id)
+    assert token is not None
+    return store.validate(token)
 
 
 # ─── pair_init ──────────────────────────────────────────────────────────────
@@ -364,23 +375,37 @@ def test_gc_drops_an_expired_session_that_was_never_revoked(store_path: Path) ->
     ``expires_at > now or revoked_at is None`` would keep every expired session
     that nobody explicitly revoked — i.e. all of them, since expiry is how a
     session normally ends — so the file would only grow and ``validate``'s
-    O(N) scan pays for it on every authenticated request (measured at 52% dead
-    weight on a live host). A revoked session still lives out its TTL, so the
-    audit listing keeps working.
+    O(N) scan pays for it on every authenticated request.
     """
     store, clock = _fresh_store(store_path, session_ttl=timedelta(hours=1))
     for label in ("phone", "laptop"):
-        c = store.pair_init(label=label)
-        store.pair_approve(c.challenge_id)
-        _, token = store.pair_poll(c.challenge_id)
-        assert token is not None
-    revoked = store.list_sessions()[0]
-    store.revoke(revoked.session_id)
-    # Still inside the TTL: the revoked record is retained for the audit view.
+        _pair(store, label)
     assert len(store.list_sessions(include_revoked=True)) == 2
 
     clock.advance(timedelta(hours=2))
     assert store.list_sessions(include_revoked=True) == []
+
+
+def test_a_revoked_session_is_pruned_after_a_day_not_after_its_ttl(store_path: Path) -> None:
+    """A revoked bearer can never validate, so its TTL is not a reason to keep it.
+
+    Measured 2026-10-15: 9,953 of 10,812 sessions in one host's file were
+    revoked and unexpired, because `mint_local` retires an abandoned
+    `local-mailbox` session on every send and the prune waited 30 days for
+    each. It stays listable for a day, so the device view still shows a recent
+    revocation, and then it goes.
+    """
+    store, clock = _fresh_store(store_path, session_ttl=timedelta(days=30))
+    kept = _pair(store, "kept")
+    revoked = _pair(store, "revoked")
+    store.revoke(revoked.session_id)
+    assert {s.label for s in store.list_sessions(include_revoked=True)} == {"kept", "revoked"}
+
+    clock.advance(SessionStore.REVOKED_RETENTION + timedelta(minutes=1))
+    assert [s.session_id for s in store.list_sessions(include_revoked=True)] == [kept.session_id]
+    # The prune reaches disk on the next write, not only the read view.
+    store.pair_init(label="any write")
+    assert str(revoked.session_id) not in store_path.read_text()
 
 
 def test_a_damaged_auth_file_is_a_typed_storage_fault_carrying_no_path(
@@ -409,8 +434,12 @@ def test_auth_file_is_written_0600_with_no_readable_window(store_path: Path) -> 
     store, _ = _fresh_store(store_path)
     store.pair_init(label="phone")
     assert stat.S_IMODE(store_path.stat().st_mode) == 0o600
-    # No stage file survives, and none was ever visible at the final path.
-    assert {p.name for p in store_path.parent.iterdir()} == {store_path.name}
+    # No stage file survives, and none was ever visible at the final path. The
+    # `.lock` sidecar is the cross-process write lock, deliberately left behind.
+    assert {p.name for p in store_path.parent.iterdir()} == {
+        store_path.name,
+        store_path.name + ".lock",
+    }
 
 
 # ─── mint_local ─────────────────────────────────────────────────────────────
@@ -459,3 +488,93 @@ def test_mint_local_is_not_rate_limited(store_path: Path) -> None:
     store, _ = _fresh_store(store_path, pair_init_per_minute=1)
     tokens = {store.mint_local("local-watch") for _ in range(10)}
     assert len(tokens) == 10
+
+
+# ─── the records format ─────────────────────────────────────────────────────
+
+
+def _v1_auth_file(path: Path, clock: _ManualClock, *, live: int, revoked: int) -> list[str]:
+    """A version-1 single-document auth file. Returns the ids of the sessions to keep."""
+    now = clock()
+    keep: list[str] = []
+    sessions = []
+    for n in range(live + revoked):
+        session_id = str(uuid4())
+        is_revoked = n >= live
+        sessions.append(
+            {
+                "session_id": session_id,
+                "label": f"device-{n}",
+                "token_hash": f"{n:064x}",
+                "created_at": (now - timedelta(days=2)).isoformat(),
+                "expires_at": (now + timedelta(days=20)).isoformat(),
+                "last_seen_at": (now - timedelta(days=2)).isoformat(),
+                "revoked_at": (now - timedelta(days=2)).isoformat() if is_revoked else None,
+            }
+        )
+        if not is_revoked:
+            keep.append(session_id)
+    path.write_text(
+        json.dumps({"version": 1, "challenges": [], "sessions": sessions}, indent=2),
+        encoding="utf-8",
+    )
+    return keep
+
+
+def test_upgrading_keeps_every_paired_device_and_backs_the_old_file_up(store_path: Path) -> None:
+    """A migration that loses a session signs that device out with no warning.
+
+    The original file is kept as `.v1.bak` before anything is rewritten,
+    because this runs once per host and is the one step a later version
+    cannot repair.
+    """
+    clock = _ManualClock()
+    keep = _v1_auth_file(store_path, clock, live=5, revoked=0)
+    original = store_path.read_bytes()
+    store, _ = _fresh_store(store_path, clock=clock)
+
+    assert sorted(str(s.session_id) for s in store.list_sessions()) == sorted(keep)
+    assert store_path.read_text().startswith('{"format":"grove-records","store":"auth"')
+    assert (store_path.parent / "auth.json.v1.bak").read_bytes() == original
+    assert stat.S_IMODE((store_path.parent / "auth.json.v1.bak").stat().st_mode) == 0o600
+
+
+def test_upgrading_drops_long_revoked_sessions_on_the_first_write(store_path: Path) -> None:
+    clock = _ManualClock()
+    keep = _v1_auth_file(store_path, clock, live=3, revoked=40)
+    store, _ = _fresh_store(store_path, clock=clock)
+    store.pair_init(label="any write")
+    on_disk = store_path.read_text()
+    assert sum(1 for line in on_disk.splitlines() if '"kind":"session"' in line) == len(keep)
+
+
+def test_a_bit_flip_in_one_session_signs_out_only_that_device(store_path: Path) -> None:
+    """The whole file used to be one parse, so one byte signed out every device."""
+    store, _ = _fresh_store(store_path)
+    for label in ("phone", "laptop", "tablet"):
+        _pair(store, label)
+    lines = store_path.read_bytes().split(b"\n")
+    victim = next(
+        i for i, line in enumerate(lines) if b'"kind":"session"' in line and b"laptop" in line
+    )
+    lines[victim] = lines[victim].replace(b'"label":"laptop"', b'"label":"laptoq"')
+    store_path.write_bytes(b"\n".join(lines))
+
+    fresh, _ = _fresh_store(store_path)
+    assert {s.label for s in fresh.list_sessions()} == {"phone", "tablet"}
+
+
+def test_validating_an_unchanged_file_never_re_reads_it(store_path: Path) -> None:
+    """`validate` runs on every authenticated request; it was a 4.3 MB parse each time."""
+    store, _ = _fresh_store(store_path)
+    for label in ("phone", "laptop"):
+        _pair(store, label)
+    challenge = store.pair_init(label="watch")
+    store.pair_approve(challenge.challenge_id)
+    _, token = store.pair_poll(challenge.challenge_id)
+    assert token is not None
+    store.validate(token)
+    decoded = store._file.decodes
+    for _ in range(100):
+        store.validate(token)
+    assert store._file.decodes == decoded

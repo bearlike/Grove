@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 import { BranchPill } from "./branch-pill";
 import { AgentPill } from "./agent-pill";
 import { ProjectPill } from "./project-pill";
+import { NodePill } from "./node-pill";
 import { RuntimePill } from "./runtime-pill";
 import { WorkingDirectoryPill } from "./working-directory-pill";
-import { LAUNCH_TESTIDS, useLaunchControls } from "../launch-state";
-import { useWorkspaceDefaults } from "@/lib/grove/hooks/launch";
+import { ProfilePill } from "./profile-pill";
+import { LAUNCH_TESTIDS } from "../launch-state";
 
 /**
  * What the workspace will BE, on one shelf under the writing surface.
@@ -25,48 +26,28 @@ import { useWorkspaceDefaults } from "@/lib/grove/hooks/launch";
  * lighter, four fit — and the shelf is free to wrap on a narrow window without
  * orphaning anything, because there is no second row for a pill to fall out of.
  *
- * `RuntimePill` is pushed to the far end: host-versus-container is the answer
- * that changes what every pill beside it MEANS — a directory inside a container
- * is not the same place as the same path on the host — so it reads as the
- * shelf's qualifier rather than as a fifth peer.
+ * The approved order starts with the project context, then where it runs, then
+ * the tool and profile. Each group is separated by spacing only, so the shelf
+ * stays one quiet surface.
  *
- * The seed effect stays here, and it is the reason this file is not just
- * markup: it is the single caller of `seed`, and its dependency list is the
- * fix for the render loop `launchReducer` documents.
+ * The cascade's answers are seeded by `LaunchStateProvider`, not here: the
+ * More options dialog composes the same state without this row's surface.
  */
 export function LaunchControlRow(): ReactNode {
-  const { values, seed } = useLaunchControls();
-  const defaults = useWorkspaceDefaults(values.repoRoot);
-
-  useEffect(() => {
-    const resolved = defaults.data;
-    if (!resolved) return;
-    // `model` is seeded from here even though its pill moved: the default is
-    // per-agent (`resolve_models`) and arrives in this one response, so
-    // trimming the seed to "the fields this file still draws" would leave the
-    // toolbar's pill permanently empty.
-    seed({
-      agentName: resolved.agent,
-      runtime: resolved.runtime,
-      brief: resolved.brief,
-      model: resolved.model,
-      branchMode: resolved.branch_mode,
-      baseRef: resolved.base_ref,
-      skipInit: resolved.skip_init,
-    });
-  }, [defaults.data, seed]);
-
   return (
-    <div
-      className="flex min-w-0 flex-1 flex-wrap items-center gap-x-0.5 gap-y-1"
-      data-testid={LAUNCH_TESTIDS.controls}
-    >
-      <ProjectPill />
-      <WorkingDirectoryPill />
-      <AgentPill />
-      <BranchPill />
-      <div className="ms-auto flex min-w-0 items-center">
+    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3" data-testid={LAUNCH_TESTIDS.controls}>
+      <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1">
+        <ProjectPill />
+        <WorkingDirectoryPill />
+        <BranchPill />
+      </div>
+      <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1">
+        <NodePill />
         <RuntimePill />
+      </div>
+      <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1">
+        <AgentPill />
+        <ProfilePill />
       </div>
     </div>
   );

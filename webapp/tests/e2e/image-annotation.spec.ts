@@ -3,6 +3,7 @@ import { deflateSync } from "node:zlib";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { FIXTURE_WORKSPACES } from "./_fixtures";
+import { chooseProfile } from "./_launch";
 
 /**
  * Annotating a staged image, on both composers.
@@ -256,9 +257,7 @@ test.describe("image annotation", () => {
     });
     // The fixture's first agent has no catalog and the create refuses without
     // one chosen — the same step `shared-composer.spec.ts` takes.
-    const agent = page.locator(".composer-shelf").getByRole("combobox", { name: "Agent", exact: true });
-    await agent.click();
-    await page.locator('[data-slot="model-selector-content"]').getByText("Claude Code (default)", { exact: true }).click();
+    await chooseProfile(page, "Claude", "Claude Code (default)");
     await page.getByRole("textbox", { name: "Task brief", exact: true }).fill("Annotated photo attached.");
     await page.getByRole("button", { name: "Send message", exact: true }).click();
     await expect.poll(() => sent?.name).toBe("photo.annotated.webp");

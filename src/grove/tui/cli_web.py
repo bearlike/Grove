@@ -24,6 +24,7 @@ from pathlib import Path
 import typer
 
 from grove.core import GroveError
+from grove.core.config import OidcConfig, load_config
 from grove.tui.cli_workspace import clean_exit
 
 # Next 16's floor; the webapp's own `engines.node` says the same.
@@ -101,8 +102,18 @@ class WebappLauncher:
             return None
         return int(out) if out.isdigit() else None
 
-    def env(self, host: str, port: int, daemon_url: str) -> dict[str, str]:
+    def env(
+        self, host: str, port: int, daemon_url: str, oidc: OidcConfig | None = None
+    ) -> dict[str, str]:
+        # The dashboard's sign-in reads the IdP from its environment; the config
+        # cascade is the source, and a variable the operator exported wins.
+        identity = (
+            {"GROVE_OIDC_ISSUER": oidc.issuer, "GROVE_OIDC_CLIENT_ID": oidc.client_id}
+            if oidc is not None and oidc.issuer and oidc.client_id
+            else {}
+        )
         return {
+            **identity,
             **os.environ,
             "HOSTNAME": host,
             "PORT": str(port),
@@ -142,7 +153,8 @@ def serve_web(
         typer.echo(f"dashboard: {script.parent}\nnode:      {node}")
         return
     typer.echo(f"Grove web dashboard on http://{host}:{port} (daemon {daemon_url})")
-    os.execvpe(node, [node, str(script)], launcher.env(host, port, daemon_url))
+    oidc = load_config(repo_root=None).auth.oidc
+    os.execvpe(node, [node, str(script)], launcher.env(host, port, daemon_url, oidc))
 
 
 def register(app: typer.Typer) -> None:

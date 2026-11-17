@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from grove.core.contracts.branch_plan import AutoBranch
 from grove.core.contracts.requests import CreateWorkspaceRequest
 from grove.core.contracts.tickets import TicketProviderName, TicketSelector
 from grove.core.errors import GroveError, TicketProviderNotConfigured
@@ -145,6 +146,8 @@ class PickupEngine:
             agent_name=ic.agent,
             title=title,
             ticket=TicketSelector(provider=key.provider, id=key.ticket_id),
+            # An issue gets its own branch, never the operator's checkout.
+            branch_plan=AutoBranch(),
             initial_prompt=IssuePrompt.render(
                 ic.prompt_template,
                 number=key.ticket_id,

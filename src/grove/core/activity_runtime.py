@@ -203,7 +203,7 @@ class ActivityRuntime:
     def _on_delta(self, delta: DashboardDelta) -> None:
         if delta.kind != "workspace_changed" or delta.repo_root is None:
             return
-        self.invalidate(
+        result = self.invalidate(
             WorkspaceInvalidated(
                 delta.repo_root,
                 delta.workspace_id,
@@ -212,6 +212,18 @@ class ActivityRuntime:
                 domains=RefreshDomain.FULL,
             )
         )
+        if result not in (Admission.ACCEPTED, Admission.COALESCED):
+            # A lifecycle edge (frozen, thawed, hibernated, killed) is the ONLY
+            # thing that can carry a stamp into the projection for a workspace
+            # that produces no other edge, such as a paused remote, so losing it
+            # is never routine. WARNING because the daemon's sink drops anything
+            # quieter, and this was invisible in the run that needed it (#1070).
+            logger.bind(workspace_id=delta.workspace_id).warning(
+                "activity: lifecycle edge {} for {} not admitted: {}",
+                delta.detail.get("event"),
+                delta.workspace_id,
+                result,
+            )
 
     async def _compute(self, fn: Callable[[], _T]) -> tuple[bool, _T]:
         """Run reads off-loop and fence their result at this owner's generation."""
@@ -269,21 +281,32 @@ class ActivityRuntime:
                 event.repo_root, event.workspace_id, domains=event.domains
             )
 
+        generation = self._generation
         publish, row = await self._compute(prepare)
-        if publish:
-            self._service.apply_workspace_refresh(event.repo_root, event.workspace_id, row)
-            # Any REAL filesystem write — not a hook push, a lifecycle bridge
-            # event or a runtime liveness edge — invalidates client-side
-            # content queries even when the activity fingerprint stayed equal
-            # (a tool body changing at the same tool count, a diff whose byte
-            # count happens to match). This is `reason`, never `domains`: a
-            # domain says WHICH cached facts this refresh recomputed, `reason`
-            # says WHERE the hint originated, and `useWorkspaceDiff`'s
-            # contract is "per filesystem invalidation", not "per worktree
-            # domain" — narrowing this to WORKTREE alone silently dropped the
-            # edge for every transcript-only and phase-only filesystem write.
-            if event.reason == "filesystem":
-                self._service.source_changed(event.repo_root, event.workspace_id)
+        if not publish:
+            # The read completed and its row is discarded. A moved generation is
+            # shutdown and expected; anything else drops a fact (a lifecycle
+            # stamp, say) that no later edge may restate (#1070).
+            if generation == self._generation:
+                logger.bind(workspace_id=event.workspace_id).warning(
+                    "activity: refreshed row for {} discarded ({}, runtime not ready)",
+                    event.workspace_id,
+                    event.reason,
+                )
+            return
+        self._service.apply_workspace_refresh(event.repo_root, event.workspace_id, row)
+        # Any REAL filesystem write — not a hook push, a lifecycle bridge
+        # event or a runtime liveness edge — invalidates client-side
+        # content queries even when the activity fingerprint stayed equal
+        # (a tool body changing at the same tool count, a diff whose byte
+        # count happens to match). This is `reason`, never `domains`: a
+        # domain says WHICH cached facts this refresh recomputed, `reason`
+        # says WHERE the hint originated, and `useWorkspaceDiff`'s
+        # contract is "per filesystem invalidation", not "per worktree
+        # domain" — narrowing this to WORKTREE alone silently dropped the
+        # edge for every transcript-only and phase-only filesystem write.
+        if event.reason == "filesystem":
+            self._service.source_changed(event.repo_root, event.workspace_id)
 
     async def close(self) -> None:
         self._ready = False

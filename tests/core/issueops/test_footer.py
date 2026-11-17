@@ -211,3 +211,24 @@ def test_removing_a_footer_counts_as_an_update() -> None:
     """The retraction has to reach the forge, or a dead link stands forever."""
     spliced = splice_footer(_HUMAN, _footer())
     assert footer_needs_update(spliced, "") is True
+
+
+def test_the_footer_goes_above_a_closing_trailer_so_the_body_still_ends_with_it() -> None:
+    """#998: a PR body must END with its Closes lines; Grove's footer sits above them."""
+    body = "Summary.\n\nCloses #976\nCloses #977"
+    spliced = splice_footer(body, render_footer(workspace_url="https://g/w/1"))
+    assert spliced.endswith("Closes #976\nCloses #977")
+    assert spliced.index(FOOTER_END) < spliced.index("Closes #976")
+    assert splice_footer(spliced, render_footer(workspace_url="https://g/w/1")) == spliced
+
+
+def test_a_footer_already_after_the_trailer_is_moved_above_it() -> None:
+    """The bodies written before this fix carry the region last; the next splice repairs them."""
+    footer = render_footer(workspace_url="https://g/w/1")
+    old = f"Summary.\n\nCloses #976\n\n{FOOTER_BEGIN}\n\n{footer}\n\n{FOOTER_END}"
+    assert splice_footer(old, footer).endswith("Closes #976")
+
+
+def test_prose_that_mentions_an_issue_is_not_mistaken_for_a_trailer() -> None:
+    body = "This closes the gap #976 left open."
+    assert splice_footer(body, render_footer(workspace_url="https://g/w/1")).endswith(FOOTER_END)

@@ -5,10 +5,10 @@ import { useMemo, type ReactNode } from "react";
 import { ModelMark, modelOptions } from "@/components/grove/model-option";
 import { Input } from "@/components/ui/input";
 import { LaunchPill, type LaunchPillOption } from "../control-pill";
-import { LAUNCH_TESTIDS, useLaunchControls } from "../launch-state";
-import { customModelError } from "@/lib/grove/adapters/launch";
+import { LAUNCH_TESTIDS, useLaunchControls, useLaunchProblem } from "../launch-state";
+import { customModelError, inheritedModel } from "@/lib/grove/adapters/launch";
 import { modelLabel } from "@/lib/grove/adapters/model";
-import { useAgents, useModels, useWorkspaceDefaults } from "@/lib/grove/hooks";
+import { useModels, useWorkspaceDefaults } from "@/lib/grove/hooks";
 
 // This cannot collide with a custom model id: the client validator and the wire
 // contract both reject a leading dash. It is picker-only and never sent.
@@ -18,9 +18,10 @@ const CUSTOM_MODEL_MAX_LENGTH = 64;
 /** The model resolved by the selected agent's catalog, or typed by the user. */
 export function ModelPill(): ReactNode {
   const { values, set } = useLaunchControls();
-  const agents = useAgents(values.repoRoot);
+  const problem = useLaunchProblem("model");
   const defaults = useWorkspaceDefaults(values.repoRoot);
-  const agentName = values.agentName ?? defaults.data?.agent ?? agents.data?.[0]?.name ?? null;
+  // `defaults.agent` is the engine's resolved agent (#1093), never a guess.
+  const agentName = values.agentName ?? defaults.data?.agent ?? null;
   const catalog = useModels(values.repoRoot, agentName);
   // A saved id that its agent no longer advertises is still an explicit custom
   // choice, just as the TUI selects MODEL_CUSTOM for it.
@@ -61,7 +62,7 @@ export function ModelPill(): ReactNode {
   // gateway's list) promised a model that would not be used. `null` is the
   // honest state and `fallbackLabel` names it.
   const selectedModel =
-    isCustom ? values.model : values.model ?? defaults.data?.model ?? null;
+    isCustom ? values.model : values.model ?? inheritedModel(defaults.data, agentName);
   const validationError = isCustom ? customModelError(values.model ?? "") : null;
   const disabledReason =
     values.repoRoot === null
@@ -88,7 +89,7 @@ export function ModelPill(): ReactNode {
       disabledReason={disabledReason}
       // The field is inside the popover now, so the sentence explaining a
       // disabled Send has to survive the menu closing over it.
-      error={validationError}
+      error={validationError ?? problem}
       onSelect={(model) =>
         model === CUSTOM_MODEL_OPTION
           ? set({ model: "", customModel: true })

@@ -61,6 +61,12 @@ from grove.core.container_policy import MountPlan
 #: whatever the image or the user already put there.
 CONTAINER_DECOR_ROOT = PurePosixPath("/grove/decor")
 
+#: Where the user's own tmux styling lands INSIDE the container, read by the
+#: decor ``tmux.conf``. A sibling of :data:`CONTAINER_DECOR_ROOT` rather than a
+#: file inside it, because that directory is a read-only bind and a second mount
+#: cannot create its mountpoint there.
+CONTAINER_USER_TMUX_CONF = PurePosixPath("/grove/user-tmux.conf")
+
 
 @dataclass(frozen=True, slots=True)
 class DecorPayload:
@@ -176,7 +182,13 @@ class DecorPlan:
 
     @classmethod
     def from_config(
-        cls, *, enabled: bool, statusline: bool, tmux_conf: bool, payload: DecorPayload
+        cls,
+        *,
+        enabled: bool,
+        statusline: bool,
+        tmux_conf: bool,
+        payload: DecorPayload,
+        user_tmux_conf: Path | None = None,
     ) -> DecorPlan:
         """Plan the decor for one workspace. Pure over an inspected payload.
 
@@ -192,6 +204,11 @@ class DecorPlan:
         Grove's inside somebody else's image with nothing reading it — inert
         machinery that reads as a live feature to whoever finds it, which this
         subsystem has already shipped once with its own static firewall bundle.
+
+        ``user_tmux_conf`` is the host's ``tmux-user.conf``, the same file every
+        host workspace server sources. It is mounted only beside Grove's own
+        tmux config and only when it exists, resolved so a dotfiles symlink
+        binds the file rather than a dangling link.
         """
         if not enabled or not (statusline or tmux_conf):
             return cls()
@@ -201,8 +218,17 @@ class DecorPlan:
                 payload.detail,
             )
             return cls()
+        mounts = [MountPlan(source=payload.root, target=CONTAINER_DECOR_ROOT, readonly=True)]
+        if tmux_conf and user_tmux_conf is not None and user_tmux_conf.is_file():
+            mounts.append(
+                MountPlan(
+                    source=user_tmux_conf.resolve(),
+                    target=CONTAINER_USER_TMUX_CONF,
+                    readonly=True,
+                )
+            )
         return cls(
-            mounts=(MountPlan(source=payload.root, target=CONTAINER_DECOR_ROOT, readonly=True),),
+            mounts=tuple(mounts),
             tmux_conf=(CONTAINER_DECOR_ROOT / DecorPayload.TMUX_CONF_NAME if tmux_conf else None),
             statusline_command=(
                 f"{cls.INTERPRETER} {CONTAINER_DECOR_ROOT / DecorPayload.STATUSLINE_NAME}"
@@ -227,4 +253,4 @@ class DecorPlan:
         return bool(self.mounts)
 
 
-__all__ = ["CONTAINER_DECOR_ROOT", "DecorPayload", "DecorPlan"]
+__all__ = ["CONTAINER_DECOR_ROOT", "CONTAINER_USER_TMUX_CONF", "DecorPayload", "DecorPlan"]

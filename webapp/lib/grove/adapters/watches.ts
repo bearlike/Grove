@@ -17,8 +17,12 @@ export function watchSubject(predicate: WatchView["predicate"]): string {
       return "Timer";
     case "ticket":
       return `Changes to ${predicate.ticket_kind === "pull_request" ? "PR" : "issue"} #${predicate.ticket_id}`;
-    case "phase_nudge":
-      return "Phase reminder";
+    case "trigger":
+      return "Session instructions";
+    case "reaper":
+      return "Host reaping pass";
+    case "idle":
+      return "Idle suspension";
   }
 }
 

@@ -275,6 +275,32 @@ def test_blend_fresh_transcript_outranks_quiet_pane() -> None:
     assert blend(None) is AgentActivityState.IDLE
 
 
+def test_blend_paneless_session_demotes_a_stale_working_transcript() -> None:
+    """A native/headless/remote session has no authoritative pane, so its
+    transcript clock is the ONLY freshness signal — and until 2026-10-29 the
+    paneless arm skipped the check entirely, so a native session whose fleet
+    spawn never closed read WORKING for two days after its last event. Fresh
+    stays WORKING, stale demotes to IDLE, and only a transcript with no clock
+    at all (a remote adapter that reports none) is still taken at its word."""
+    now = datetime(2026, 6, 1, 10, 10, 0, tzinfo=UTC)
+
+    def blend(last_event_at: datetime | None, ws_status: WorkspaceStatus) -> AgentActivityState:
+        return ActivityService._blend(
+            ws_status,
+            AgentActivity(state=AgentActivityState.WORKING, last_event_at=last_event_at),
+            has_transcript=True,
+            provenance="grove_launched",
+            remote=True,
+            now=now,
+        )
+
+    assert blend(now - timedelta(seconds=30), WorkspaceStatus.IDLE) is AgentActivityState.WORKING
+    assert blend(now - timedelta(days=2), WorkspaceStatus.IDLE) is AgentActivityState.IDLE
+    # The tmux ACTIVE arm stays a pane fact: it never rescues a paneless row.
+    assert blend(now - timedelta(days=2), WorkspaceStatus.ACTIVE) is AgentActivityState.IDLE
+    assert blend(None, WorkspaceStatus.IDLE) is AgentActivityState.WORKING
+
+
 def test_sessions_for_promotes_orchestrator_waiting_to_working_via_fleet(
     env: tuple[ActivityService, RepoRegistry],
     monkeypatch: pytest.MonkeyPatch,

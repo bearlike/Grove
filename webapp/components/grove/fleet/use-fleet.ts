@@ -81,7 +81,8 @@ export function useFleetStream(): FleetStream {
  * "the fleet" is fetched with.
  */
 export function useFleetSnapshot(): UseQueryResult<DashboardSnapshotView, Error> {
-  return useQuery({ queryKey: FLEET_KEY, queryFn: () => groveClient.getActivity() });
+  // The provider owns fetching and writes this same cache entry.
+  return useQuery({ queryKey: FLEET_KEY, queryFn: () => groveClient.getActivity(), enabled: false });
 }
 
 /**

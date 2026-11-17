@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 // Closed disclosures never mount this body. Real markdown is checked in-browser;
 // its CSS import goes through Next's PostCSS setup, not the node test runner.
-vi.mock("@/components/assistant-ui/markdown-text", () => ({ MarkdownText: () => null }));
+vi.mock("@/components/grove/workspace/markdown-text", () => ({ MarkdownText: () => null }));
 import { AgentMessage } from "@/components/grove/workspace/agent-message";
 import { outgoingAgentMessage } from "@/lib/grove/adapters/agent-message";
 import type { ToolCallView } from "@/lib/grove/adapters/tool-call";
